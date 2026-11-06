@@ -2,7 +2,7 @@
 //! viewports don't expose HWNDs).
 
 use stinkshot_core::PxRect;
-use windows::Win32::Foundation::{HWND, LPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DWM_SYSTEMBACKDROP_TYPE, DWMSBT_MAINWINDOW, DWMWA_SYSTEMBACKDROP_TYPE,
     DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
@@ -15,11 +15,11 @@ use windows::Win32::UI::Controls::MARGINS;
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     ASFW_ANY, AllowSetForegroundWindow, BringWindowToTop, EnumWindows, GWL_EXSTYLE,
-    GetForegroundWindow, GetWindowLongPtrW, GetWindowTextW, GetWindowThreadProcessId,
-    HWND_NOTOPMOST, HWND_TOPMOST, IsIconic, IsWindowVisible, SW_HIDE, SW_RESTORE, SW_SHOWNA,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow,
-    SetWindowDisplayAffinity, SetWindowLongPtrW, SetWindowPos, ShowWindow, WDA_EXCLUDEFROMCAPTURE,
-    WDA_NONE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId, HWND_NOTOPMOST, HWND_TOPMOST,
+    IsIconic, IsWindowVisible, SMTO_ABORTIFHUNG, SMTO_BLOCK, SW_HIDE, SW_RESTORE, SW_SHOWNA,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageTimeoutW,
+    SetForegroundWindow, SetWindowDisplayAffinity, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WM_GETTEXT, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
 };
 use windows::core::BOOL;
 
@@ -46,7 +46,26 @@ unsafe extern "system" fn find_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     }
     let mut buf = vec![0u16; ctx.title.len() + 2];
     // SAFETY: buffer is a live Vec of the stated length.
-    let n = unsafe { GetWindowTextW(hwnd, &mut buf) } as usize;
+    // GetWindowTextW on a window of this process sends WM_GETTEXT synchronously, which blocks
+    // forever on helper windows whose thread never pumps messages (GPU driver and wgpu
+    // windows). Ask with a timeout instead and skip windows that do not answer.
+    let mut got = 0usize;
+    // SAFETY: buf is a live Vec; WM_GETTEXT writes at most buf.len() UTF-16 units including NUL.
+    let r = unsafe {
+        SendMessageTimeoutW(
+            hwnd,
+            WM_GETTEXT,
+            WPARAM(buf.len()),
+            LPARAM(buf.as_mut_ptr() as isize),
+            SMTO_ABORTIFHUNG | SMTO_BLOCK,
+            100,
+            Some(&mut got),
+        )
+    };
+    if r.0 == 0 {
+        return BOOL(1);
+    }
+    let n = got;
     if n == ctx.title.len() && buf[..n] == ctx.title[..] {
         ctx.found = Some(hwnd.0 as isize);
         return BOOL(0);
