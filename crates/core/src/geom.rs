@@ -64,7 +64,11 @@ impl PxRect {
         PxRect::new(self.x + dx, self.y + dy, self.w, self.h)
     }
     pub fn area(&self) -> i64 {
-        if self.is_empty() { 0 } else { self.w as i64 * self.h as i64 }
+        if self.is_empty() {
+            0
+        } else {
+            self.w as i64 * self.h as i64
+        }
     }
 }
 
@@ -104,7 +108,12 @@ impl RectF {
         PtF::new(self.x + self.w / 2.0, self.y + self.h / 2.0)
     }
     pub fn expand(&self, by: f32) -> RectF {
-        RectF::new(self.x - by, self.y - by, self.w + 2.0 * by, self.h + 2.0 * by)
+        RectF::new(
+            self.x - by,
+            self.y - by,
+            self.w + 2.0 * by,
+            self.h + 2.0 * by,
+        )
     }
     /// Smallest integer rect covering this one.
     pub fn to_px(&self) -> PxRect {
