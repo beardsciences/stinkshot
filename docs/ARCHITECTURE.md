@@ -49,6 +49,12 @@ The public items in each crate's stub files are the contract. They compile today
 - Network: none anywhere except `crates/app/src/update.rs`, behind the opt-in setting.
 - Style: `cargo fmt`, `cargo clippy -p <crate> -- -D warnings` clean for your crate.
 - No AI attribution in code, comments, commits or docs.
+- UI copy: Title Case for every label (buttons, menu and tray items, window titles,
+  section headings, setting row titles, tabs, chips, filter names, toast titles, HUD
+  labels, tooltips): "Copy Text", "Check for Updates", "Repeat Last Region". Articles,
+  short conjunctions and short prepositions (a, an, the, and, or, for, to, of, in, on, at,
+  by, with) stay lowercase unless first. Sentence case only for descriptions, helper text,
+  status sentences and error bodies.
 
 ## Overlay (app/src/overlay)
 

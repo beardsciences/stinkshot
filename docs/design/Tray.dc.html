@@ -16,7 +16,7 @@ a{color:#7fd36a}a:hover{color:#a6e596}
 <div style="width: 320px; height: 560px; box-sizing: border-box; padding: 16px; background: #15191f; font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif; color: #ffffff">
   <div style="background: #2c2c2c; border: 1px solid rgba(255,255,255,0.09); border-radius: 8px; box-shadow: 0 12px 32px rgba(0,0,0,0.5); padding: 4px; display: flex; flex-direction: column; font-size: 13px">
     <div style="display: flex; align-items: center; gap: 8px; padding: 8px 10px 6px; font-size: 12px; color: #b4b4b4">
-      <span aria-hidden="true" style="width: 14px; height: 14px; border-radius: 4px; background: {{accent}}"></span>StinkShot 0.1.0 · offline
+      <span aria-hidden="true" style="width: 14px; height: 14px; border-radius: 4px; background: {{accent}}"></span>StinkShot 0.1.0 · Offline
     </div>
     <sc-for list="{{capture}}" as="item" hint-placeholder-count="6">
       <button style="height: 36px; border: 0; border-radius: 4px; background: transparent; color: #ffffff; font-family: inherit; font-size: 13px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; text-align: left">
@@ -44,10 +44,10 @@ class Component extends DCLogic {
       capture: [
         { label: 'Region', key: 'PrtSc' },
         { label: 'Window', key: 'Alt+PrtSc' },
-        { label: 'Full screen', key: 'Ctrl+PrtSc' },
+        { label: 'Full Screen', key: 'Ctrl+PrtSc' },
         { label: 'Scrolling', key: 'Ctrl+Shift+S' },
-        { label: 'Copy text (OCR)', key: 'Ctrl+Shift+T' },
-        { label: 'Repeat last region', key: 'Shift+PrtSc' }
+        { label: 'Copy Text (OCR)', key: 'Ctrl+Shift+T' },
+        { label: 'Repeat Last Region', key: 'Shift+PrtSc' }
       ],
       rec: [
         { label: 'Record MP4', key: 'Ctrl+Shift+R' },
