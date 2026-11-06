@@ -12,3 +12,4 @@ log.workspace = true
 chrono.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
+image = { workspace = true, features = ["gif"] }
