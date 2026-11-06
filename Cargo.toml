@@ -53,3 +53,6 @@ panic = "unwind"
 
 [profile.dev.package."*"]
 opt-level = 2
+
+[profile.dev.package.stinkshot-record]
+opt-level = 3

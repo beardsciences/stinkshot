@@ -239,7 +239,7 @@ enum Rec {
     Countdown(PendingRecord),
     /// Recorder is being created on a worker.
     Starting { pending: PendingRecord, cancel: bool },
-    Active { rec: Recorder, pending: PendingRecord },
+    Active { rec: Box<Recorder>, pending: PendingRecord },
     /// `stop()` is running on a worker.
     Stopping(PendingRecord),
     Trim { source: PathBuf, done_issued: bool },
@@ -878,7 +878,7 @@ impl Shell {
             self.record_frame = None;
             self.record_hud = None;
             self.rec = Rec::Stopping(pending);
-            workers::stop_recorder(&self.env(), rec);
+            workers::stop_recorder(&self.env(), *rec);
             self.touch();
         }
     }
@@ -895,7 +895,7 @@ impl Shell {
             Rec::Active { rec, .. } => {
                 self.record_frame = None;
                 self.record_hud = None;
-                workers::cancel_recorder(&self.env(), rec);
+                workers::cancel_recorder(&self.env(), *rec);
                 self.touch();
             }
             Rec::Trim { source, .. } => {
@@ -1072,7 +1072,7 @@ impl Shell {
                 let summary = self.record_summary(pending.gif);
                 self.record_frame = Some(Slot::new(RecordFrame::new(pending.rect)));
                 self.record_hud = Some(Slot::new(RecordHud::new(pending.rect, summary, toggles)));
-                self.rec = Rec::Active { rec, pending };
+                self.rec = Rec::Active { rec: Box::new(rec), pending };
                 self.touch();
             }
             Err(e) => {
