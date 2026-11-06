@@ -72,6 +72,10 @@ pub enum Command {
     Notify { title: String, body: String, error: bool },
     CheckForUpdates,
     Quit,
+    /// Open a web page (the update release page) in the default browser.
+    OpenUrl(String),
+    /// Settings window: pause/resume global hotkeys while it records a new key combo.
+    SetHotkeysSuspended(bool),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

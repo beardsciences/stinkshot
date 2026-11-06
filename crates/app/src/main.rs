@@ -8,19 +8,28 @@
 //!    a `Surface` shown as an immediate viewport by `shell::Shell`.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod capture_ops;
 mod cli;
-mod hotkeys;
+mod filedialog;
 mod history_ui;
+mod hotkeys;
+mod icon_gen;
+mod logger;
 mod overlay;
 mod pin;
 mod record_ui;
 mod settings_ui;
 mod shell;
+#[allow(dead_code)]
 mod state;
+mod sysutil;
+#[allow(dead_code)]
 mod theme;
 mod toast;
 mod tray;
 mod update;
+mod wake;
+mod workers;
 
 fn main() -> anyhow::Result<()> {
     shell::run()
