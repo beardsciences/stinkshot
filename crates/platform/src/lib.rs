@@ -15,6 +15,7 @@ pub mod monitors;
 pub mod ocr;
 pub mod system;
 pub mod uia;
+mod util;
 pub mod window_util;
 pub mod windows_enum;
 
