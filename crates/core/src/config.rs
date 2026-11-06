@@ -4,11 +4,12 @@
 
 use std::path::{Path, PathBuf};
 
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 use crate::image::ImageFormat;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub general: General,
@@ -118,26 +119,12 @@ pub struct HistoryCfg {
     pub keep_editable: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Privacy {
     /// The one and only network feature. Off by default.
     pub check_for_updates: bool,
     pub last_update_check: Option<chrono::DateTime<chrono::Utc>>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            general: General::default(),
-            hotkeys: Hotkeys::default(),
-            capture: Capture::default(),
-            editor: Editor::default(),
-            recording: Recording::default(),
-            history: HistoryCfg::default(),
-            privacy: Privacy::default(),
-        }
-    }
 }
 
 impl Default for General {
@@ -200,10 +187,13 @@ impl Default for Editor {
             font_size: 20.0,
             blur_radius: 12.0,
             pixelate_block: 12,
-            palette: ["#ff8a3d", "#ff5a52", "#ffd166", "#7fd36a", "#4cc2ff", "#c49cff", "#ffffff", "#111111"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
+            palette: [
+                "#ff8a3d", "#ff5a52", "#ffd166", "#7fd36a", "#4cc2ff", "#c49cff", "#ffffff",
+                "#111111",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
         }
     }
 }
@@ -230,20 +220,25 @@ impl Default for Recording {
 
 impl Default for HistoryCfg {
     fn default() -> Self {
-        Self { folder: String::new(), ocr_index: true, keep_days: 90, max_gb: 5.0, keep_editable: true }
-    }
-}
-
-impl Default for Privacy {
-    fn default() -> Self {
-        Self { check_for_updates: false, last_update_check: None }
+        Self {
+            folder: String::new(),
+            ocr_index: true,
+            keep_days: 90,
+            max_gb: 5.0,
+            keep_editable: true,
+        }
     }
 }
 
 impl Config {
     /// `%APPDATA%\StinkShot`.
     pub fn dir() -> PathBuf {
-        todo!("core::config::Config::dir")
+        let base = std::env::var_os("APPDATA")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| directories::BaseDirs::new().map(|d| d.config_dir().to_path_buf()))
+            .unwrap_or_else(|| PathBuf::from("."));
+        base.join("StinkShot")
     }
     pub fn path() -> PathBuf {
         Self::dir().join("config.toml")
@@ -251,30 +246,143 @@ impl Config {
     /// Load from `path()`; missing file -> defaults (and writes them). Malformed file ->
     /// back it up as config.toml.bad-<timestamp>, log, return defaults.
     pub fn load() -> Config {
-        todo!("core::config::Config::load")
+        let path = Self::path();
+        if !path.exists() {
+            let cfg = Config::default();
+            if let Err(e) = cfg.save_to(&path) {
+                log::warn!(
+                    "could not write default config to {}: {e:#}",
+                    path.display()
+                );
+            }
+            return cfg;
+        }
+        match Self::load_from(&path) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                log::error!("config {} is unreadable: {e:#}", path.display());
+                let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+                let mut backup_name = path
+                    .file_name()
+                    .map(|n| n.to_os_string())
+                    .unwrap_or_default();
+                backup_name.push(format!(".bad-{stamp}"));
+                let backup = path.with_file_name(backup_name);
+                match std::fs::rename(&path, &backup) {
+                    Ok(()) => {
+                        log::warn!("backed up malformed config to {}", backup.display());
+                        let cfg = Config::default();
+                        if let Err(e) = cfg.save_to(&path) {
+                            log::warn!("could not write fresh config: {e:#}");
+                        }
+                        cfg
+                    }
+                    Err(e) => {
+                        log::warn!("could not back up malformed config: {e}");
+                        Config::default()
+                    }
+                }
+            }
+        }
     }
     pub fn load_from(path: &Path) -> anyhow::Result<Config> {
-        let _ = path;
-        todo!("core::config::Config::load_from")
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+        let mut cfg: Config =
+            toml::from_str(text).with_context(|| format!("parsing {}", path.display()))?;
+        cfg.normalize();
+        Ok(cfg)
+    }
+    /// Clamp values that would break callers (hand-edited files).
+    fn normalize(&mut self) {
+        self.capture.jpeg_quality = self.capture.jpeg_quality.clamp(1, 100);
+        if self.capture.filename_pattern.trim().is_empty() {
+            self.capture.filename_pattern = Capture::default().filename_pattern;
+        }
+        if !(self.editor.stroke_width.is_finite() && self.editor.stroke_width > 0.0) {
+            self.editor.stroke_width = Editor::default().stroke_width;
+        }
+        if !(self.editor.font_size.is_finite() && self.editor.font_size > 0.0) {
+            self.editor.font_size = Editor::default().font_size;
+        }
+        if self.editor.palette.is_empty() {
+            self.editor.palette = Editor::default().palette;
+        }
+        if self.recording.fps == 0 {
+            self.recording.fps = Recording::default().fps;
+        }
+        if self.recording.gif_fps == 0 {
+            self.recording.gif_fps = Recording::default().gif_fps;
+        }
+        if !(self.history.max_gb.is_finite() && self.history.max_gb >= 0.0) {
+            self.history.max_gb = 0.0;
+        }
     }
     /// Atomic write (temp + rename).
     pub fn save(&self) -> anyhow::Result<()> {
         self.save_to(&Self::path())
     }
     pub fn save_to(&self, path: &Path) -> anyhow::Result<()> {
-        let _ = path;
-        todo!("core::config::Config::save_to")
+        let text = toml::to_string_pretty(self).context("serializing config")?;
+        crate::image::write_atomic(path, text.as_bytes())
     }
-    /// Resolved history folder (applies the empty-string default).
+    /// Resolved history folder (applies the empty-string default). A custom folder may use
+    /// `%VAR%` environment references.
     pub fn history_folder(&self) -> PathBuf {
-        todo!("core::config::Config::history_folder")
+        let custom = self.history.folder.trim();
+        if !custom.is_empty() {
+            return PathBuf::from(expand_env(custom));
+        }
+        let home = std::env::var_os("USERPROFILE")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| directories::UserDirs::new().map(|d| d.home_dir().to_path_buf()))
+            .unwrap_or_else(|| PathBuf::from("."));
+        home.join("Pictures").join("StinkShot")
     }
+}
+
+/// Expand `%NAME%` references; unknown variables are left as written.
+fn expand_env(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find('%') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 1..];
+        match after.find('%') {
+            Some(j) if j > 0 => {
+                let name = &after[..j];
+                match std::env::var(name) {
+                    Ok(v) => out.push_str(&v),
+                    Err(_) => {
+                        out.push('%');
+                        out.push_str(name);
+                        out.push('%');
+                    }
+                }
+                rest = &after[j + 1..];
+            }
+            _ => {
+                out.push('%');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Parse "#rrggbb" or "#rrggbbaa" into RGBA. Invalid -> None.
 pub fn parse_hex_color(s: &str) -> Option<[u8; 4]> {
-    let _ = s;
-    todo!("core::config::parse_hex_color")
+    let s = s.trim().strip_prefix('#')?;
+    if !s.is_ascii() || !(s.len() == 6 || s.len() == 8) || !s.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    let byte = |i: usize| u8::from_str_radix(&s[i..i + 2], 16).ok();
+    let a = if s.len() == 8 { byte(6)? } else { 255 };
+    Some([byte(0)?, byte(2)?, byte(4)?, a])
 }
 
 pub fn to_hex_color(c: [u8; 4]) -> String {
@@ -282,5 +390,212 @@ pub fn to_hex_color(c: [u8; 4]) -> String {
         format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
     } else {
         format!("#{:02x}{:02x}{:02x}{:02x}", c[0], c[1], c[2], c[3])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp(name: &str) -> PathBuf {
+        let d =
+            std::env::temp_dir().join(format!("stinkshot-core-cfg-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn hex_colors() {
+        assert_eq!(parse_hex_color("#ff8a3d"), Some([0xff, 0x8a, 0x3d, 255]));
+        assert_eq!(parse_hex_color("#FF8A3D80"), Some([0xff, 0x8a, 0x3d, 0x80]));
+        assert_eq!(parse_hex_color("  #000000 "), Some([0, 0, 0, 255]));
+        for bad in [
+            "",
+            "#",
+            "ff8a3d",
+            "#ff8a3",
+            "#ff8a3dd",
+            "#gg0000",
+            "#12345678a",
+            "#é12345",
+            "#+12345",
+        ] {
+            assert_eq!(parse_hex_color(bad), None, "{bad:?}");
+        }
+        assert_eq!(to_hex_color([1, 2, 3, 255]), "#010203");
+        assert_eq!(
+            parse_hex_color(&to_hex_color([9, 8, 7, 6])),
+            Some([9, 8, 7, 6])
+        );
+    }
+
+    #[test]
+    fn default_round_trip() {
+        let d = tmp("rt");
+        let p = d.join("config.toml");
+        let cfg = Config::default();
+        cfg.save_to(&p).unwrap();
+        assert_eq!(Config::load_from(&p).unwrap(), cfg);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn modified_round_trip_including_options() {
+        let d = tmp("rt2");
+        let p = d.join("sub").join("config.toml");
+        let mut cfg = Config::default();
+        cfg.general.theme = "dark".into();
+        cfg.hotkeys.region = String::new();
+        cfg.capture.format = ImageFormat::Webp;
+        cfg.capture.last_region = Some(crate::geom::PxRect::new(-1920, 10, 800, 600));
+        cfg.editor.stroke_width = 0.1;
+        cfg.editor.palette = vec!["#010203".into()];
+        cfg.history.max_gb = 2.5;
+        cfg.privacy.check_for_updates = true;
+        cfg.privacy.last_update_check = Some(chrono::Utc::now());
+        cfg.save_to(&p).unwrap();
+        let back = Config::load_from(&p).unwrap();
+        assert_eq!(back, cfg);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn partial_file_fills_defaults_and_ignores_unknown() {
+        let d = tmp("partial");
+        let p = d.join("config.toml");
+        std::fs::write(
+            &p,
+            "mystery = 1\n[general]\ntheme = \"light\"\nnew_future_key = true\n[capture]\njpeg_quality = 70\n[hotkeys]\nregion = \"F9\"\n",
+        )
+        .unwrap();
+        let cfg = Config::load_from(&p).unwrap();
+        assert_eq!(cfg.general.theme, "light");
+        assert_eq!(cfg.general.accent, General::default().accent);
+        assert_eq!(cfg.capture.jpeg_quality, 70);
+        assert_eq!(
+            cfg.capture.filename_pattern,
+            Capture::default().filename_pattern
+        );
+        assert_eq!(cfg.hotkeys.region, "F9");
+        assert_eq!(cfg.hotkeys.window, Hotkeys::default().window);
+        assert_eq!(cfg.recording, Recording::default());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn empty_file_is_all_defaults() {
+        let d = tmp("empty");
+        let p = d.join("config.toml");
+        std::fs::write(&p, "").unwrap();
+        assert_eq!(Config::load_from(&p).unwrap(), Config::default());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn malformed_and_missing_are_errors_in_load_from() {
+        let d = tmp("bad");
+        let p = d.join("config.toml");
+        assert!(Config::load_from(&p).is_err());
+        std::fs::write(&p, "this is [not toml").unwrap();
+        assert!(Config::load_from(&p).is_err());
+        std::fs::write(&p, "[capture]\njpeg_quality = \"high\"\n").unwrap();
+        assert!(Config::load_from(&p).is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn out_of_range_values_are_normalized() {
+        let d = tmp("norm");
+        let p = d.join("config.toml");
+        std::fs::write(
+            &p,
+            "[capture]\njpeg_quality = 0\nfilename_pattern = \"  \"\n[editor]\npalette = []\nstroke_width = -3.0\n",
+        )
+        .unwrap();
+        let cfg = Config::load_from(&p).unwrap();
+        assert_eq!(cfg.capture.jpeg_quality, 1);
+        assert_eq!(
+            cfg.capture.filename_pattern,
+            Capture::default().filename_pattern
+        );
+        assert_eq!(cfg.editor.palette, Editor::default().palette);
+        assert_eq!(cfg.editor.stroke_width, 4.0);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn utf8_bom_is_tolerated() {
+        let d = tmp("bom");
+        let p = d.join("config.toml");
+        std::fs::write(&p, "\u{feff}[general]\ntheme = \"dark\"\n").unwrap();
+        assert_eq!(Config::load_from(&p).unwrap().general.theme, "dark");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn history_folder_default_and_custom() {
+        let mut cfg = Config::default();
+        let def = cfg.history_folder();
+        assert!(
+            def.ends_with("Pictures/StinkShot") || def.ends_with("Pictures\\StinkShot"),
+            "{def:?}"
+        );
+        cfg.history.folder = "D:\\Shots".into();
+        assert_eq!(cfg.history_folder(), PathBuf::from("D:\\Shots"));
+        cfg.history.folder = "   ".into();
+        assert_eq!(cfg.history_folder(), def);
+    }
+
+    #[test]
+    fn env_expansion() {
+        let path = std::env::var("PATH").unwrap();
+        assert_eq!(expand_env("%PATH%\\x"), format!("{path}\\x"));
+        assert_eq!(
+            expand_env("%STINKSHOT_NOPE_XYZ%\\x"),
+            "%STINKSHOT_NOPE_XYZ%\\x"
+        );
+        assert_eq!(expand_env("100%"), "100%");
+        assert_eq!(expand_env("a%%b"), "a%%b");
+    }
+
+    #[test]
+    fn config_dir_ends_with_app_name() {
+        assert!(Config::dir().ends_with("StinkShot"));
+        assert!(Config::path().ends_with("config.toml"));
+    }
+
+    #[test]
+    fn load_backs_up_malformed_file() {
+        // Config::load() is bound to %APPDATA%, so exercise the same flow by pointing APPDATA
+        // at a temp dir. Tests in this module that read APPDATA only compare suffixes.
+        let d = tmp("load");
+        // SAFETY: tests that touch APPDATA run only here and set it before reading.
+        unsafe { std::env::set_var("APPDATA", &d) };
+        let first = Config::load();
+        assert_eq!(first, Config::default());
+        assert!(
+            Config::path().exists(),
+            "defaults are written on first load"
+        );
+        std::fs::write(Config::path(), "garbage [[[").unwrap();
+        let second = Config::load();
+        assert_eq!(second, Config::default());
+        let backups: Vec<_> = std::fs::read_dir(Config::dir())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("config.toml.bad-")
+            })
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(backups[0].path()).unwrap(),
+            "garbage [[["
+        );
+        assert!(Config::load_from(&Config::path()).is_ok());
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
