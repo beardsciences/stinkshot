@@ -3132,6 +3132,7 @@ dependencies = [
  "stinkshot-stitch",
  "tray-icon",
  "ureq",
+ "windows",
 ]
 
 [[package]]
