@@ -19,6 +19,20 @@
 //!   output is one continuous file without a gap.
 //! - Dimensions are rounded down to even numbers (H.264 4:2:0 requirement).
 
+mod audio;
+mod capture;
+mod convert;
+mod dsp;
+mod encoder;
+mod gifenc;
+mod media;
+mod mf;
+mod mfread;
+mod overlay;
+mod recorder;
+mod timeline;
+mod webcam;
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -81,50 +95,7 @@ pub struct Status {
     pub error: Option<String>,
 }
 
-pub struct Recorder {
-    #[allow(dead_code)]
-    inner: (),
-}
-
-impl Recorder {
-    pub fn start(opts: RecordOptions) -> anyhow::Result<Recorder> {
-        let _ = opts;
-        todo!("record::Recorder::start")
-    }
-    pub fn pause(&self) {
-        todo!("record::Recorder::pause")
-    }
-    pub fn resume(&self) {
-        todo!("record::Recorder::resume")
-    }
-    pub fn status(&self) -> Status {
-        todo!("record::Recorder::status")
-    }
-    pub fn set_mic_muted(&self, muted: bool) {
-        let _ = muted;
-        todo!("record::Recorder::set_mic_muted")
-    }
-    pub fn set_system_muted(&self, muted: bool) {
-        let _ = muted;
-        todo!("record::Recorder::set_system_muted")
-    }
-    pub fn set_webcam_visible(&self, visible: bool) {
-        let _ = visible;
-        todo!("record::Recorder::set_webcam_visible")
-    }
-    pub fn set_overlays(&self, clicks: bool, keys: bool) {
-        let _ = (clicks, keys);
-        todo!("record::Recorder::set_overlays")
-    }
-    /// Finalize the file. Blocks until the writer flushes (call from a worker thread).
-    pub fn stop(self) -> anyhow::Result<RecordingResult> {
-        todo!("record::Recorder::stop")
-    }
-    /// Abort and delete the partial file.
-    pub fn cancel(self) {
-        todo!("record::Recorder::cancel")
-    }
-}
+pub use recorder::Recorder;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MediaInfo {
@@ -136,27 +107,29 @@ pub struct MediaInfo {
 }
 
 pub fn probe(input: &Path) -> anyhow::Result<MediaInfo> {
-    let _ = input;
-    todo!("record::probe")
+    media::probe(input)
 }
 
 /// `count` evenly spaced frames scaled to `height` px tall (for the trim filmstrip).
 pub fn thumbnails(input: &Path, count: usize, height: u32) -> anyhow::Result<Vec<Rgba>> {
-    let _ = (input, count, height);
-    todo!("record::thumbnails")
+    media::thumbnails(input, count, height)
 }
 
 /// Single frame at `at` (for the trim preview).
 pub fn frame_at(input: &Path, at: Duration, max_height: u32) -> anyhow::Result<Rgba> {
-    let _ = (input, at, max_height);
-    todo!("record::frame_at")
+    media::frame_at(input, at, max_height)
 }
 
 /// Cut [start, end) into `output` (re-encodes so cuts are frame-accurate; keeps audio).
 /// `progress` receives 0.0..=1.0.
-pub fn trim(input: &Path, output: &Path, start: Duration, end: Duration, progress: &dyn Fn(f32)) -> anyhow::Result<()> {
-    let _ = (input, output, start, end, progress);
-    todo!("record::trim")
+pub fn trim(
+    input: &Path,
+    output: &Path,
+    start: Duration,
+    end: Duration,
+    progress: &dyn Fn(f32),
+) -> anyhow::Result<()> {
+    media::trim(input, output, start, end, progress)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -174,16 +147,26 @@ pub struct GifOptions {
 
 /// Decode `input` (MP4) and write an optimized GIF: per-frame imagequant palette with
 /// dithering, frame-diff transparency to shrink unchanged areas.
-pub fn to_gif(input: &Path, output: &Path, opts: &GifOptions, progress: &dyn Fn(f32)) -> anyhow::Result<()> {
-    let _ = (input, output, opts, progress);
-    todo!("record::to_gif")
+pub fn to_gif(
+    input: &Path,
+    output: &Path,
+    opts: &GifOptions,
+    progress: &dyn Fn(f32),
+) -> anyhow::Result<()> {
+    gifenc::to_gif(input, output, opts, progress)
 }
 
 /// Friendly device names.
 pub fn list_microphones() -> Vec<String> {
-    todo!("record::list_microphones")
+    audio::list_capture_devices()
 }
 
 pub fn list_webcams() -> Vec<String> {
-    todo!("record::list_webcams")
+    webcam::list_names()
+}
+
+/// The primary monitor's rectangle in physical virtual-desktop pixels (additive helper; useful
+/// for tests and tools that do not want to depend on the platform crate).
+pub fn primary_monitor_rect() -> Option<PxRect> {
+    capture::primary_monitor_rect()
 }
