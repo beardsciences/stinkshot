@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>StinkShot tray menu</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+a{color:#7fd36a}a:hover{color:#a6e596}
+</style>
+</helmet>
+<div style="width: 320px; height: 560px; box-sizing: border-box; padding: 16px; background: #15191f; font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif; color: #ffffff">
+  <div style="background: #2c2c2c; border: 1px solid rgba(255,255,255,0.09); border-radius: 8px; box-shadow: 0 12px 32px rgba(0,0,0,0.5); padding: 4px; display: flex; flex-direction: column; font-size: 13px">
+    <div style="display: flex; align-items: center; gap: 8px; padding: 8px 10px 6px; font-size: 12px; color: #b4b4b4">
+      <span aria-hidden="true" style="width: 14px; height: 14px; border-radius: 4px; background: {{accent}}"></span>StinkShot 0.1.0 · offline
+    </div>
+    <sc-for list="{{capture}}" as="item" hint-placeholder-count="6">
+      <button style="height: 36px; border: 0; border-radius: 4px; background: transparent; color: #ffffff; font-family: inherit; font-size: 13px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; text-align: left">
+        <span>{{item.label}}</span><span style="color: #a8a8a8; font-size: 12px">{{item.key}}</span>
+      </button>
+    </sc-for>
+    <div aria-hidden="true" style="height: 1px; background: rgba(255,255,255,0.08); margin: 4px 6px"></div>
+    <sc-for list="{{rec}}" as="item" hint-placeholder-count="2">
+      <button style="height: 36px; border: 0; border-radius: 4px; background: transparent; color: #ffffff; font-family: inherit; font-size: 13px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; text-align: left">
+        <span>{{item.label}}</span><span style="color: #a8a8a8; font-size: 12px">{{item.key}}</span>
+      </button>
+    </sc-for>
+    <div aria-hidden="true" style="height: 1px; background: rgba(255,255,255,0.08); margin: 4px 6px"></div>
+    <button style="height: 36px; border: 0; border-radius: 4px; background: rgba(255,255,255,0.06); color: #ffffff; font-family: inherit; font-size: 13px; display: flex; align-items: center; padding: 0 10px; text-align: left">History</button>
+    <button style="height: 36px; border: 0; border-radius: 4px; background: transparent; color: #ffffff; font-family: inherit; font-size: 13px; display: flex; align-items: center; padding: 0 10px; text-align: left">Settings</button>
+    <button style="height: 36px; border: 0; border-radius: 4px; background: transparent; color: #ffffff; font-family: inherit; font-size: 13px; display: flex; align-items: center; padding: 0 10px; text-align: left">Quit</button>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#7fd36a","options":["#7fd36a","#4cc2ff","#ffb454","#c49cff"]},"$preview":{"width":320,"height":560}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      accent: this.props.accent ?? '#7fd36a',
+      capture: [
+        { label: 'Region', key: 'PrtSc' },
+        { label: 'Window', key: 'Alt+PrtSc' },
+        { label: 'Full screen', key: 'Ctrl+PrtSc' },
+        { label: 'Scrolling', key: 'Ctrl+Shift+S' },
+        { label: 'Copy text (OCR)', key: 'Ctrl+Shift+T' },
+        { label: 'Repeat last region', key: 'Shift+PrtSc' }
+      ],
+      rec: [
+        { label: 'Record MP4', key: 'Ctrl+Shift+R' },
+        { label: 'Record GIF', key: 'Ctrl+Shift+G' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

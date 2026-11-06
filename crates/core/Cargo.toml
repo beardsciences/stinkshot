@@ -1,0 +1,19 @@
+[package]
+name = "stinkshot-core"
+description = "Platform-independent StinkShot model: geometry, images, config, annotations, rendering"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+chrono.workspace = true
+image.workspace = true
+tiny-skia.workspace = true
+ab_glyph.workspace = true
+directories.workspace = true

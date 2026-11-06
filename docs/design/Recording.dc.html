@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>StinkShot recording HUD and trim</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+a{color:#7fd36a}a:hover{color:#a6e596}
+</style>
+</helmet>
+<div style="width: 960px; height: 620px; position: relative; overflow: hidden; font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif; color: #ffffff; background: linear-gradient(135deg, #24405e 0%, #1a2433 60%, #2a2238 100%)">
+  <div style="position: absolute; left: 60px; top: 70px; width: 520px; height: 320px; border: 2px dashed #ff5a52; border-radius: 2px">
+    <div aria-hidden="true" style="position: absolute; inset: 0; background: #1e1e1e; display: flex; flex-direction: column; gap: 10px; padding: 24px">
+      <div style="height: 12px; width: 220px; background: #3a3a3a; border-radius: 3px"></div>
+      <div style="height: 12px; width: 300px; background: #3a3a3a; border-radius: 3px"></div>
+      <div style="height: 34px; width: 140px; background: #3d8bd9; border-radius: 6px; margin-top: 12px"></div>
+    </div>
+    <div aria-hidden="true" style="position: absolute; left: 72px; top: 106px; width: 44px; height: 44px; border-radius: 50%; border: 3px solid {{accent}}; opacity: 0.85"></div>
+    <div aria-hidden="true" style="position: absolute; left: 84px; top: 118px; width: 20px; height: 20px; border-radius: 50%; background: {{accent}}; opacity: 0.5"></div>
+    <div style="position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; gap: 6px">
+      <span style="background: rgba(20,20,20,0.85); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; padding: 5px 10px; font-size: 14px; font-weight: 600">Ctrl</span>
+      <span style="background: rgba(20,20,20,0.85); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; padding: 5px 10px; font-size: 14px; font-weight: 600">Shift</span>
+      <span style="background: rgba(20,20,20,0.85); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; padding: 5px 10px; font-size: 14px; font-weight: 600">P</span>
+    </div>
+    <div style="position: absolute; right: 14px; bottom: 14px; width: 88px; height: 88px; border-radius: 50%; border: 2px solid #ffffff; background: linear-gradient(160deg, #5d6b7a, #2d3640); display: flex; align-items: center; justify-content: center; font-size: 11px; color: #e0e0e0">Webcam</div>
+  </div>
+
+  <div style="position: absolute; left: 60px; top: 404px; display: flex; align-items: center; gap: 4px; background: rgba(40,40,40,0.96); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 5px; box-shadow: 0 8px 24px rgba(0,0,0,0.45)">
+    <span aria-hidden="true" style="width: 10px; height: 10px; border-radius: 50%; background: #ff5a52; margin: 0 6px 0 8px"></span>
+    <span style="font-size: 14px; font-variant-numeric: tabular-nums; padding-right: 8px">00:42</span>
+    <button aria-label="Pause" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"></rect><rect x="14" y="5" width="4" height="14" rx="1"></rect></svg></button>
+    <button aria-label="Microphone on" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0014 0M12 18v3"></path></svg></button>
+    <button aria-label="System audio on" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M4 9h4l5-4v14l-5-4H4z M17 9a4 4 0 010 6"></path></svg></button>
+    <button aria-label="Webcam on" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="7" width="13" height="10" rx="2"></rect><path d="M16 11l5-3v8l-5-3z"></path></svg></button>
+    <button aria-label="Show clicks and keys" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: {{accentSoft}}; color: {{accent}}; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3"></circle><circle cx="12" cy="12" r="8"></circle></svg></button>
+    <button style="height: 34px; border: 0; border-radius: 6px; background: #ff5a52; color: #1f0605; font-weight: 600; font-size: 13px; padding: 0 14px; font-family: inherit; margin-left: 4px">Stop</button>
+  </div>
+  <div style="position: absolute; left: 60px; top: 460px; font-size: 12px; color: #d0d0d0">MP4 · NVENC H.264 · 60 fps · mic + system</div>
+
+  <div style="position: absolute; left: 620px; top: 70px; width: 280px; display: flex; flex-direction: column; gap: 10px; align-items: center">
+    <div style="width: 160px; height: 160px; border-radius: 50%; background: rgba(20,20,20,0.75); border: 3px solid {{accent}}; display: flex; align-items: center; justify-content: center; font-size: 84px; font-weight: 600">3</div>
+    <div style="font-size: 13px; color: #e0e0e0">Countdown before recording</div>
+  </div>
+
+  <div style="position: absolute; left: 620px; top: 330px; width: 300px; box-sizing: border-box; background: #2c2c2c; border: 1px solid rgba(255,255,255,0.09); border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,0.5); padding: 14px; display: flex; flex-direction: column; gap: 12px">
+    <div style="font-size: 14px; font-weight: 600">Trim recording</div>
+    <div style="position: relative; height: 48px; border-radius: 6px; overflow: hidden; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 2px; background: #1e1e1e">
+      <div style="background: #3a4652"></div><div style="background: #34404c"></div><div style="background: #3a4652"></div><div style="background: #2f3a46"></div><div style="background: #3a4652"></div><div style="background: #34404c"></div>
+      <div aria-hidden="true" style="position: absolute; left: 0; top: 0; bottom: 0; width: 40px; background: rgba(0,0,0,0.6)"></div>
+      <div aria-hidden="true" style="position: absolute; right: 0; top: 0; bottom: 0; width: 56px; background: rgba(0,0,0,0.6)"></div>
+      <div aria-hidden="true" style="position: absolute; left: 36px; top: 0; bottom: 0; width: 8px; border-radius: 3px; background: {{accent}}"></div>
+      <div aria-hidden="true" style="position: absolute; right: 52px; top: 0; bottom: 0; width: 8px; border-radius: 3px; background: {{accent}}"></div>
+    </div>
+    <div style="display: flex; justify-content: space-between; font-size: 12px; color: #b4b4b4; font-variant-numeric: tabular-nums"><span>00:03.2</span><span>keep 00:35.1</span><span>00:38.3</span></div>
+    <div style="display: flex; gap: 6px">
+      <button style="flex: 1; height: 34px; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; background: #373737; color: #ffffff; font-family: inherit; font-size: 13px">Discard</button>
+      <button style="flex: 1; height: 34px; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; background: #373737; color: #ffffff; font-family: inherit; font-size: 13px">Save GIF</button>
+      <button style="flex: 1; height: 34px; border: 0; border-radius: 6px; background: {{accent}}; color: #0d1f08; font-weight: 600; font-family: inherit; font-size: 13px">Save MP4</button>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#7fd36a","options":["#7fd36a","#4cc2ff","#ffb454","#c49cff"]},"$preview":{"width":960,"height":620}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const accent = this.props.accent ?? '#7fd36a';
+    return { accent: accent, accentSoft: accent + '2e' };
+  }
+}
+</script>
+</body>
+</html>

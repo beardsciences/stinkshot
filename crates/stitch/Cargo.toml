@@ -1,0 +1,10 @@
+[package]
+name = "stinkshot-stitch"
+description = "Scrolling-capture frame stitching"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+stinkshot-core.workspace = true
+log.workspace = true

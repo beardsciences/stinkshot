@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>StinkShot region overlay</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+a{color:#7fd36a}a:hover{color:#a6e596}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; position: relative; overflow: hidden; font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif; background: #1b2a3a; color: #ffffff">
+  <div aria-hidden="true" style="position: absolute; inset: 0; background: linear-gradient(135deg, #24405e 0%, #1a2433 60%, #2a2238 100%)"></div>
+  <div aria-hidden="true" style="position: absolute; left: 120px; top: 90px; width: 1060px; height: 640px; background: #1e1e1e; border-radius: 8px; box-shadow: 0 16px 48px rgba(0,0,0,0.5); overflow: hidden">
+    <div style="height: 36px; background: #2b2b2b; display: flex; align-items: center; padding: 0 14px; gap: 10px; font-size: 12px; color: #c8c8c8">
+      <div style="width: 14px; height: 14px; border-radius: 3px; background: #3d8bd9"></div>
+      <span>main.rs - stinkshot - Editor</span>
+    </div>
+    <div style="display: flex; height: 604px">
+      <div style="width: 220px; background: #252526; padding: 14px; display: flex; flex-direction: column; gap: 9px">
+        <div style="height: 10px; width: 120px; background: #3a3a3a; border-radius: 3px"></div>
+        <div style="height: 10px; width: 150px; background: #3a3a3a; border-radius: 3px"></div>
+        <div style="height: 10px; width: 100px; background: #3a3a3a; border-radius: 3px"></div>
+        <div style="height: 10px; width: 140px; background: #37506b; border-radius: 3px"></div>
+        <div style="height: 10px; width: 90px; background: #3a3a3a; border-radius: 3px"></div>
+      </div>
+      <div style="flex: 1; padding: 22px 26px; display: flex; flex-direction: column; gap: 11px; font-family: 'Cascadia Code', Consolas, monospace; font-size: 13px">
+        <div><span style="color: #c586c0">fn</span> <span style="color: #dcdcaa">capture_region</span>(rect: <span style="color: #4ec9b0">Rect</span>) -&gt; <span style="color: #4ec9b0">Shot</span> {</div>
+        <div style="padding-left: 28px"><span style="color: #569cd6">let</span> frame = monitors.<span style="color: #dcdcaa">freeze</span>();</div>
+        <div style="padding-left: 28px"><span style="color: #569cd6">let</span> api_key = <span style="color: #ce9178">"sk_live_8f3a2c91d0e7"</span>;</div>
+        <div style="padding-left: 28px">frame.<span style="color: #dcdcaa">crop</span>(rect).<span style="color: #dcdcaa">into_shot</span>()</div>
+        <div>}</div>
+        <div style="height: 8px"></div>
+        <div><span style="color: #6a9955">// TODO: scrolling stitch with sticky header detection</span></div>
+        <div><span style="color: #c586c0">fn</span> <span style="color: #dcdcaa">stitch</span>(frames: &amp;[<span style="color: #4ec9b0">Frame</span>]) -&gt; <span style="color: #4ec9b0">Image</span> {</div>
+        <div style="padding-left: 28px"><span style="color: #569cd6">let</span> overlap = <span style="color: #dcdcaa">find_overlap</span>(&amp;frames[0], &amp;frames[1]);</div>
+        <div style="padding-left: 28px">todo!()</div>
+        <div>}</div>
+      </div>
+    </div>
+  </div>
+  <div aria-hidden="true" style="position: absolute; left: 0; right: 0; bottom: 0; height: 48px; background: rgba(32,32,32,0.92); display: flex; justify-content: center; align-items: center; gap: 10px">
+    <div style="width: 30px; height: 30px; border-radius: 6px; background: #3d8bd9"></div>
+    <div style="width: 30px; height: 30px; border-radius: 6px; background: #444444"></div>
+    <div style="width: 30px; height: 30px; border-radius: 6px; background: {{accent}}"></div>
+    <div style="width: 30px; height: 30px; border-radius: 6px; background: #444444"></div>
+  </div>
+
+  <div style="position: absolute; left: 360px; top: 150px; width: 760px; height: 420px; box-shadow: 0 0 0 3000px rgba(0,0,0,0.58); outline: 1.5px solid {{accent}}">
+    <div style="position: absolute; left: -5px; top: -5px; width: 9px; height: 9px; background: #ffffff; border: 1.5px solid {{accent}}; border-radius: 2px"></div>
+    <div style="position: absolute; right: -5px; top: -5px; width: 9px; height: 9px; background: #ffffff; border: 1.5px solid {{accent}}; border-radius: 2px"></div>
+    <div style="position: absolute; left: -5px; bottom: -5px; width: 9px; height: 9px; background: #ffffff; border: 1.5px solid {{accent}}; border-radius: 2px"></div>
+    <div style="position: absolute; right: -5px; bottom: -5px; width: 9px; height: 9px; background: #ffffff; border: 1.5px solid {{accent}}; border-radius: 2px"></div>
+    <div style="position: absolute; left: 375px; top: -5px; width: 9px; height: 9px; background: #ffffff; border: 1.5px solid {{accent}}; border-radius: 2px"></div>
+    <div style="position: absolute; left: 375px; bottom: -5px; width: 9px; height: 9px; background: #ffffff; border: 1.5px solid {{accent}}; border-radius: 2px"></div>
+    <div style="position: absolute; left: -5px; top: 205px; width: 9px; height: 9px; background: #ffffff; border: 1.5px solid {{accent}}; border-radius: 2px"></div>
+    <div style="position: absolute; right: -5px; top: 205px; width: 9px; height: 9px; background: #ffffff; border: 1.5px solid {{accent}}; border-radius: 2px"></div>
+
+    <div style="position: absolute; left: 0; top: -34px; display: flex; gap: 6px; font-size: 12px">
+      <div style="background: rgba(32,32,32,0.94); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 4px 9px; font-variant-numeric: tabular-nums">760 × 420</div>
+      <div style="background: rgba(32,32,32,0.94); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 4px 9px; color: #c8c8c8">Free · 16:9 · 1:1 · Exact</div>
+    </div>
+
+    <div style="position: absolute; left: 152px; top: 80px; width: 236px; height: 26px; background: #2a2a2a; overflow: hidden; border-radius: 3px; display: grid; grid-template-columns: repeat(24, minmax(0, 1fr))">
+      <div style="background:#3b3b3b"></div><div style="background:#6a5246"></div><div style="background:#3b3b3b"></div><div style="background:#7a5a48"></div><div style="background:#4a4a4a"></div><div style="background:#6a5246"></div><div style="background:#3b3b3b"></div><div style="background:#7a5a48"></div><div style="background:#4a4a4a"></div><div style="background:#6a5246"></div><div style="background:#3b3b3b"></div><div style="background:#7a5a48"></div><div style="background:#4a4a4a"></div><div style="background:#6a5246"></div><div style="background:#3b3b3b"></div><div style="background:#7a5a48"></div><div style="background:#4a4a4a"></div><div style="background:#6a5246"></div><div style="background:#3b3b3b"></div><div style="background:#7a5a48"></div><div style="background:#4a4a4a"></div><div style="background:#6a5246"></div><div style="background:#3b3b3b"></div><div style="background:#7a5a48"></div>
+    </div>
+
+    <div style="position: absolute; left: 404px; top: 70px; width: 30px; height: 30px; border-radius: 50%; background: {{accent}}; color: #0d1f08; font-weight: 700; font-size: 15px; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 6px rgba(0,0,0,0.4)">1</div>
+    <div style="position: absolute; left: 470px; top: 260px; width: 30px; height: 30px; border-radius: 50%; background: {{accent}}; color: #0d1f08; font-weight: 700; font-size: 15px; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 6px rgba(0,0,0,0.4)">2</div>
+    <svg aria-hidden="true" width="760" height="420" style="position: absolute; left: 0; top: 0; overflow: visible">
+      <path d="M 560 150 C 520 170, 470 190, 440 215" fill="none" stroke="#ff8a3d" stroke-width="4" stroke-linecap="round"></path>
+      <path d="M 440 215 L 458 200 M 440 215 L 461 218" fill="none" stroke="#ff8a3d" stroke-width="4" stroke-linecap="round"></path>
+      <rect x="28" y="232" width="320" height="56" rx="4" fill="none" stroke="#ff8a3d" stroke-width="3"></rect>
+    </svg>
+    <div style="position: absolute; left: 568px; top: 128px; background: #ff8a3d; color: #1a0d03; font-size: 14px; font-weight: 600; padding: 6px 10px; border-radius: 6px">Overlap search lives here</div>
+
+    <div style="position: absolute; left: 560px; top: 290px; width: 150px; height: 100px; border-radius: 50%; border: 2.5px solid #ffffff; box-shadow: 0 4px 14px rgba(0,0,0,0.5); background: #1e1e1e; overflow: hidden; display: flex; align-items: center; justify-content: center; font-family: 'Cascadia Code', Consolas, monospace; font-size: 22px; color: #dcdcaa">find_overlap</div>
+  </div>
+
+  <div style="position: absolute; left: 360px; top: 584px; display: flex; gap: 8px; align-items: center">
+    <div style="display: flex; align-items: center; gap: 2px; background: rgba(40,40,40,0.96); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 5px; box-shadow: 0 8px 24px rgba(0,0,0,0.45)">
+      <button aria-label="Select" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l14 8-6 2-3 6z"></path></svg></button>
+      <button aria-label="Arrow" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: {{accentSoft}}; color: {{accent}}; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19L19 5M10 5h9v9"></path></svg></button>
+      <button aria-label="Line" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 19L19 5"></path></svg></button>
+      <button aria-label="Rectangle" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="6" width="16" height="12" rx="1.5"></rect></svg></button>
+      <button aria-label="Ellipse" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="12" rx="8" ry="6"></ellipse></svg></button>
+      <button aria-label="Pen" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l4-1 11-11-3-3L5 16z"></path></svg></button>
+      <button aria-label="Highlighter" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M9 14l7-7 3 3-7 7H9z M4 20h8"></path></svg></button>
+      <button aria-label="Text" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 6h14M12 6v13"></path></svg></button>
+      <button aria-label="Step counter" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8"></circle><path d="M11 9l2-1v8"></path></svg></button>
+      <div aria-hidden="true" style="width: 1px; height: 22px; background: rgba(255,255,255,0.12); margin: 0 4px"></div>
+      <button aria-label="Blur" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8" stroke-dasharray="2 3"></circle></svg></button>
+      <button aria-label="Pixelate" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="5" height="5"></rect><rect x="15" y="4" width="5" height="5"></rect><rect x="9.5" y="9.5" width="5" height="5"></rect><rect x="4" y="15" width="5" height="5"></rect><rect x="15" y="15" width="5" height="5"></rect></svg></button>
+      <button aria-label="Solid redact box" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="8" width="16" height="8" rx="1"></rect></svg></button>
+      <button aria-label="Magnifier inset" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10" cy="10" r="6"></circle><path d="M15 15l5 5M8 10h4M10 8v4"></path></svg></button>
+      <button aria-label="Callout" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 5h16v11H10l-4 4v-4H4z"></path></svg></button>
+      <button aria-label="Spotlight" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2" fill="currentColor" fill-opacity="0.25"></rect><circle cx="12" cy="12" r="5" fill="#282828"></circle></svg></button>
+      <div aria-hidden="true" style="width: 1px; height: 22px; background: rgba(255,255,255,0.12); margin: 0 4px"></div>
+      <button aria-label="Color orange" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; display: flex; align-items: center; justify-content: center"><span style="width: 18px; height: 18px; border-radius: 50%; background: #ff8a3d; box-shadow: 0 0 0 2px #282828, 0 0 0 3.5px #ffffff"></span></button>
+      <button aria-label="Stroke width" style="height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; font-size: 12px; padding: 0 8px; font-family: inherit">4 px</button>
+    </div>
+    <div style="display: flex; align-items: center; gap: 2px; background: rgba(40,40,40,0.96); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 5px; box-shadow: 0 8px 24px rgba(0,0,0,0.45)">
+      <button aria-label="Copy text (OCR)" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 8V5h3M17 5h3v3M20 16v3h-3M7 19H4v-3M8 9h8M12 9v7"></path></svg></button>
+      <button aria-label="Pin to screen" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6l-1 6 3 3H7l3-3zM12 13v7"></path></svg></button>
+      <button aria-label="Save as" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M5 4h11l3 3v13H5z M8 4v5h7V4 M8 20v-6h8v6"></path></svg></button>
+      <button aria-label="Cancel" style="width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #e6e6e6; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+      <button style="height: 34px; border: 0; border-radius: 6px; background: {{accent}}; color: #0d1f08; font-weight: 600; font-size: 13px; padding: 0 14px; font-family: inherit; display: flex; align-items: center; gap: 6px">Copy <span style="font-weight: 400; opacity: 0.75">Enter</span></button>
+    </div>
+  </div>
+
+  <div style="position: absolute; left: 1196px; top: 222px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start">
+    <div style="width: 132px; height: 132px; border-radius: 10px; overflow: hidden; border: 2px solid #ffffff; box-shadow: 0 6px 20px rgba(0,0,0,0.55); display: grid; grid-template-columns: repeat(11, minmax(0, 1fr)); background: #1e1e1e">
+      <div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#2b2b2b"></div><div style="background:#2b2b2b"></div><div style="background:#7fd36a; opacity:0.6"></div><div style="background:#2b2b2b"></div><div style="background:#2b2b2b"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div>
+      <div style="background:#1e1e1e"></div><div style="background:#3d8bd9"></div><div style="background:#3d8bd9"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#7fd36a; opacity:0.6"></div><div style="background:#1e1e1e"></div><div style="background:#dcdcaa"></div><div style="background:#dcdcaa"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div>
+      <div style="background:#1e1e1e"></div><div style="background:#3d8bd9"></div><div style="background:#3d8bd9"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#7fd36a; opacity:0.6"></div><div style="background:#1e1e1e"></div><div style="background:#dcdcaa"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div>
+      <div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#7fd36a; opacity:0.6"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div>
+      <div style="background:#7fd36a; opacity:0.6"></div><div style="background:#7fd36a; opacity:0.6"></div><div style="background:#7fd36a; opacity:0.6"></div><div style="background:#7fd36a; opacity:0.6"></div><div style="background:#7fd36a; opacity:0.6"></div><div style="background:#ce9178; outline: 2px solid #ffffff; outline-offset: -2px"></div><div style="background:#7fd36a; opacity:0.6"></div><div style="background:#7fd36a; opacity:0.6"></div><div style="background:#7fd36a; opacity:0.6"></div><div style="background:#7fd36a; opacity:0.6"></div><div style="background:#7fd36a; opacity:0.6"></div>
+      <div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#ce9178"></div><div style="background:#ce9178"></div><div style="background:#ce9178"></div><div style="background:#7fd36a; opacity:0.6"></div><div style="background:#ce9178"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div>
+      <div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#7fd36a; opacity:0.6"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div>
+      <div style="background:#1e1e1e"></div><div style="background:#569cd6"></div><div style="background:#569cd6"></div><div style="background:#569cd6"></div><div style="background:#1e1e1e"></div><div style="background:#7fd36a; opacity:0.6"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div>
+      <div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#7fd36a; opacity:0.6"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div>
+      <div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#2b2b2b"></div><div style="background:#2b2b2b"></div><div style="background:#7fd36a; opacity:0.6"></div><div style="background:#2b2b2b"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div>
+      <div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#7fd36a; opacity:0.6"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div><div style="background:#1e1e1e"></div>
+    </div>
+    <div style="background: rgba(32,32,32,0.94); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 6px 10px; font-size: 12px; display: flex; flex-direction: column; gap: 3px; font-variant-numeric: tabular-nums">
+      <span>X 1128 · Y 382 <span style="color: #a8a8a8">@ 150%</span></span>
+      <span style="display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 2px; background: #ce9178"></span>#CE9178 <span style="color: #a8a8a8">C to copy</span></span>
+    </div>
+  </div>
+
+  <div style="position: absolute; left: 50%; top: 18px; transform: translateX(-50%); background: rgba(32,32,32,0.9); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 6px 12px; font-size: 12px; color: #d0d0d0; display: flex; gap: 14px">
+    <span><b style="color: #ffffff">Drag</b> region</span>
+    <span><b style="color: #ffffff">Click</b> window or element</span>
+    <span><b style="color: #ffffff">Space</b> move</span>
+    <span><b style="color: #ffffff">Arrows</b> nudge</span>
+    <span><b style="color: #ffffff">Esc</b> cancel</span>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#7fd36a","options":["#7fd36a","#4cc2ff","#ffb454","#c49cff"]},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const accent = this.props.accent ?? '#7fd36a';
+    return { accent: accent, accentSoft: accent + '2e' };
+  }
+}
+</script>
+</body>
+</html>
