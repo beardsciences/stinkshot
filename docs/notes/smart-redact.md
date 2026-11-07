@@ -73,8 +73,14 @@ Previews in the panel are masked: `j***@example.com`, `**** 4242`, `***-**-6789`
   large text (4K, 200% scale) never stays legible and digits from a known format cannot be
   brute-forced from fine cells. The tools' destructive minimums still apply on top. Word boxes are padded by 15% of their height (at least 2 px) and
   clipped to the image. The shapes are ordinary annotations: movable, resizable, deletable.
-- Findings belong to the scanned image: moving or resizing the selection in capture mode
-  drops the panel (the base is re-cropped), so stale boxes never land in the wrong place.
+- Findings belong to the scanned image: moving or resizing the selection in capture mode,
+  or changing the crop in the editor (window capture, History Edit), drops the panel (the
+  base is re-cropped and `poll_smart_redact` sees a new base), so stale boxes never land in
+  the wrong place. Zoom and pan do not change the base: the findings are painted with the
+  same image-to-screen map as the shapes, so they stay on their words at any zoom.
+- Key order with the editor polish (multi-select, Ctrl+C Copy Shapes): the panel decides
+  Enter and Ctrl+C before shape copy or image copy, so Ctrl+C with shapes selected still
+  does nothing while the panel is scanning or reviewing.
 - On disk: the edit sidecar (`.stinkshot\edit\<name>.base.png`) stores the base with every
   Blur / Pixelate / Redact shape already baked in (`annotate::bake_destructive`, called by
   `save_editable`), so a redacted secret is not readable from the history folder. The
