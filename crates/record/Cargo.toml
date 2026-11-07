@@ -48,3 +48,13 @@ windows = { workspace = true, features = [
 
 [dev-dependencies]
 gif.workspace = true
+
+# Test windows and harnesses in examples/ (A/V sync shakedown).
+[target.'cfg(windows)'.dev-dependencies]
+windows = { workspace = true, features = [
+    "Win32_Graphics_Dwm",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Performance",
+    "Win32_System_Power",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }

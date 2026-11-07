@@ -165,6 +165,56 @@ pub fn list_webcams() -> Vec<String> {
     webcam::list_names()
 }
 
+/// One decoded video frame for `decode_all`.
+#[doc(hidden)]
+pub struct DecodedFrame<'a> {
+    pub pts_hns: i64,
+    pub dur_hns: i64,
+    pub width: u32,
+    pub height: u32,
+    /// BGRA, top-down, tightly packed.
+    pub bgra: &'a [u8],
+}
+
+/// Receives one audio chunk for `decode_all`: presentation time (100 ns) and interleaved
+/// 48 kHz stereo PCM16.
+#[doc(hidden)]
+pub type AudioSink<'a> = &'a mut dyn FnMut(i64, &[i16]);
+
+/// Decode every video frame and all audio of `input` in order (for measurement tools and
+/// tests: A/V sync, frame pacing). Either stream may be skipped by passing `None`.
+#[doc(hidden)]
+pub fn decode_all(
+    input: &Path,
+    mut on_video: Option<&mut dyn FnMut(DecodedFrame<'_>)>,
+    mut on_audio: Option<AudioSink<'_>>,
+) -> anyhow::Result<()> {
+    if let Some(f) = on_video.as_mut() {
+        let mut r = mfread::Reader::open(input, true, false)?;
+        while let Some(v) = r.read_video()? {
+            f(DecodedFrame {
+                pts_hns: v.pts_hns,
+                dur_hns: v.dur_hns,
+                width: r.width,
+                height: r.height,
+                bgra: &v.bgra,
+            });
+        }
+    }
+    if let Some(f) = on_audio.as_mut() {
+        let mut r = mfread::Reader::open(input, false, true)?;
+        while let Some(a) = r.read_audio()? {
+            let pcm: Vec<i16> = a
+                .pcm
+                .chunks_exact(2)
+                .map(|b| i16::from_le_bytes([b[0], b[1]]))
+                .collect();
+            f(a.pts_hns, &pcm);
+        }
+    }
+    Ok(())
+}
+
 /// The primary monitor's rectangle in physical virtual-desktop pixels (additive helper; useful
 /// for tests and tools that do not want to depend on the platform crate).
 pub fn primary_monitor_rect() -> Option<PxRect> {

@@ -477,6 +477,11 @@ fn video_thread(
     init_tx: mpsc::Sender<InitResult>,
 ) {
     let _timer = TimerResolution::new();
+    // Every capture call (duplication, frame acquisition, cursor position) runs on this
+    // thread; Desktop Duplication refuses DPI-unaware callers on scaled displays, and a
+    // duplication made from an aware thread delivers no frames to an unaware one. The app is
+    // aware through its manifest; tools and test binaries are not.
+    let _dpi = stinkshot_platform::dpi::ThreadPerMonitorAware::new();
     let session = match MfSession::new() {
         Ok(s) => s,
         Err(e) => {
@@ -552,6 +557,11 @@ fn video_loop(
     let mut pixmap = Pixmap::new(w as u32, h as u32).context("overlay pixmap")?;
     let mut nv12 = vec![0u8; w * h * 3 / 2];
     let mut have_picture = false;
+    // The stage holds a picture newer than `nv12`. Sticky: a frame that arrives at a poll
+    // with no frame due (between deadlines, or while paused) must still be converted at the
+    // next deadline; otherwise a single screen update (one typed character) could be lost
+    // until the next change, and a resume would show the picture from before the pause.
+    let mut stage_dirty = false;
     let (ev_tx, ev_rx) = mpsc::channel();
     let mut hook: Option<InputHook> = None;
     let mut hook_failed = false;
@@ -623,6 +633,7 @@ fn video_loop(
         overlay.prune(elapsed);
 
         let stats = cap.poll()?;
+        stage_dirty |= stats.new_frames > 0;
         shared
             .dropped
             .fetch_add(stats.dropped as u64, Ordering::Relaxed);
@@ -642,12 +653,7 @@ fn video_loop(
                 let webcam_live =
                     show_webcam && webcam_latest.lock().map(|g| g.is_some()).unwrap_or(false);
                 let cursor_live = cap.needs_cursor_overlay();
-                if stats.new_frames > 0
-                    || overlay_live
-                    || webcam_live
-                    || cursor_live
-                    || !have_picture
-                {
+                if stage_dirty || overlay_live || webcam_live || cursor_live || !have_picture {
                     let mapped = cap.map()?;
                     if overlay_live || webcam_live || cursor_live {
                         let dst = pixmap.data_mut();
@@ -681,6 +687,7 @@ fn video_loop(
                         bgra_to_nv12(mapped.bytes(h), mapped.stride, w, h, &mut nv12);
                     }
                     have_picture = true;
+                    stage_dirty = false;
                 }
                 let guard = enc.lock().map_err(|_| anyhow!("encoder lock poisoned"))?;
                 for idx in due {

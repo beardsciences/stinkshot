@@ -19,7 +19,8 @@ use stinkshot_platform::ocr::OcrEngine;
 use stinkshot_platform::windows_enum::WinInfo;
 use stinkshot_platform::{clipboard, input, system};
 use stinkshot_record::{GifOptions, MediaInfo, RecordOptions, Recorder, RecordingResult};
-use stinkshot_stitch::{PushResult, StitchOptions, Stitcher};
+use stinkshot_stitch::drive::{self, DriveControl, DriveParams};
+use stinkshot_stitch::{StitchOptions, Stitcher};
 
 use crate::capture_ops;
 use crate::errors::{self, report};
@@ -571,61 +572,41 @@ pub fn scroll_capture(env: &Env, rect: PxRect, source: SourceInfo, control: Arc<
             let delay = Duration::from_millis(cfg.scroll_delay_ms.clamp(30, 2000) as u64);
             let center = capture_ops::center(rect);
             let scale = capture_ops::scale_at(rect);
-            // About half a region per step to keep a healthy overlap for matching.
-            let mut notches = ((rect.h as f32 / scale) / 220.0).round().clamp(1.0, 8.0) as i32;
-            let mut failed = false;
-            let mut error: Option<String> = None;
 
             // Let the selection overlay and HUD finish disappearing before the first frame.
             std::thread::sleep(Duration::from_millis(250));
-            for _ in 0..800 {
-                match control.load(Ordering::Relaxed) {
-                    SCROLL_CANCEL => {
-                        env.send(WorkerMsg::ScrollDone {
-                            result: Err("cancelled".into()),
-                            cancelled: true,
-                            partial: false,
-                            source,
-                        });
-                        return;
-                    }
-                    SCROLL_STOP => break,
-                    _ => {}
-                }
-                let frame = match capture::capture_rect(rect, false) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        error = Some(format!("{e:#}"));
-                        break;
-                    }
-                };
-                let first = stitcher.frames() == 0;
-                match stitcher.push(&frame) {
-                    PushResult::Appended { added_rows } => {
-                        if !first {
-                            let ratio = added_rows as f32 / frame.height.max(1) as f32;
-                            if ratio > 0.85 {
-                                notches = (notches - 1).max(1);
-                            } else if ratio < 0.3 && notches < 12 {
-                                notches += 1;
-                            }
-                        }
-                    }
-                    PushResult::Unchanged => {}
-                    PushResult::End => break,
-                    PushResult::Failed => {
-                        failed = true;
-                        break;
-                    }
-                }
-                env.send(WorkerMsg::ScrollProgress {
-                    frames: stitcher.frames(),
-                    width: frame.width,
-                    height: stitcher.height(),
+            let outcome = drive::drive(
+                &mut stitcher,
+                &DriveParams {
+                    logical_height: rect.h as f32 / scale,
+                    delay,
+                    max_steps: 800,
+                },
+                || capture::capture_rect(rect, false).map_err(|e| format!("{e:#}")),
+                |notches| input::scroll_at(center, notches),
+                || match control.load(Ordering::Relaxed) {
+                    SCROLL_CANCEL => DriveControl::Cancel,
+                    SCROLL_STOP => DriveControl::Stop,
+                    _ => DriveControl::Run,
+                },
+                |stitcher, frame| {
+                    env.send(WorkerMsg::ScrollProgress {
+                        frames: stitcher.frames(),
+                        width: frame.width,
+                        height: stitcher.height(),
+                    })
+                },
+            );
+            if outcome.cancelled {
+                env.send(WorkerMsg::ScrollDone {
+                    result: Err("cancelled".into()),
+                    cancelled: true,
+                    partial: false,
+                    source,
                 });
-                input::scroll_at(center, -notches);
-                std::thread::sleep(delay);
+                return;
             }
+            let (failed, error) = (outcome.failed, outcome.error);
             let frames = stitcher.frames();
             if frames == 0 {
                 env.send(WorkerMsg::ScrollDone {

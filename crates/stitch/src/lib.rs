@@ -17,6 +17,8 @@
 
 use stinkshot_core::Rgba;
 
+pub mod drive;
+
 #[derive(Clone, Debug)]
 pub struct StitchOptions {
     pub max_height: u32,

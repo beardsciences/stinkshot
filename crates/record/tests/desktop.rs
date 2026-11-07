@@ -266,3 +266,36 @@ fn webcam_overlay_records_when_a_camera_exists() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The app keeps a warm Desktop Duplication session (platform `capture::warm_up`) for fast
+/// overlays. A process may duplicate each output only once, so the recorder must take the
+/// duplication over (and give it back) instead of failing with E_INVALIDARG. Captures made
+/// while recording fall back to GDI and still work.
+#[test]
+#[ignore = "needs a desktop session"]
+fn records_while_the_capture_session_is_warm() {
+    use stinkshot_platform::capture;
+    capture::warm_up();
+    let region = primary_monitor_rect().expect("primary monitor");
+    let small = stinkshot_core::PxRect::new(region.x, region.y, 64, 64);
+    capture::capture_rect(small, false).expect("capture before recording");
+    let dir = temp_dir("warm");
+    let out = dir.join("warm.mp4");
+    let rec = Recorder::start(opts(out.clone(), false)).expect("start with a warm session");
+    std::thread::sleep(Duration::from_millis(800));
+    let during = capture::capture_rect(small, false).expect("capture while recording");
+    assert_eq!((during.width, during.height), (64, 64));
+    capture::warm_up(); // must not take the duplication back
+    std::thread::sleep(Duration::from_millis(700));
+    let st = rec.status();
+    assert!(st.error.is_none(), "{:?}", st.error);
+    println!("backend {}", rec.capture_backend());
+    let res = rec.stop().expect("stop");
+    assert!(secs(res.duration) > 1.0, "{:?}", res.duration);
+    capture::capture_rect(small, false).expect("capture after recording");
+    // and a second recording right after works too
+    let rec = Recorder::start(opts(dir.join("again.mp4"), false)).expect("second start");
+    std::thread::sleep(Duration::from_millis(500));
+    rec.stop().expect("second stop");
+    let _ = std::fs::remove_dir_all(&dir);
+}

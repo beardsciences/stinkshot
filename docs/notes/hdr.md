@@ -89,6 +89,17 @@ On the SDR monitor every path returns the exact source colors, before and after.
   hue order, highlights not hard-clipped, parallel bands match serial, GDI seed round trip) and
   `capture::tests::fp16_uses_white_level`.
 
+## Nov 7 2026 follow-up
+
+- The HDR monitor is now at 125% scaling. `DuplicateOutput1(FP16)` fails with
+  `DXGI_ERROR_UNSUPPORTED` for a DPI-unaware caller there (it worked at 100%), which broke the
+  recorder's desktop tests. All duplication calls now run Per-Monitor-V2 aware (record.md,
+  "Recording failed to start").
+- Recorder color check repeated with `examples/swatch_window` + `hdr_record_probe`:
+  132,227,108 / 128,128,128 / 255,255,253 on both monitors, same as above. The displays were
+  idle-off, so these frames came from the recorder's GDI fallback, not from FP16 duplication
+  frames; the FP16 duplication path was not re-measured.
+
 ## Not verified
 
 - WGC FP16 pools (recorder) on an HDR monitor: WGC session creation hangs on this PC, so only

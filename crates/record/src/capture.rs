@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use stinkshot_core::PxRect;
-use stinkshot_platform::hdr;
+use stinkshot_platform::{capture, dpi, hdr};
 use windows::Foundation::TimeSpan;
 use windows::Graphics::Capture::{
     Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession,
@@ -21,7 +21,7 @@ use windows::Graphics::Capture::{
 use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
 use windows::Graphics::DirectX::DirectXPixelFormat;
 use windows::Graphics::SizeInt32;
-use windows::Win32::Foundation::{HMODULE, LPARAM, RECT, TRUE};
+use windows::Win32::Foundation::{E_ACCESSDENIED, E_INVALIDARG, HMODULE, LPARAM, RECT, TRUE};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN};
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::{
@@ -36,9 +36,6 @@ use windows::Win32::System::WinRT::Direct3D11::{
     CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
 };
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
-use windows::Win32::UI::HiDpi::{
-    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
-};
 use windows::core::{BOOL, Interface};
 
 use crate::mf::{ComGuard, SendCom};
@@ -54,6 +51,14 @@ const WGC_COOLDOWN: Duration = Duration::from_secs(300);
 
 /// Consecutive duplicated frames in an unsupported pixel format before giving up.
 const MAX_BAD_FORMAT_FRAMES: u32 = 30;
+
+/// How long Desktop Duplication gets to deliver a first frame per monitor before the monitor
+/// is filled from GDI (it delivers nothing while the screen is static).
+const GDI_SEED_AFTER: Duration = Duration::from_millis(150);
+/// Duplication silent this long: start checking with GDI whether the screen really is static.
+const DUP_SILENT_AFTER: Duration = Duration::from_secs(1);
+/// How often a silent duplication is cross-checked with a GDI grab.
+const GDI_PROBE_EVERY: Duration = Duration::from_millis(500);
 
 /// How often a recording re-reads each display's HDR state and SDR white level, so turning
 /// HDR on or off or moving the SDR brightness slider mid-recording keeps the colors right.
@@ -87,12 +92,9 @@ pub fn enumerate_monitors() -> Vec<MonitorRect> {
         TRUE
     }
     let mut list: Vec<MonitorRect> = Vec::new();
+    let _dpi = dpi::ThreadPerMonitorAware::new();
     unsafe {
-        let old = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let _ = EnumDisplayMonitors(None, None, Some(cb), LPARAM(&mut list as *mut _ as isize));
-        if !old.0.is_null() {
-            SetThreadDpiAwarenessContext(old);
-        }
     }
     list
 }
@@ -127,6 +129,11 @@ struct MonCap {
     got_frame: bool,
     /// Intersection of this monitor with the region, in monitor-local px.
     src: PxRect,
+    /// The monitor's top-left in virtual-desktop px.
+    mon_origin: (i32, i32),
+    /// DXGI backend: GDI seeding and the fallback for a duplication that stays silent while
+    /// the screen changes.
+    gdi: GdiWatch,
     /// Where that intersection lands inside the region.
     dst: (u32, u32),
     /// Set for HDR monitors: frames arrive as FP16 scRGB, are copied here and converted to
@@ -230,6 +237,11 @@ pub struct Capturer {
     color_checked: Instant,
     /// Something suggests the color state changed: re-read it soon.
     color_due: bool,
+    /// DXGI backend: keeps the app's cached capture session off the duplications this
+    /// recording owns (one duplication per output per process). Dropped with the capturer.
+    _dup_lease: Option<capture::DuplicationLease>,
+    /// Frame interval (GDI fallback grabs at most this often).
+    frame_interval: Duration,
 }
 
 // Used from the single video thread only; moved there once after construction.
@@ -348,7 +360,7 @@ impl Capturer {
                 log::warn!(
                     "Windows Graphics Capture unavailable ({wgc_err:#}); falling back to DXGI Desktop Duplication"
                 );
-                Self::new_dxgi(region, &plan, include_cursor)
+                Self::new_dxgi(region, &plan, include_cursor, fps)
                     .with_context(|| format!("screen capture failed (WGC: {wgc_err:#})"))
             }
         }
@@ -460,6 +472,8 @@ impl Capturer {
                     },
                     got_frame: false,
                     src: *src,
+                    mon_origin: (m.rect.x, m.rect.y),
+                    gdi: GdiWatch::new(),
                     dst: *dst,
                     hdr: hdr_stage,
                     color,
@@ -482,11 +496,15 @@ impl Capturer {
                 cursor_overlay: false,
                 color_checked: Instant::now(),
                 color_due: false,
+                _dup_lease: None,
+                frame_interval: Duration::from_secs(1) / fps.max(1),
             })
         }
     }
 
-    fn new_dxgi(region: PxRect, plan: &Plan, include_cursor: bool) -> Result<Capturer> {
+    fn new_dxgi(region: PxRect, plan: &Plan, include_cursor: bool, fps: u32) -> Result<Capturer> {
+        // Before duplicating: the app's warm capture session holds every output.
+        let lease = capture::lend_duplication();
         unsafe {
             let factory: IDXGIFactory1 = CreateDXGIFactory1().context("CreateDXGIFactory1")?;
             // All duplicated monitors must live on one adapter (they share one D3D11 device);
@@ -545,8 +563,8 @@ impl Capturer {
                 } else {
                     None
                 };
-                let dup = duplicate_output(&out, &device, hdr_stage.is_some())
-                    .context("DuplicateOutput (secure desktop or another duplication in use?)")?;
+                let dup = duplicate_output_retrying(&out, &device, hdr_stage.is_some())
+                    .with_context(|| format!("screen duplication of {}", color.device))?;
                 mons.push(MonCap {
                     backend: Backend::Dup {
                         output: out,
@@ -555,6 +573,8 @@ impl Capturer {
                     },
                     got_frame: false,
                     src: *src,
+                    mon_origin: (m.rect.x, m.rect.y),
+                    gdi: GdiWatch::new(),
                     dst: *dst,
                     hdr: hdr_stage,
                     color,
@@ -573,6 +593,8 @@ impl Capturer {
                 cursor_overlay: include_cursor,
                 color_checked: Instant::now(),
                 color_due: false,
+                _dup_lease: Some(lease),
+                frame_interval: Duration::from_secs(1) / fps.max(1),
             })
         }
     }
@@ -694,6 +716,11 @@ impl Capturer {
                     h.pending = true;
                     h.resolve(&self.ctx, &self.stage, m.src, m.dst)?;
                 }
+            }
+            if matches!(m.backend, Backend::Dup { .. })
+                && gdi_fallback(m, got, &self.ctx, &self.stage, self.frame_interval)
+            {
+                stats.new_frames += 1;
             }
         }
         Ok(stats)
@@ -891,7 +918,11 @@ fn poll_dup(
         let r = unsafe { d.AcquireNextFrame(0, &mut info, &mut res) };
         match r {
             Ok(()) => {
-                if let Some(res) = res
+                // LastPresentTime 0: only the pointer changed, the desktop image did not (and
+                // a new duplication's very first surface can be an uninitialized
+                // placeholder), so there is nothing to copy.
+                if info.LastPresentTime != 0
+                    && let Some(res) = res
                     && let Ok(tex) = res.cast::<ID3D11Texture2D>()
                 {
                     let mut desc = D3D11_TEXTURE2D_DESC::default();
@@ -946,28 +977,96 @@ fn poll_dup(
     Ok(got)
 }
 
+/// Attempts and pause for `duplicate_output_retrying`: duplication is briefly unavailable
+/// while the desktop switches (UAC, lock screen, mode change) or another capture is still
+/// letting go of the display.
+const DUP_ATTEMPTS: u32 = 4;
+const DUP_RETRY_PAUSE: Duration = Duration::from_millis(150);
+
+/// `duplicate_output`, retried a few times for errors that are usually transient.
+fn duplicate_output_retrying(
+    output: &IDXGIOutput1,
+    device: &ID3D11Device,
+    hdr: bool,
+) -> Result<IDXGIOutputDuplication> {
+    let mut attempt = 1;
+    loop {
+        match duplicate_output(output, device, hdr) {
+            Ok(d) => return Ok(d),
+            Err(e) if attempt < DUP_ATTEMPTS && is_transient_dup_error(&e) => {
+                log::debug!("duplication attempt {attempt} failed ({e:#}); retrying");
+                attempt += 1;
+                std::thread::sleep(DUP_RETRY_PAUSE);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+fn dup_hresult(e: &anyhow::Error) -> Option<windows::core::HRESULT> {
+    e.chain()
+        .find_map(|c| c.downcast_ref::<windows::core::Error>())
+        .map(|w| w.code())
+}
+
+fn is_transient_dup_error(e: &anyhow::Error) -> bool {
+    dup_hresult(e).is_some_and(|c| {
+        c == DXGI_ERROR_NOT_CURRENTLY_AVAILABLE
+            || c == DXGI_ERROR_SESSION_DISCONNECTED
+            || c == E_ACCESSDENIED
+            || c == E_INVALIDARG
+    })
+}
+
+/// Why a `DuplicateOutput(1)` failed, by HRESULT.
+fn explain_dup_error(code: windows::core::HRESULT) -> &'static str {
+    if code == E_INVALIDARG {
+        "this process already duplicates the display (another capture is still holding it)"
+    } else if code == DXGI_ERROR_UNSUPPORTED {
+        "Desktop Duplication does not support this display mode or a DPI-unaware caller"
+    } else if code == DXGI_ERROR_NOT_CURRENTLY_AVAILABLE {
+        "too many applications are duplicating the display right now"
+    } else if code == E_ACCESSDENIED {
+        "the secure desktop (UAC or lock screen) is showing"
+    } else if code == DXGI_ERROR_SESSION_DISCONNECTED {
+        "the session is disconnected (remote desktop)"
+    } else {
+        "Desktop Duplication is unavailable"
+    }
+}
+
 /// Duplicate `output` as BGRA8, or as FP16 scRGB for an HDR output (an 8-bit duplication of
 /// an HDR output is clipped without the SDR white scaling, so it looks blown out), and refuse
 /// rotated outputs (the duplicated surface is unrotated, so the crop would be wrong; WGC
 /// handles those).
+///
+/// Runs Per-Monitor-V2 DPI aware: `DuplicateOutput1` returns `DXGI_ERROR_UNSUPPORTED` to a
+/// DPI-unaware caller on a display scaled above 100% (test binaries have no manifest).
 fn duplicate_output(
     output: &IDXGIOutput1,
     device: &ID3D11Device,
     hdr: bool,
 ) -> Result<IDXGIOutputDuplication> {
+    let _dpi = dpi::ThreadPerMonitorAware::new();
+    let explain = |e: windows::core::Error, what: &str| {
+        let why = explain_dup_error(e.code());
+        anyhow::Error::new(e).context(format!("{what}: {why}"))
+    };
     unsafe {
         let dup = if hdr {
             output
                 .cast::<IDXGIOutput5>()
                 .and_then(|o5| o5.DuplicateOutput1(device, 0, &[DXGI_FORMAT_R16G16B16A16_FLOAT]))
-                .context("DuplicateOutput1(FP16) for an HDR display")?
+                .map_err(|e| explain(e, "DuplicateOutput1(FP16) for an HDR display"))?
         } else {
             match output
                 .cast::<IDXGIOutput5>()
                 .and_then(|o5| o5.DuplicateOutput1(device, 0, &[DXGI_FORMAT_B8G8R8A8_UNORM]))
             {
                 Ok(d) => d,
-                Err(_) => output.DuplicateOutput(device)?,
+                Err(_) => output
+                    .DuplicateOutput(device)
+                    .map_err(|e| explain(e, "DuplicateOutput"))?,
             }
         };
         let rot = dup.GetDesc().Rotation;
@@ -975,6 +1074,183 @@ fn duplicate_output(
             bail!("the display is rotated ({rot:?}), which the fallback capture does not support");
         }
         Ok(dup)
+    }
+}
+
+/// GDI help for one duplicated monitor.
+///
+/// - Seed: Desktop Duplication delivers nothing until the screen changes, so a static
+///   desktop would record no frames at all; after `GDI_SEED_AFTER` without a frame the
+///   monitor is filled from GDI (which returns correct SDR colors on HDR displays too).
+/// - Fallback: a duplication can also stay silent while the screen does change (measured
+///   Nov 7 2026 with the displays idle-off: DWM stops feeding duplications, GDI still sees
+///   windows repaint). After `DUP_SILENT_AFTER` of silence a GDI grab is compared with the
+///   previous one every `GDI_PROBE_EVERY`; when they differ the monitor is captured with GDI
+///   at the frame rate until the duplication delivers again.
+struct GdiWatch {
+    created: Instant,
+    last_dup: Instant,
+    next_probe: Instant,
+    last_hash: Option<u64>,
+    active: bool,
+    last_grab: Instant,
+    /// Pictures taken from the duplication / from GDI (logged when the capture ends).
+    dup_frames: u64,
+    gdi_frames: u64,
+}
+
+impl GdiWatch {
+    fn new() -> GdiWatch {
+        let now = Instant::now();
+        GdiWatch {
+            created: now,
+            last_dup: now,
+            next_probe: now,
+            last_hash: None,
+            active: false,
+            last_grab: now,
+            dup_frames: 0,
+            gdi_frames: 0,
+        }
+    }
+}
+
+/// Runs the seed / fallback logic for `m` after a duplication poll. True when the stage
+/// received a new picture from GDI.
+fn gdi_fallback(
+    m: &mut MonCap,
+    got: bool,
+    ctx: &ID3D11DeviceContext,
+    stage: &ID3D11Texture2D,
+    interval: Duration,
+) -> bool {
+    let now = Instant::now();
+    let g = &mut m.gdi;
+    if got {
+        g.dup_frames += 1;
+        g.last_dup = now;
+        g.last_hash = None;
+        if g.active {
+            g.active = false;
+            log::info!(
+                "{}: duplication frames again; GDI fallback off",
+                m.color.device
+            );
+        }
+        return false;
+    }
+    let grab_now = if !m.got_frame {
+        now.duration_since(g.created) >= GDI_SEED_AFTER && now >= g.next_probe
+    } else if g.active {
+        // The video loop wakes about once per frame deadline; a full interval would miss
+        // every other one to timer jitter.
+        now.duration_since(g.last_grab) >= interval / 2
+    } else {
+        now.duration_since(g.last_dup) >= DUP_SILENT_AFTER && now >= g.next_probe
+    };
+    if !grab_now {
+        return false;
+    }
+    let rect = PxRect::new(
+        m.mon_origin.0 + m.src.x,
+        m.mon_origin.1 + m.src.y,
+        m.src.w,
+        m.src.h,
+    );
+    g.last_grab = now;
+    g.next_probe = now + GDI_PROBE_EVERY;
+    let img = match capture::capture_rect(rect, false) {
+        Ok(i) if i.width == rect.w as u32 && i.height == rect.h as u32 => i,
+        Ok(i) => {
+            log::warn!(
+                "GDI grab of {}: got {}x{}",
+                m.color.device,
+                i.width,
+                i.height
+            );
+            return false;
+        }
+        Err(e) => {
+            log::warn!("GDI grab of {} failed: {e:#}", m.color.device);
+            return false;
+        }
+    };
+    let hash = quick_hash(&img.data);
+    let changed = g.last_hash.is_some_and(|h| h != hash);
+    g.last_hash = Some(hash);
+    let write = if !m.got_frame {
+        log::debug!(
+            "{} delivered no duplication frame yet (static screen); seeded from GDI",
+            m.color.device
+        );
+        true
+    } else if g.active {
+        changed
+    } else if changed {
+        g.active = true;
+        log::info!(
+            "{}: duplication silent while the screen changes; capturing with GDI",
+            m.color.device
+        );
+        true
+    } else {
+        // First probe of a silent period, or still static: nothing new.
+        false
+    };
+    if !write {
+        return false;
+    }
+    if let Err(e) = write_rgba(ctx, stage, m.dst, &img) {
+        log::warn!("GDI grab of {}: {e:#}", m.color.device);
+        return false;
+    }
+    m.got_frame = true;
+    m.gdi.gdi_frames += 1;
+    true
+}
+
+/// Cheap content hash (every 8th 64-bit word) to tell a static screen from a changing one.
+fn quick_hash(data: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for c in data.chunks_exact(8).step_by(8) {
+        let v = u64::from_le_bytes(c.try_into().unwrap_or_default());
+        h = (h ^ v).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// Write an RGBA image into the BGRA staging texture at `dst`.
+fn write_rgba(
+    ctx: &ID3D11DeviceContext,
+    stage: &ID3D11Texture2D,
+    dst: (u32, u32),
+    img: &stinkshot_core::Rgba,
+) -> Result<()> {
+    let (w, h) = (img.width as usize, img.height as usize);
+    unsafe {
+        let mut to = D3D11_MAPPED_SUBRESOURCE::default();
+        ctx.Map(stage, 0, D3D11_MAP_READ_WRITE, 0, Some(&mut to))
+            .context("Map(staging for GDI)")?;
+        let tp = to.RowPitch as usize;
+        for y in 0..h {
+            let row = std::slice::from_raw_parts_mut(
+                (to.pData as *mut u8).add((dst.1 as usize + y) * tp + dst.0 as usize * 4),
+                w * 4,
+            );
+            rgba_row_to_bgra(&img.data[y * w * 4..(y + 1) * w * 4], row);
+        }
+        ctx.Unmap(stage, 0);
+    }
+    Ok(())
+}
+
+/// Copy one row of RGBA pixels into BGRA (opaque).
+fn rgba_row_to_bgra(src: &[u8], dst: &mut [u8]) {
+    for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
+        d[0] = s[2];
+        d[1] = s[1];
+        d[2] = s[0];
+        d[3] = 255;
     }
 }
 
@@ -1003,9 +1279,17 @@ fn copy_region(
 impl Drop for Capturer {
     fn drop(&mut self) {
         for m in &self.mons {
-            if let Backend::Wgc { session, pool, .. } = &m.backend {
-                let _ = session.Close();
-                let _ = pool.Close();
+            match &m.backend {
+                Backend::Wgc { session, pool, .. } => {
+                    let _ = session.Close();
+                    let _ = pool.Close();
+                }
+                Backend::Dup { .. } => log::info!(
+                    "{}: {} pictures from the duplication, {} from GDI",
+                    m.color.device,
+                    m.gdi.dup_frames,
+                    m.gdi.gdi_frames
+                ),
             }
         }
     }
