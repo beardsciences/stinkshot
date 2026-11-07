@@ -89,6 +89,30 @@ fn try_all(label: &str, keep: bool) -> Vec<IDXGIOutputDuplication> {
 }
 
 fn main() {
+    if let Some(a) = std::env::args().nth(1).filter(|a| a == "gdi-timing") {
+        let _ = a;
+        stinkshot_platform::dpi::init();
+        let _lease = stinkshot_platform::capture::lend_duplication();
+        let r = stinkshot_core::PxRect::new(5680, 80, 640, 400);
+        let t0 = std::time::Instant::now();
+        for _ in 0..40 {
+            let t = std::time::Instant::now();
+            let img = stinkshot_platform::capture::capture_rect(r, false).unwrap();
+            // av_window barcode: ms since its start
+            let mut ms = 0u32;
+            for i in 0..24 {
+                let p = &img.data[((24 * img.width + 16 + i * 16 + 8) * 4) as usize..][..3];
+                ms = (ms << 1) | (p[1] > 128) as u32;
+            }
+            println!(
+                "{:>6.1} ms: capture_rect took {:?}, window clock {ms}",
+                t0.elapsed().as_secs_f64() * 1e3,
+                t.elapsed()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+        return;
+    }
     try_all("process unaware", false);
     unsafe {
         let old = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -103,4 +127,37 @@ fn main() {
     try_all("after platform warm_up", false);
     stinkshot_platform::capture::release_cached_capture();
     try_all("after release", false);
+    // Frame delivery: acquire for 2 s on every output and count real desktop updates.
+    // WAKE=1 asks for the display to be on first (an idle display that has turned off is not
+    // composed, so duplication delivers nothing).
+    if std::env::var("WAKE").as_deref() == Ok("1") {
+        use windows::Win32::System::Power::{
+            ES_CONTINUOUS, ES_DISPLAY_REQUIRED, SetThreadExecutionState,
+        };
+        unsafe { SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED) };
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    }
+    let held = try_all("for frame count", true);
+    let t = std::time::Instant::now();
+    let mut counts = vec![(0u32, 0u32, 0u32); held.len()];
+    while t.elapsed() < std::time::Duration::from_secs(2) {
+        for (i, d) in held.iter().enumerate() {
+            let mut info = Default::default();
+            let mut res = None;
+            match unsafe { d.AcquireNextFrame(5, &mut info, &mut res) } {
+                Ok(()) => {
+                    if info.LastPresentTime != 0 {
+                        counts[i].0 += 1;
+                    } else {
+                        counts[i].1 += 1;
+                    }
+                    unsafe {
+                        let _ = d.ReleaseFrame();
+                    }
+                }
+                Err(_) => counts[i].2 += 1,
+            }
+        }
+    }
+    println!("per duplication (image updates, pointer-only, timeouts) in 2 s: {counts:?}");
 }

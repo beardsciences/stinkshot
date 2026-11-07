@@ -26,6 +26,9 @@ impl log::Log for Stderr {
 fn main() -> anyhow::Result<()> {
     log::set_logger(&Stderr).unwrap();
     log::set_max_level(log::LevelFilter::Trace);
+    if std::env::var("AWARE").as_deref() == Ok("1") {
+        stinkshot_platform::dpi::init();
+    }
     let a: Vec<i32> = std::env::args()
         .skip(1)
         .map(|s| s.parse().unwrap())
