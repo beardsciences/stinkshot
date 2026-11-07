@@ -230,15 +230,33 @@ impl Default for HistoryCfg {
     }
 }
 
+/// Development profile: when `STINKSHOT_PROFILE=<name>` is set, the app uses
+/// `%APPDATA%\StinkShot-<name>`, `Pictures\StinkShot-<name>`, and its own single-instance
+/// mutex and IPC window, so a dev build can run beside the user's real instance without
+/// touching its config or history. Returns "" (normal) or "-<name>" (ASCII alnum, '-', '_').
+pub fn profile_suffix() -> String {
+    std::env::var("STINKSHOT_PROFILE")
+        .ok()
+        .map(|p| {
+            p.chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                .take(32)
+                .collect::<String>()
+        })
+        .filter(|p| !p.is_empty())
+        .map(|p| format!("-{p}"))
+        .unwrap_or_default()
+}
+
 impl Config {
-    /// `%APPDATA%\StinkShot`.
+    /// `%APPDATA%\StinkShot` (plus the dev profile suffix, see `profile_suffix`).
     pub fn dir() -> PathBuf {
         let base = std::env::var_os("APPDATA")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
             .or_else(|| directories::BaseDirs::new().map(|d| d.config_dir().to_path_buf()))
             .unwrap_or_else(|| PathBuf::from("."));
-        base.join("StinkShot")
+        base.join(format!("StinkShot{}", profile_suffix()))
     }
     pub fn path() -> PathBuf {
         Self::dir().join("config.toml")
@@ -339,7 +357,8 @@ impl Config {
             .map(PathBuf::from)
             .or_else(|| directories::UserDirs::new().map(|d| d.home_dir().to_path_buf()))
             .unwrap_or_else(|| PathBuf::from("."));
-        home.join("Pictures").join("StinkShot")
+        home.join("Pictures")
+            .join(format!("StinkShot{}", profile_suffix()))
     }
 }
 

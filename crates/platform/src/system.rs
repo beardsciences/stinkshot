@@ -23,7 +23,9 @@ use crate::util::{
 };
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-const RUN_VALUE: &str = "StinkShot";
+fn run_value() -> String {
+    format!("StinkShot{}", stinkshot_core::config::profile_suffix())
+}
 const KEYBOARD_KEY: &str = r"Control Panel\Keyboard";
 const PRTSC_VALUE: &str = "PrintScreenKeyForSnippingEnabled";
 const APP_KEY: &str = r"Software\StinkShot";
@@ -32,8 +34,16 @@ const PRTSC_PREV_VALUE: &str = "PrevPrintScreenSnipping";
 const PREV_ABSENT: u32 = u32::MAX;
 const PERSONALIZE_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
 
-const IPC_CLASS: &str = "StinkShot.IPC.Window";
-const IPC_TITLE: &str = "StinkShot.IPC";
+/// IPC window names, suffixed with the dev profile so profiles never talk to each other.
+fn ipc_class() -> String {
+    format!(
+        "StinkShot.IPC.Window{}",
+        stinkshot_core::config::profile_suffix()
+    )
+}
+fn ipc_title() -> String {
+    format!("StinkShot.IPC{}", stinkshot_core::config::profile_suffix())
+}
 /// Tag in `COPYDATASTRUCT::dwData` so stray WM_COPYDATA is ignored.
 const IPC_MAGIC: usize = 0x5354_4B53;
 
@@ -41,14 +51,14 @@ const IPC_MAGIC: usize = 0x5354_4B53;
 pub fn set_autostart(enabled: bool, exe: &Path) -> anyhow::Result<()> {
     if enabled {
         let value = format!("\"{}\" --tray", exe.display());
-        reg_set_string(RUN_KEY, RUN_VALUE, &value)
+        reg_set_string(RUN_KEY, &run_value(), &value)
     } else {
-        reg_delete_value(RUN_KEY, RUN_VALUE)
+        reg_delete_value(RUN_KEY, &run_value())
     }
 }
 
 pub fn autostart_enabled() -> bool {
-    reg_value_exists(RUN_KEY, RUN_VALUE)
+    reg_value_exists(RUN_KEY, &run_value())
 }
 
 /// Windows 11 routes PrintScreen to Snipping Tool when
@@ -199,9 +209,13 @@ impl Drop for InstanceGuard {
 }
 
 pub fn acquire_single_instance() -> Option<InstanceGuard> {
+    let mutex_name = wide(&format!(
+        "Local\\StinkShot.Instance{}",
+        stinkshot_core::config::profile_suffix()
+    ));
     // SAFETY: valid NUL-terminated name; GetLastError is read immediately after the call.
     unsafe {
-        let h = match CreateMutexW(None, true, w!("Local\\StinkShot.Instance")) {
+        let h = match CreateMutexW(None, true, PCWSTR(mutex_name.as_ptr())) {
             Ok(h) => h,
             Err(e) => {
                 log::warn!("CreateMutexW failed: {e}");
@@ -235,7 +249,7 @@ fn decode_args(bytes: &[u8]) -> Vec<String> {
 /// Forward CLI args to the running instance via WM_COPYDATA to the hidden window titled
 /// "StinkShot.IPC". Returns false if no instance window was found.
 pub fn send_to_running_instance(args: &[String]) -> bool {
-    let title = wide(IPC_TITLE);
+    let title = wide(&ipc_title());
     // SAFETY: strings are NUL-terminated; the payload buffer outlives the synchronous send.
     unsafe {
         let Ok(target) = FindWindowExW(Some(HWND_MESSAGE), None, None, PCWSTR(title.as_ptr()))
@@ -307,8 +321,8 @@ pub fn start_ipc_listener(tx: Sender<Vec<String>>) -> anyhow::Result<()> {
         .name("stinkshot-ipc".into())
         .spawn(move || {
             IPC_TX.with(|t| *t.borrow_mut() = Some(tx));
-            let class = wide(IPC_CLASS);
-            let title = wide(IPC_TITLE);
+            let class = wide(&ipc_class());
+            let title = wide(&ipc_title());
             // SAFETY: standard window class registration and message loop on this thread.
             unsafe {
                 let hinst: HINSTANCE = GetModuleHandleW(None).map(Into::into).unwrap_or_default();
