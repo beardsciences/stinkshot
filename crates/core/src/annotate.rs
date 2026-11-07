@@ -603,10 +603,23 @@ pub fn editable_files(flat_path: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// The base with every destructive shape (Blur, Pixelate, Redact) already applied: what an
+/// edit sidecar stores, so the pixels a redaction hides never reach the disk. The shapes stay
+/// in the doc as editable objects; moving or deleting one later leaves its old spot redacted.
+pub fn bake_destructive(base: &Rgba, doc: &Doc) -> Rgba {
+    let mut out = base.clone();
+    let shapes: Vec<&Shape> = doc.shapes.iter().collect();
+    render::apply_destructive(&mut out, &shapes);
+    out
+}
+
+/// Write the edit sidecar. The stored base has the destructive shapes baked in (see
+/// [`bake_destructive`]), so a redacted secret is not recoverable from the history folder.
 pub fn save_editable(flat_path: &Path, base: &Rgba, doc: &Doc) -> anyhow::Result<()> {
     let (json_path, base_path) = sidecar_paths(flat_path)
         .with_context(|| format!("bad capture path {}", flat_path.display()))?;
-    let png = base.to_png().context("encoding base image")?;
+    let baked = bake_destructive(base, doc);
+    let png = baked.to_png().context("encoding base image")?;
     let json = doc.to_json().context("serializing annotations")?;
     // Base first: a doc without its base is useless, a base without a doc is ignored.
     crate::image::write_atomic(&base_path, &png)?;

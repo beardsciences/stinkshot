@@ -68,3 +68,11 @@ None. Note for core: `cargo clippy -p stinkshot-core -- -D warnings` currently f
 - Delete an annotated item and confirm `.stinkshot\edit\` sidecar is gone (needs real core).
 - Search "invo" finds OCR text containing "invoice" after the worker stores text.
 - Retention with real-size files, starred items survive.
+
+## Edit sidecars hold redacted pixels only
+
+`annotate::save_editable` writes the base with every destructive shape (Blur, Pixelate,
+Redact) already applied (`annotate::bake_destructive`). The flattened file and the sidecar
+base therefore both lack whatever a redaction hid; only the vector shapes stay editable.
+Covered by `annotate::tests::sidecar_base_has_redactions_baked_in`. Sidecars written by older
+builds still hold the unredacted base until the item is edited and saved again or deleted.

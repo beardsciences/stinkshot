@@ -1535,7 +1535,10 @@ fn sidecar_round_trip_and_layout() {
     );
 
     let (b2, d2) = load_editable(&flat).unwrap().unwrap();
-    assert_eq!(b2, base);
+    // The stored base has the Redact baked in: the marked pixel under it is gone.
+    assert_eq!(b2, bake_destructive(&base, &doc));
+    assert_ne!(b2.pixel(3, 4), [9, 8, 7, 255]);
+    assert_eq!(b2.pixel(20, 15), base.pixel(20, 15));
     assert_eq!(d2, doc);
 
     // Overwrite with a changed doc.
@@ -1815,4 +1818,54 @@ fn showcase() {
         90,
     )
     .unwrap();
+}
+
+#[test]
+fn sidecar_base_has_redactions_baked_in() {
+    let dir = tmpdir("sidecar-baked");
+    let flat = dir.join("Secret.png");
+    // A "secret" in distinctive pixels, plus a clean area outside every redaction.
+    let mut base = white(60, 40);
+    for y in 10..20 {
+        for x in 5..55 {
+            base.set_pixel(x, y, [200, 30, 30, 255]);
+        }
+    }
+    let mut doc = Doc::new(60, 40);
+    doc.add(
+        ShapeKind::Redact {
+            rect: RectF::new(5.0, 10.0, 20.0, 10.0),
+        },
+        style([0, 0, 0, 255], 1.0),
+    );
+    doc.add(
+        ShapeKind::Pixelate {
+            rect: RectF::new(25.0, 5.0, 30.0, 20.0),
+            block: 10,
+        },
+        style([0, 0, 0, 255], 1.0),
+    );
+    doc.add(
+        ShapeKind::Line {
+            from: pt(0.0, 35.0),
+            to: pt(10.0, 35.0),
+        },
+        Style::default(),
+    );
+    save_editable(&flat, &base, &doc).unwrap();
+    let (stored, d2) = load_editable(&flat).unwrap().unwrap();
+    // The shapes stay editable.
+    assert_eq!(d2, doc);
+    // Inside the Redact box: no source pixel survives.
+    for y in 10..20 {
+        for x in 5..25 {
+            assert_eq!(stored.pixel(x, y), [0, 0, 0, 255], "({x},{y})");
+        }
+    }
+    // Inside the Pixelate rect the original crisp edge (row 9 white, row 10 red) is gone.
+    assert_ne!(stored.pixel(30, 9), base.pixel(30, 9));
+    // Outside every destructive shape the base is untouched (the Line is not baked).
+    assert_eq!(stored.pixel(2, 35), base.pixel(2, 35));
+    assert_eq!(stored.pixel(58, 38), base.pixel(58, 38));
+    let _ = std::fs::remove_dir_all(&dir);
 }

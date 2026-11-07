@@ -29,6 +29,23 @@ fn is_destructive(k: &ShapeKind) -> bool {
     )
 }
 
+/// Apply the destructive shapes (Blur, Pixelate, Redact) to `work` in z-order.
+pub(crate) fn apply_destructive(work: &mut Rgba, shapes: &[&Shape]) {
+    for s in shapes {
+        match &s.kind {
+            ShapeKind::Blur { rect, radius } => redact::blur(work, norm(*rect).to_px(), *radius),
+            ShapeKind::Pixelate { rect, block } => {
+                redact::pixelate(work, norm(*rect).to_px(), *block)
+            }
+            ShapeKind::Redact { rect } => {
+                let c = [s.style.color[0], s.style.color[1], s.style.color[2], 255];
+                redact::fill(work, norm(*rect).to_px(), c);
+            }
+            _ => {}
+        }
+    }
+}
+
 pub(crate) fn render_shapes(
     base: &Rgba,
     shapes: &[&Shape],
@@ -42,21 +59,7 @@ pub(crate) fn render_shapes(
 
     // Step 2: destructive shapes on a copy of the base pixels.
     let mut work = base.clone();
-    for s in shapes {
-        match &s.kind {
-            ShapeKind::Blur { rect, radius } => {
-                redact::blur(&mut work, norm(*rect).to_px(), *radius)
-            }
-            ShapeKind::Pixelate { rect, block } => {
-                redact::pixelate(&mut work, norm(*rect).to_px(), *block)
-            }
-            ShapeKind::Redact { rect } => {
-                let c = [s.style.color[0], s.style.color[1], s.style.color[2], 255];
-                redact::fill(&mut work, norm(*rect).to_px(), c);
-            }
-            _ => {}
-        }
-    }
+    apply_destructive(&mut work, shapes);
 
     // The magnifier samples this (post-redaction, pre-annotation) image.
     let has_magnifier = shapes
