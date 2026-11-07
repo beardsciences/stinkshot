@@ -75,6 +75,8 @@ All `todo!()` bodies in `crates/core` are implemented. `cargo test -p stinkshot-
   `Fonts::outline_line` (outlined glyph layout) are public.
 - `redact::MIN_BLUR_SIGMA` and `redact::MIN_PIXELATE_BLOCK` constants are public.
 - `Config` and `Privacy` now `#[derive(Default)]` instead of hand-written impls (same values).
+- `config::Capture::open_editor_after_capture` (default false; `#[serde(default)]` on the
+  table, so older configs load with it off).
 - No signatures changed.
 
 ## Contract requests

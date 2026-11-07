@@ -93,7 +93,14 @@ pill shows meanwhile). Pushes `Command::CaptureDone`. Remembers `capture.last_re
 
 ## Contract changes
 
-None. No public signature changed. Additive: `overlay` internals only.
+None. No public signature changed. Additive: `overlay` internals only; `Overlay::is_untouched`
+(the shell drops an untouched overlay on a tray double click).
+
+UX pass 2: `overlay/keys.rs` holds the tool letters, Ctrl chords and the F1 / ? cheat sheet
+content (one table for key handling, hints and help). Hint-bar notices (`Notice`) replace
+toasts over the frozen screen (no remembered region, copied color when the loupe is hidden,
+ignored click outside an annotated selection). The wheel-snapping label comes from
+`uia::SnapResult.labels`.
 
 ## Contract requests
 

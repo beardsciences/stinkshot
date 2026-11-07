@@ -39,6 +39,8 @@ The public items in each crate's stub files are the contract. They compile today
 - `Rgba` is straight alpha RGBA8. egui textures: `ColorImage::from_rgba_unmultiplied`.
 - Errors: `anyhow` across crate boundaries; never `unwrap()`/`expect()` on fallible OS or
   IO calls in non-test code. UI shows failures through `Command::Notify { error: true }`.
+  Bodies are plain sentences (what happened, what to do) from `app/src/errors.rs`; the raw
+  chain goes to the log only.
 - Logging: `log` macros; the app installs a file logger at `%APPDATA%\StinkShot\stinkshot.log`
   (rotated at 5 MB).
 - Threads: UI thread never does > ~8 ms of work. Capture flattening, OCR, encoding, history
@@ -68,6 +70,8 @@ The public items in each crate's stub files are the contract. They compile today
   (pin), Ctrl+T (copy text), Ctrl+Z/Ctrl+Y, Del, tool shortcuts A arrow, L line, R rect,
   E ellipse, P pen, H highlighter, T text, N step, B blur, X pixelate, K redact box,
   M magnifier, O callout, S spotlight, V select; 1-8 palette colors; [ ] stroke width.
+  F1 or ? toggles the shortcut cheat sheet. Key table: `overlay/keys.rs` (handling, hints
+  and the cheat sheet all read it).
 - Re-edit: `OverlayMode::Annotate` with the stored base and doc; finishing overwrites the
   history item (`CaptureOutput.editing`).
 

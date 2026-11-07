@@ -20,8 +20,10 @@ Files: `crates/app/src/{main,shell,cli,tray,hotkeys,update,theme,state}.rs`, new
   export, item ops, plus a maintenance thread (rescan + retention at start and hourly, OCR
   indexing of `pending_ocr`, abandoned temp recordings removed after 7 days).
 - **tray**: tray-icon with generated icon (DPI-sized 16/20/24/32), native menu with hotkey
-  labels (tab-aligned), left click = region (300 ms debounce vs double click), double click =
-  History.
+  labels (tab-aligned, names from `actions.rs`), left click = region started immediately
+  (`Command::TrayClick`), double click = History (`Command::TrayDoubleClick` drops the
+  untouched overlay the first click opened; a second click that lands on that overlay at the
+  icon's spot within 500 ms does the same from inside the overlay).
 - **hotkeys**: global-hotkey, bridge thread wakes the UI, conflict and parse errors reported,
   PrintScreen takeover handled in `reload`/`shutdown`.
 - **cli**: clap; headless `full|window --out`, `ocr --file`; other subcommands forward over
@@ -45,8 +47,18 @@ Files: `crates/app/src/{main,shell,cli,tray,hotkeys,update,theme,state}.rs`, new
 - OCR engine is constructed on a scratch thread (avoid COM apartment clash with winit).
 - Copy action always copies; Save As/Pin also copy when `general.copy_to_clipboard`.
 - Save sidecar only when the doc has shapes; Save As writes an extra copy, history copy stays.
-- Closing the Trim window without choosing saves the untrimmed MP4 to history (nothing lost).
+- Closing the Trim window (X or Esc) asks "Save This Recording?": Save Untrimmed exports the
+  whole recording in the format it was started for (MP4 or GIF) into History with the usual
+  toast, Discard goes through the Discard confirm, Keep Editing returns. If the window ever
+  goes away without a choice, the shell still saves it untrimmed in that format (safety net).
   Discard (TrimDone with neither format, or RecordCancel while trimming) deletes the raw file.
+- Window and full-screen captures open the editor only with
+  `capture.open_editor_after_capture`; otherwise they finish at once as
+  `FinishAction::Quick` (clipboard per `general.copy_to_clipboard`, history, toast with Edit).
+- Repeat Last Region with nothing stored (or off screen) opens the region overlay with an
+  inline hint-bar notice (`OverlayRequest::notice`) instead of a toast over the frozen screen.
+- User-facing failure text goes through `errors.rs` (plain sentence + advice); raw chains
+  are logged only.
 - Raw recordings live in `<history>\.stinkshot\tmp`.
 - Second plain launch (no args, no `--tray`) opens History in the running instance.
 - Update found: toast + an "Update available" tray item that opens the release page.
@@ -57,6 +69,9 @@ Files: `crates/app/src/{main,shell,cli,tray,hotkeys,update,theme,state}.rs`, new
 - `Command::OpenUrl(String)` (http/https only).
 - `Command::SetHotkeysSuspended(bool)`: settings window should send `true` while capturing a
   combo and `false` after.
+- `Command::TrayClick`, `Command::TrayDoubleClick` (tray icon clicks, see tray above).
+- `FinishAction::Quick` (finished without the editor).
+- `OverlayRequest::notice` (hint-bar notice) and `OverlayRequest::from_tray_click`.
 
 ## Contract requests
 
@@ -79,7 +94,8 @@ Files: `crates/app/src/{main,shell,cli,tray,hotkeys,update,theme,state}.rs`, new
 ## Manual verification checklist
 
 1. Start `stinkshot.exe`: tray icon appears, no taskbar button, no window; log file created.
-2. Tray menu matches Tray design, labels follow hotkeys; left click = region; double click = History.
+2. Tray menu matches Tray design, labels follow hotkeys; left click = region at once; double
+   click = History with no capture left open.
 3. PrintScreen opens the overlay (Snipping Tool does not); each default hotkey works; change one
    in Settings and confirm re-register; conflict shows an error.
 4. Region/Window/Full/Repeat: clipboard has image, toast appears, file in history folder, re-edit works.
@@ -87,7 +103,7 @@ Files: `crates/app/src/{main,shell,cli,tray,hotkeys,update,theme,state}.rs`, new
 6. Pin and Copy text (OCR) actions; OCR region copies text.
 7. Scrolling capture on a browser page: HUD updates, Stop/Cancel work, result opens in editor.
 8. Record MP4: countdown, frame, HUD toggles, pause/resume, stop, trim, Save MP4/GIF; closing
-   the trim window keeps the untrimmed MP4; Discard deletes.
+   the trim window asks (Save Untrimmed / Discard / Keep Editing); Discard deletes.
 9. History: OCR indexing progresses, retention removes old items, star keeps them.
 10. `stinkshot full -o a.png`, `window -o b.png`, `ocr --file x.png`, `region` forwarded to the
     running instance; second launch with no args opens History; `--version` prints.

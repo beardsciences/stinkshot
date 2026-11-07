@@ -123,6 +123,8 @@ about 5 s here because of the WGC hang described below).
 - `input::key_label(vk, scan, extended)`: public so the visualizer can label arbitrary keys.
 - `Cargo.toml`: added `image` dependency and extra `windows` features.
 - Private `util` module (COM init, wide strings, registry helpers).
+- `uia::SnapResult.labels: Vec<ElementLabel>` (same order as `rects`; UIA control type and
+  name, cached with the rect), `uia::ElementLabel`, `uia::control_type_name(id)`.
 
 ## Contract requests
 
