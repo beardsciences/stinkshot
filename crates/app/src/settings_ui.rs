@@ -58,79 +58,10 @@ const SECTIONS: [(Section, &str); 8] = [
     (Section::About, "About"),
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum HotkeyField {
-    Region,
-    Window,
-    Fullscreen,
-    Scrolling,
-    Ocr,
-    RepeatLast,
-    RecordMp4,
-    RecordGif,
-}
+/// Hotkey rows are the shared capture actions (one naming source, `actions.rs`).
+use crate::actions::Action as HotkeyField;
 
-const HOTKEY_FIELDS: [HotkeyField; 8] = [
-    HotkeyField::Region,
-    HotkeyField::Window,
-    HotkeyField::Fullscreen,
-    HotkeyField::Scrolling,
-    HotkeyField::Ocr,
-    HotkeyField::RepeatLast,
-    HotkeyField::RecordMp4,
-    HotkeyField::RecordGif,
-];
-
-impl HotkeyField {
-    fn label(self) -> &'static str {
-        match self {
-            HotkeyField::Region => "Region Capture",
-            HotkeyField::Window => "Window Capture",
-            HotkeyField::Fullscreen => "Full Screen",
-            HotkeyField::Scrolling => "Scrolling Capture",
-            HotkeyField::Ocr => "Copy Text (OCR)",
-            HotkeyField::RepeatLast => "Repeat Last Region",
-            HotkeyField::RecordMp4 => "Record MP4",
-            HotkeyField::RecordGif => "Record GIF",
-        }
-    }
-    fn desc(self) -> &'static str {
-        match self {
-            HotkeyField::Region => "Freeze the screen and drag a region.",
-            HotkeyField::Window => "Capture the active window with rounded corners and alpha.",
-            HotkeyField::Fullscreen => "Capture the monitor under the cursor.",
-            HotkeyField::Scrolling => "Select a region, StinkShot scrolls and stitches it.",
-            HotkeyField::Ocr => "Select a region and copy the recognized text.",
-            HotkeyField::RepeatLast => "Capture the previous region again without selecting.",
-            HotkeyField::RecordMp4 => "Select a region and record with hardware encoding.",
-            HotkeyField::RecordGif => "Select a region and record a size-optimized GIF.",
-        }
-    }
-    fn get(self, h: &Hotkeys) -> &String {
-        match self {
-            HotkeyField::Region => &h.region,
-            HotkeyField::Window => &h.window,
-            HotkeyField::Fullscreen => &h.fullscreen,
-            HotkeyField::Scrolling => &h.scrolling,
-            HotkeyField::Ocr => &h.ocr,
-            HotkeyField::RepeatLast => &h.repeat_last_region,
-            HotkeyField::RecordMp4 => &h.record_mp4,
-            HotkeyField::RecordGif => &h.record_gif,
-        }
-    }
-    fn get_mut(self, h: &mut Hotkeys) -> &mut String {
-        match self {
-            HotkeyField::Region => &mut h.region,
-            HotkeyField::Window => &mut h.window,
-            HotkeyField::Fullscreen => &mut h.fullscreen,
-            HotkeyField::Scrolling => &mut h.scrolling,
-            HotkeyField::Ocr => &mut h.ocr,
-            HotkeyField::RepeatLast => &mut h.repeat_last_region,
-            HotkeyField::RecordMp4 => &mut h.record_mp4,
-            HotkeyField::RecordGif => &mut h.record_gif,
-        }
-    }
-}
+const HOTKEY_FIELDS: [HotkeyField; 8] = HotkeyField::ALL;
 
 // ---------------------------------------------------------------------------------------
 // Pure helpers
@@ -138,14 +69,14 @@ impl HotkeyField {
 
 /// Fields (other than `me`) bound to the same combination as `me`.
 fn conflicts_with(h: &Hotkeys, me: HotkeyField) -> Vec<HotkeyField> {
-    let mine = me.get(h);
+    let mine = me.hotkey(h);
     if mine.trim().is_empty() {
         return Vec::new();
     }
     HOTKEY_FIELDS
         .iter()
         .copied()
-        .filter(|f| *f != me && same_combo(f.get(h), mine))
+        .filter(|f| *f != me && same_combo(f.hotkey(h), mine))
         .collect()
 }
 
@@ -371,12 +302,12 @@ impl SettingsWindow {
                 true
             }
             Captured::Clear => {
-                field.get_mut(&mut shared.config.hotkeys).clear();
+                field.hotkey_mut(&mut shared.config.hotkeys).clear();
                 self.capturing = None;
                 true
             }
             Captured::Combo(s) => {
-                *field.get_mut(&mut shared.config.hotkeys) = s;
+                *field.hotkey_mut(&mut shared.config.hotkeys) = s;
                 self.capturing = None;
                 true
             }
@@ -817,7 +748,7 @@ impl SettingsWindow {
         toggle_row(
             ui,
             "Show Toast",
-            "A small card with Edit, Pin, Copy text and Folder actions.",
+            "A small card with Edit, Copy, Pin, Copy Text and Show in Folder actions.",
             &mut g.show_toast,
         );
         ui.add_enabled_ui(g.show_toast, |ui| {
@@ -870,8 +801,8 @@ impl SettingsWindow {
         group_title(ui, p, "Shortcuts");
         let hk_snapshot = shared.config.hotkeys.clone();
         for field in HOTKEY_FIELDS {
-            let current = field.get(&hk_snapshot).clone();
-            let mut desc = field.desc().to_string();
+            let current = field.hotkey(&hk_snapshot).clone();
+            let mut desc = field.description().to_string();
             let dupes = conflicts_with(&hk_snapshot, field);
             if !dupes.is_empty() {
                 desc.push_str(&format!(
@@ -884,7 +815,7 @@ impl SettingsWindow {
                 ));
             }
             if let Some(e) = error_for(&self.hotkey_errors, &current) {
-                desc.push_str(&format!("  Could not register: {e}"));
+                desc.push_str(&format!("  {e}"));
             }
             let capturing = self.capturing == Some(field);
             let mut clear = false;
@@ -932,7 +863,7 @@ impl SettingsWindow {
                 });
             });
             if clear {
-                field.get_mut(&mut shared.config.hotkeys).clear();
+                field.hotkey_mut(&mut shared.config.hotkeys).clear();
             }
             if toggle_capture {
                 if capturing {
@@ -983,6 +914,12 @@ impl SettingsWindow {
             "Magnifier Loupe",
             "Show a pixel loupe with coordinates and color while selecting.",
             &mut c.show_loupe,
+        );
+        toggle_row(
+            ui,
+            "Open Editor After Window and Full-Screen Captures",
+            "Off: those captures are saved (and copied, if Copy to Clipboard is on) right away; use Edit on the toast to annotate.",
+            &mut c.open_editor_after_capture,
         );
 
         group_title(ui, p, "Window Capture");
@@ -1433,7 +1370,11 @@ impl SettingsWindow {
         if open && let Err(e) = stinkshot_platform::system::open_path(&shown_folder) {
             shared.outbox.push(Command::Notify {
                 title: "Could Not Open Folder".into(),
-                body: e.to_string(),
+                body: crate::errors::report(
+                    "open folder",
+                    &e,
+                    "Windows could not open that folder. Check that it still exists.",
+                ),
                 error: true,
             });
         }
@@ -1591,7 +1532,11 @@ impl SettingsWindow {
             {
                 shared.outbox.push(Command::Notify {
                     title: "Could Not Open File".into(),
-                    body: e.to_string(),
+                    body: crate::errors::report(
+                        "open config file",
+                        &e,
+                        "Windows could not open the settings file. Check that a text editor is set for .toml files.",
+                    ),
                     error: true,
                 });
             }
@@ -1661,7 +1606,11 @@ impl SettingsWindow {
         {
             shared.outbox.push(Command::Notify {
                 title: "Could Not Open Link".into(),
-                body: e.to_string(),
+                body: crate::errors::report(
+                    "open link",
+                    &e,
+                    "Windows could not open your web browser. Check that a default browser is set.",
+                ),
                 error: true,
             });
         }
@@ -1670,7 +1619,7 @@ impl SettingsWindow {
                 Ok(()) => self.copied_url_at = Some(Instant::now()),
                 Err(e) => shared.outbox.push(Command::Notify {
                     title: "Could Not Copy".into(),
-                    body: e.to_string(),
+                    body: crate::workers::clipboard_text_error(&e),
                     error: true,
                 }),
             }
@@ -1794,10 +1743,10 @@ mod tests {
     fn every_field_round_trips_through_accessors() {
         let mut h = Hotkeys::default();
         for (i, f) in HOTKEY_FIELDS.iter().enumerate() {
-            *f.get_mut(&mut h) = format!("KeyF{i}");
+            *f.hotkey_mut(&mut h) = format!("KeyF{i}");
         }
         for (i, f) in HOTKEY_FIELDS.iter().enumerate() {
-            assert_eq!(f.get(&h), &format!("KeyF{i}"));
+            assert_eq!(f.hotkey(&h), &format!("KeyF{i}"));
         }
     }
 }

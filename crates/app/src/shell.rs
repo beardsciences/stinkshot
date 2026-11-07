@@ -48,6 +48,7 @@ use stinkshot_record::{Corner, RecordOptions, Recorder, WebcamOptions};
 
 use crate::capture_ops;
 use crate::cli::{self, CliAction};
+use crate::errors::{self, report, report_str};
 use crate::history_ui::HistoryWindow;
 use crate::hotkeys::Hotkeys;
 use crate::overlay::Overlay;
@@ -71,6 +72,13 @@ const ROOT_TITLE: &str = "StinkShot.Root";
 const MAX_TOASTS: usize = 6;
 /// How long Quit waits for recordings, exports and saves in flight before closing anyway.
 const QUIT_GRACE: Duration = Duration::from_secs(30);
+/// How long after a tray click a double click may still cancel the overlay it opened.
+const TRAY_DOUBLE_CLICK_GRACE: Duration = Duration::from_millis(900);
+/// Overlay hint-bar notices (instead of toasts over the frozen screen).
+const WINDOW_CAPTURE_FALLBACK: &str =
+    "Windows could not capture that window. Try again, or use Region capture.";
+const NOTICE_NO_LAST_REGION: &str = "No Region Remembered Yet: Select One";
+const NOTICE_LAST_REGION_OFF_SCREEN: &str = "Last Region Is Off Screen: Select a New One";
 
 // ---------------------------------------------------------------------------- entry
 
@@ -120,7 +128,8 @@ pub fn run() -> anyhow::Result<()> {
         Ok(()) => Ok(()),
         Err(e) => {
             log::error!("fatal: {e:#}");
-            sysutil::fatal_box("StinkShot", &format!("StinkShot could not start.\n\n{e:#}"));
+            let why = errors::explain(&e, "Try starting it again.");
+            sysutil::fatal_box("StinkShot", &format!("StinkShot could not start. {why}"));
             Err(e)
         }
     }
@@ -306,6 +315,8 @@ enum Rec {
     Trim {
         source: PathBuf,
         done_issued: bool,
+        /// Started as a GIF recording: the untrimmed fallback saves a GIF.
+        gif: bool,
     },
 }
 
@@ -345,6 +356,11 @@ struct Shell {
     /// `open_queued_annotate`, never dropped).
     queued_annotate: Option<OverlayMode>,
     window_capture_pending: bool,
+    /// The overlay was opened by a tray click at this time (double-click detection).
+    tray_overlay_at: Option<Instant>,
+    /// Hint-bar notice for the next overlay that opens.
+    next_overlay_notice: Option<&'static str>,
+    next_overlay_tray: bool,
     rec: Rec,
     exporting: bool,
     trim_closed_by_user: bool,
@@ -517,6 +533,9 @@ impl Shell {
             freeze_cache: None,
             queued_annotate: None,
             window_capture_pending: false,
+            tray_overlay_at: None,
+            next_overlay_notice: None,
+            next_overlay_tray: false,
             rec: Rec::Idle,
             exporting: false,
             trim_closed_by_user: false,
@@ -717,7 +736,12 @@ impl Shell {
             Command::DeleteItem(id) => workers::delete_item(&self.env(), id),
             Command::StarItem(id, starred) => {
                 if let Err(e) = self.shared.history.set_starred(id, starred) {
-                    self.notify("Could Not Update Star", format!("{e:#}"), true);
+                    let body = report(
+                        "set starred",
+                        &e,
+                        "The history index could not be updated. Try again in a moment.",
+                    );
+                    self.notify("Could Not Update Star", body, true);
                 }
                 self.invalidate_history();
             }
@@ -726,6 +750,16 @@ impl Shell {
             }
             Command::CheckForUpdates => self.maybe_check_updates(true),
             Command::Quit => self.quit(),
+            Command::TrayClick => {
+                let had_overlay = self.overlay.is_some();
+                self.next_overlay_tray = true;
+                self.begin_overlay(OverlayMode::Capture);
+                self.next_overlay_tray = false;
+                if !had_overlay && self.overlay.is_some() {
+                    self.tray_overlay_at = Some(Instant::now());
+                }
+            }
+            Command::TrayDoubleClick => self.tray_double_click(),
             Command::OpenUrl(url) => {
                 if !(url.starts_with("https://") || url.starts_with("http://")) {
                     log::warn!("refusing to open non-web URL");
@@ -792,8 +826,12 @@ impl Shell {
         match capture::freeze_all(self.shared.config.capture.include_cursor) {
             Ok(f) => Some((f, windows)),
             Err(e) => {
-                log::error!("freeze_all failed: {e:#}");
-                self.notify("Could Not Capture the Screen", format!("{e:#}"), true);
+                let body = report(
+                    "freeze_all",
+                    &e,
+                    "Windows did not hand over the screen image. Try again; if it keeps failing, restart StinkShot.",
+                );
+                self.notify("Could Not Capture the Screen", body, true);
                 None
             }
         }
@@ -810,7 +848,10 @@ impl Shell {
             frozen,
             windows,
             last_region: self.shared.config.capture.last_region,
+            notice: self.next_overlay_notice.take(),
+            from_tray_click: std::mem::take(&mut self.next_overlay_tray),
         };
+        self.tray_overlay_at = None;
         self.overlay = Some(Slot::new(Overlay::new(req, &self.shared)));
         self.touch();
     }
@@ -834,7 +875,7 @@ impl Shell {
         let Some(win) = capture_ops::target_window() else {
             self.notify(
                 "No Window to Capture",
-                "There is no foreground window.",
+                "Click the window you want to capture first, then try again.",
                 true,
             );
             return;
@@ -861,9 +902,13 @@ impl Shell {
         if base.width == 0 || base.height == 0 {
             self.notify(
                 "Could Not Capture the Screen",
-                "The monitor is outside the captured area.",
+                "The monitor under the cursor was not in the screen image. Move the cursor to the monitor you want and try again.",
                 true,
             );
+            return;
+        }
+        if !self.shared.config.capture.open_editor_after_capture {
+            self.finish_quick(base, mon, source, "fullscreen");
             return;
         }
         let doc = Doc::new(base.width, base.height);
@@ -885,12 +930,10 @@ impl Shell {
             return;
         }
         let Some(rect) = self.shared.config.capture.last_region else {
-            self.notify(
-                "No Previous Region",
-                "Select a region first; it will be remembered.",
-                false,
-            );
+            // No toast over the frozen screen: the overlay says it inline.
+            self.next_overlay_notice = Some(NOTICE_NO_LAST_REGION);
             self.begin_overlay(OverlayMode::Capture);
+            self.next_overlay_notice = None;
             return;
         };
         let Some((frozen, windows)) = self.freeze() else {
@@ -898,7 +941,7 @@ impl Shell {
         };
         let img = capture_ops::crop_frozen(&frozen, rect);
         if img.width == 0 || img.height == 0 {
-            self.notify("Last Region Is Off Screen", "Select a new region.", false);
+            self.next_overlay_notice = Some(NOTICE_LAST_REGION_OFF_SCREEN);
             self.open_overlay(OverlayMode::Capture, frozen, windows);
             return;
         }
@@ -924,6 +967,39 @@ impl Shell {
             self.shared.config_dirty = true;
         }
         workers::finish_capture(&self.env(), out);
+    }
+
+    /// Window / full-screen capture with the editor off: finish it like an overlay Enter
+    /// would, but with the clipboard per config. The toast's Edit reopens it.
+    fn finish_quick(&mut self, base: Rgba, rect: PxRect, source: SourceInfo, mode: &'static str) {
+        let doc = Doc::new(base.width, base.height);
+        let out = CaptureOutput {
+            flattened: base.clone(),
+            base,
+            doc,
+            rect,
+            action: FinishAction::Quick,
+            source,
+            mode,
+            editing: None,
+        };
+        self.capture_done(out);
+    }
+
+    /// Tray double click: History. The first click of the pair already opened the region
+    /// overlay; drop it if nothing was selected yet (the overlay itself handles a second
+    /// click that lands on it instead of on the tray icon).
+    fn tray_double_click(&mut self) {
+        let fresh = self
+            .tray_overlay_at
+            .is_some_and(|t| t.elapsed() < TRAY_DOUBLE_CLICK_GRACE);
+        if fresh && self.overlay.as_ref().is_some_and(|o| o.s.is_untouched()) {
+            self.overlay = None;
+            self.freeze_cache = None;
+            self.touch();
+        }
+        self.tray_overlay_at = None;
+        self.open_history();
     }
 
     fn open_history(&mut self) {
@@ -1087,7 +1163,12 @@ impl Shell {
         let output = match workers::temp_recording_path(&self.shared.history) {
             Ok(p) => p,
             Err(e) => {
-                self.notify("Could Not Start Recording", format!("{e:#}"), true);
+                let body = report(
+                    "temp recording path",
+                    &e,
+                    "The history folder could not be prepared for the recording. Check the folder in Settings > History.",
+                );
+                self.notify("Could Not Start Recording", body, true);
                 self.rec = Rec::Idle;
                 return;
             }
@@ -1168,6 +1249,7 @@ impl Shell {
         let Rec::Trim {
             source,
             done_issued,
+            ..
         } = &mut self.rec
         else {
             return;
@@ -1226,10 +1308,14 @@ impl Shell {
             wake::wake_after(Duration::from_millis(200));
         }
         if let Some(err) = stop_with_error {
-            log::error!("recorder reported an error: {err}");
+            let why = report_str(
+                "recorder reported an error",
+                &err,
+                "The recorder hit a problem.",
+            );
             self.notify(
                 "Recording Problem",
-                format!("{err}\nStopping and keeping what was recorded."),
+                format!("{why} Stopping and keeping what was recorded."),
                 true,
             );
             self.record_stop();
@@ -1240,18 +1326,19 @@ impl Shell {
             if let Rec::Trim {
                 source,
                 done_issued: false,
+                gif,
             } = &self.rec
                 && !self.exporting
             {
-                let source = source.clone();
+                let (source, gif) = (source.clone(), *gif);
                 self.exporting = true;
                 workers::export_recording(
                     &self.env(),
                     source,
                     Duration::ZERO,
                     Duration::ZERO,
-                    false,
-                    true,
+                    gif,
+                    !gif,
                 );
             }
         }
@@ -1271,6 +1358,10 @@ impl Shell {
             } => {
                 self.window_capture_pending = false;
                 match result {
+                    Ok((base, source)) if !self.shared.config.capture.open_editor_after_capture => {
+                        let rect = PxRect::new(0, 0, base.width as i32, base.height as i32);
+                        self.finish_quick(base, rect, source, "window");
+                    }
                     Ok((base, source)) => {
                         let doc = Doc::new(base.width, base.height);
                         let mode = OverlayMode::Annotate {
@@ -1286,12 +1377,16 @@ impl Shell {
                             self.open_overlay(mode, frozen, windows);
                         }
                     }
-                    Err(e) => self.notify("Window Capture Failed", e, true),
+                    Err(e) => {
+                        let body = report_str("window capture", &e, WINDOW_CAPTURE_FALLBACK);
+                        self.notify("Window Capture Failed", body, true)
+                    }
                 }
             }
             WorkerMsg::WindowCaptureFailed(e) => {
                 self.window_capture_pending = false;
-                self.notify("Window Capture Failed", e, true);
+                let body = report_str("window capture", &e, WINDOW_CAPTURE_FALLBACK);
+                self.notify("Window Capture Failed", body, true);
             }
             WorkerMsg::OpenAnnotate {
                 base,
@@ -1368,7 +1463,14 @@ impl Shell {
                             self.open_overlay(mode, frozen, windows);
                         }
                     }
-                    Err(e) => self.notify("Scrolling Capture Failed", e, true),
+                    Err(e) => {
+                        let body = report_str(
+                            "scrolling capture",
+                            &e,
+                            "Nothing could be captured from that area. Try again with the page scrolled to the top.",
+                        );
+                        self.notify("Scrolling Capture Failed", body, true)
+                    }
                 }
             }
             WorkerMsg::RecorderStarted(result) => self.recorder_started(result),
@@ -1389,10 +1491,18 @@ impl Shell {
                         self.rec = Rec::Trim {
                             source: res.path,
                             done_issued: false,
+                            gif: pending.gif,
                         };
                         self.touch();
                     }
-                    (_, Err(e)) => self.notify("Could Not Finish the Recording", e, true),
+                    (_, Err(e)) => {
+                        let body = report_str(
+                            "recorder stop",
+                            &e,
+                            "The recording file could not be finished. Try recording again.",
+                        );
+                        self.notify("Could Not Finish the Recording", body, true)
+                    }
                     (other, Ok(_)) => self.rec = other,
                 }
             }
@@ -1446,9 +1556,13 @@ impl Shell {
                 self.touch();
             }
             Err(e) => {
-                log::error!("recorder start failed: {e}");
+                let body = report_str(
+                    "recorder start",
+                    &e,
+                    "Windows could not start the screen recorder. Try a smaller area or restart StinkShot.",
+                );
                 if !cancel {
-                    self.notify("Could Not Start Recording", e, true);
+                    self.notify("Could Not Start Recording", body, true);
                 }
             }
         }
@@ -1460,7 +1574,13 @@ impl Shell {
         self.rec = Rec::Idle;
         self.touch();
         if let Some(err) = &x.error {
-            self.notify("Export Problem", err.clone(), true);
+            let why = report_str("export", err, "Try saving the recording again.");
+            let body = if x.items.is_empty() {
+                format!("The recording could not be exported. {why}")
+            } else {
+                format!("Part of the export failed; what was saved is in History. {why}")
+            };
+            self.notify("Export Problem", body, true);
         }
         let Some((id, path, kind)) = x.items.first().cloned() else {
             return;
@@ -1611,9 +1731,13 @@ impl Shell {
                 }
             }
             Err(e) => {
-                log::info!("update check failed: {e}");
+                let body = report_str(
+                    "update check",
+                    &e,
+                    "The update server did not answer. Try again later.",
+                );
                 if forced {
-                    self.notify("Could Not Check for Updates", e, true);
+                    self.notify("Could Not Check for Updates", body, true);
                 }
                 self.update_retry_at = Instant::now() + Duration::from_secs(3600);
             }
@@ -1629,8 +1753,16 @@ impl Shell {
         self.shared.config_dirty = false;
         let new = self.shared.config.clone();
         if let Err(e) = new.save() {
-            log::error!("saving config failed: {e:#}");
-            self.notify("Could Not Save Settings", format!("{e:#}"), true);
+            let why = report(
+                "saving config",
+                &e,
+                "The settings file could not be written.",
+            );
+            self.notify(
+                "Could Not Save Settings",
+                format!("{why} Your changes apply until StinkShot restarts."),
+                true,
+            );
         }
         let old = std::mem::replace(&mut self.applied, new.clone());
 
@@ -1663,8 +1795,16 @@ impl Shell {
                     self.invalidate_history();
                 }
                 Err(e) => {
-                    log::error!("cannot open history folder {}: {e:#}", dir.display());
-                    self.notify("Could Not Open That History Folder", format!("{e:#}"), true);
+                    let why = report(
+                        &format!("open history folder {}", dir.display()),
+                        &e,
+                        "StinkShot could not use that folder.",
+                    );
+                    self.notify(
+                        "Could Not Open That History Folder",
+                        format!("{why} History stays in the previous folder."),
+                        true,
+                    );
                     self.shared.config.history.folder = old.history.folder.clone();
                     self.applied.history.folder = old.history.folder.clone();
                     self.shared.config_dirty = true;

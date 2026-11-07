@@ -270,11 +270,15 @@ impl Overlay {
                     rect,
                 })
             }
-            Err(e) => shared.outbox.push(Command::Notify {
-                title: "Could Not Finish Capture".into(),
-                body: format!("{e}"),
-                error: true,
-            }),
+            Err(e) => {
+                log::error!("overlay finish thread: {e}");
+                shared.outbox.push(Command::Notify {
+                    title: "Could Not Finish Capture".into(),
+                    body: "StinkShot could not start the final render. Press Enter to try again."
+                        .into(),
+                    error: true,
+                })
+            }
         }
     }
 

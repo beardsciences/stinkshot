@@ -7,6 +7,10 @@ use super::selection::{hit_handle, px_to_f, resize_px_rect};
 use super::shapes::ShapeHandle;
 use super::*;
 
+/// Shown when a click outside the selection is ignored because annotations exist.
+const NOTICE_KEEPS_ANNOTATIONS: &str =
+    "Annotations Keep This Region: Press Esc to Discard and Start Over";
+
 fn dist2(a: (f32, f32), b: (f32, f32)) -> f32 {
     ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt()
 }
@@ -62,8 +66,30 @@ impl Overlay {
         }
 
         if matches!(self.drag, Drag::None) {
+            if inp.pressed && self.help_open {
+                // A click closes the cheat sheet and does nothing else.
+                self.help_open = false;
+                self.drag = Drag::Ignore;
+                return;
+            }
             if inp.pressed && inp.over_ui {
                 self.drag = Drag::Ignore;
+                return;
+            }
+            // The second click of a double click on the tray icon lands here when the
+            // overlay opened under the cursor in time: that means History, not a capture.
+            if inp.pressed
+                && self.sel.is_none()
+                && let Some(p) = inp.pos
+                && is_tray_double_click(
+                    self.from_tray_click,
+                    self.opened_at.elapsed(),
+                    self.cursor_local,
+                    (p.0.floor() as i32, p.1.floor() as i32),
+                )
+            {
+                self.cancel(shared);
+                shared.outbox.push(Command::OpenHistory);
                 return;
             }
             if inp.pressed {
@@ -115,6 +141,7 @@ impl Overlay {
         let mon_abs = hover::local_to_virtual(mon_local, self.bounds);
 
         let mut rects: Vec<PxRect> = Vec::new();
+        let mut labels: Vec<stinkshot_platform::uia::ElementLabel> = Vec::new();
         if let (Some(s), true) = (&self.snapper, shared.config.capture.snap_to_elements) {
             if self.snap_req != Some(abs) {
                 if let Some(w) = &win {
@@ -136,6 +163,7 @@ impl Overlay {
                 };
                 if in_window {
                     rects = res.rects.clone();
+                    labels = res.labels.clone();
                 }
                 if res.point != abs {
                     ctx.request_repaint_after(Duration::from_millis(16));
@@ -149,10 +177,12 @@ impl Overlay {
         if sig != self.snap_sig {
             self.snap_sig = sig;
             self.snap_level = 0;
+            self.snap_wheel_used = false;
         }
         if inp.wheel_y != 0.0 {
             self.snap_level =
                 hover::cycle_level(self.snap_level, inp.wheel_y, rects.len().saturating_sub(1));
+            self.snap_wheel_used = true;
         }
         let picked = hover::pick_snap_rect(
             &rects,
@@ -165,6 +195,15 @@ impl Overlay {
             self.snap_level = lvl;
             hover::virtual_to_local(r, self.bounds)
         });
+        // Name the highlighted element once the user starts wheel-cycling, so it is clear
+        // which parent is selected.
+        let valid = hover::valid_snap_indices(&rects, abs);
+        self.snap_label = match (self.snap_wheel_used, valid.get(self.snap_level)) {
+            (true, Some(&i)) if self.hover.is_some() => labels
+                .get(i)
+                .map(|l| snap_label_text(l.control, &l.name, self.snap_level, valid.len())),
+            _ => None,
+        };
     }
 
     fn cursor_for(&self, p: (f32, f32), ppp: f32) -> CursorIcon {
@@ -322,12 +361,16 @@ impl Overlay {
                         };
                     } else if !inside && new_region_ok {
                         start_region(self);
+                    } else if !inside && self.sel_editable() {
+                        self.flash_notice(NOTICE_KEEPS_ANNOTATIONS);
                     }
                 }
             }
             _ if !inside => {
                 if new_region_ok {
                     start_region(self);
+                } else if self.sel_editable() {
+                    self.flash_notice(NOTICE_KEEPS_ANNOTATIONS);
                 }
             }
             Tool::Text => {

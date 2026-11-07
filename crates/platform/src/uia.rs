@@ -17,7 +17,8 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationCacheRequest, IUIAutomationElement,
-    IUIAutomationTreeWalker, UIA_BoundingRectanglePropertyId, UIA_IsOffscreenPropertyId,
+    IUIAutomationTreeWalker, UIA_BoundingRectanglePropertyId, UIA_ControlTypePropertyId,
+    UIA_IsOffscreenPropertyId, UIA_NamePropertyId,
 };
 
 use crate::Hwnd;
@@ -49,6 +50,69 @@ pub struct SnapResult {
     /// deduplicated, each with at least 4x4 px. The UI shows `rects[0]` and lets the user
     /// cycle outward with the mouse wheel.
     pub rects: Vec<PxRect>,
+    /// What each entry of `rects` is (same length and order). Added for the overlay's
+    /// "which element is highlighted" label.
+    pub labels: Vec<ElementLabel>,
+}
+
+/// UIA control type and name of a snapped element.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ElementLabel {
+    /// Readable control type ("Button", "List Item", "Window", ...).
+    pub control: &'static str,
+    /// The element's UIA name, possibly empty.
+    pub name: String,
+}
+
+/// Readable name for a UIA control type id (`UIA_*ControlTypeId`, 50000..=50040).
+pub fn control_type_name(id: i32) -> &'static str {
+    const NAMES: [&str; 41] = [
+        "Button",
+        "Calendar",
+        "Check Box",
+        "Combo Box",
+        "Edit",
+        "Hyperlink",
+        "Image",
+        "List Item",
+        "List",
+        "Menu",
+        "Menu Bar",
+        "Menu Item",
+        "Progress Bar",
+        "Radio Button",
+        "Scroll Bar",
+        "Slider",
+        "Spinner",
+        "Status Bar",
+        "Tab",
+        "Tab Item",
+        "Text",
+        "Tool Bar",
+        "Tooltip",
+        "Tree",
+        "Tree Item",
+        "Custom",
+        "Group",
+        "Thumb",
+        "Data Grid",
+        "Data Item",
+        "Document",
+        "Split Button",
+        "Window",
+        "Pane",
+        "Header",
+        "Header Item",
+        "Table",
+        "Title Bar",
+        "Separator",
+        "Semantic Zoom",
+        "App Bar",
+    ];
+    usize::try_from(id - 50000)
+        .ok()
+        .and_then(|i| NAMES.get(i).copied())
+        .unwrap_or("Element")
 }
 
 impl ElementSnapper {
@@ -98,6 +162,7 @@ impl Drop for ElementSnapper {
 struct Node {
     elem: IUIAutomationElement,
     rect: PxRect,
+    label: ElementLabel,
     /// Child node indices, filled on first visit.
     children: Option<Vec<usize>>,
 }
@@ -128,6 +193,8 @@ impl Ctx {
             let cache = automation.CreateCacheRequest()?;
             cache.AddProperty(UIA_BoundingRectanglePropertyId)?;
             cache.AddProperty(UIA_IsOffscreenPropertyId)?;
+            cache.AddProperty(UIA_ControlTypePropertyId)?;
+            cache.AddProperty(UIA_NamePropertyId)?;
             Ok(Ctx {
                 walker,
                 cache,
@@ -146,7 +213,8 @@ impl Ctx {
     }
 
     fn build_tree(&self, hwnd: Hwnd) -> Option<WindowTree> {
-        let window_rect = crate::windows_enum::info(hwnd).map(|w| w.rect)?;
+        let info = crate::windows_enum::info(hwnd)?;
+        let window_rect = info.rect;
         // SAFETY: plain UIA calls on this thread.
         let elem = unsafe { self.automation.ElementFromHandle(HWND(hwnd as *mut _)) }
             .map_err(|e| log::debug!("UIA ElementFromHandle: {e}"))
@@ -155,6 +223,10 @@ impl Ctx {
             nodes: vec![Node {
                 elem,
                 rect: window_rect,
+                label: ElementLabel {
+                    control: "Window",
+                    name: info.title,
+                },
                 children: None,
             }],
             window_rect,
@@ -185,9 +257,17 @@ impl Ctx {
                     .GetNextSiblingElementBuildCache(&e, &self.cache)
                     .ok();
                 if !offscreen && rect.w > 0 && rect.h > 0 {
+                    let label = ElementLabel {
+                        control: e
+                            .CachedControlType()
+                            .map(|t| control_type_name(t.0))
+                            .unwrap_or("Element"),
+                        name: e.CachedName().map(|b| b.to_string()).unwrap_or_default(),
+                    };
                     tree.nodes.push(Node {
                         elem: e,
                         rect,
+                        label,
                         children: None,
                     });
                     kids.push(tree.nodes.len() - 1);
@@ -200,11 +280,12 @@ impl Ctx {
 
     fn resolve(&mut self, hwnd: Hwnd, p: PxPoint) -> SnapResult {
         let mut rects: Vec<PxRect> = Vec::new();
+        let mut labels: Vec<ElementLabel> = Vec::new();
         // Take the tree out so `expand` can borrow `self` immutably alongside it.
         let _ = self.tree(hwnd);
         if let Some(Some(mut tree)) = self.trees.remove(&hwnd) {
             let window_rect = tree.window_rect;
-            let mut chain = vec![window_rect];
+            let mut chain = vec![(window_rect, 0usize)];
             let mut cur = 0usize;
             for _ in 0..MAX_DEPTH {
                 self.expand(&mut tree, cur);
@@ -216,26 +297,36 @@ impl Ctx {
                     .find(|&k| tree.nodes[k].rect.contains(p));
                 match hit {
                     Some(k) => {
-                        chain.push(tree.nodes[k].rect);
+                        chain.push((tree.nodes[k].rect, k));
                         cur = k;
                     }
                     None => break,
                 }
             }
-            for r in chain.iter().rev() {
+            // Innermost first; when a parent has the same rect, the innermost label wins.
+            for (r, node) in chain.iter().rev() {
                 if let Some(c) = r.intersect(&window_rect)
                     && c.w >= MIN_EDGE
                     && c.h >= MIN_EDGE
                     && rects.last() != Some(&c)
                 {
                     rects.push(c);
+                    labels.push(tree.nodes[*node].label.clone());
                 }
             }
             self.trees.insert(hwnd, Some(tree));
         } else if let Some(w) = crate::windows_enum::info(hwnd) {
             rects.push(w.rect);
+            labels.push(ElementLabel {
+                control: "Window",
+                name: w.title,
+            });
         }
-        SnapResult { point: p, rects }
+        SnapResult {
+            point: p,
+            rects,
+            labels,
+        }
     }
 }
 
@@ -280,5 +371,21 @@ fn worker(shared: SharedPair, ready: std::sync::mpsc::Sender<anyhow::Result<()>>
                 Err(_) => return,
             };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn control_type_names() {
+        assert_eq!(control_type_name(50000), "Button");
+        assert_eq!(control_type_name(50007), "List Item");
+        assert_eq!(control_type_name(50032), "Window");
+        assert_eq!(control_type_name(50033), "Pane");
+        assert_eq!(control_type_name(50040), "App Bar");
+        assert_eq!(control_type_name(50041), "Element");
+        assert_eq!(control_type_name(0), "Element");
     }
 }

@@ -254,7 +254,7 @@ impl Surface for Pin {
                     let cmd = match res {
                         Ok(()) => Command::Notify {
                             title: "Copied".into(),
-                            body: format!("{} copied to clipboard", self.title),
+                            body: format!("{} is ready to paste.", self.title),
                             error: false,
                         },
                         Err(e) => Command::Notify {

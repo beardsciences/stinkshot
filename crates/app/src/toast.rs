@@ -1,7 +1,10 @@
 //! After-capture toast (docs/design/Toast.dc.html): bottom-right of the work area of the
 //! monitor with the cursor, above the taskbar; topmost, no activation, excluded from
 //! capture, auto-dismiss after config.general.toast_seconds (paused while hovered); click
-//! on the thumbnail = Edit. Actions: Edit, Pin, Copy text, Folder (design order).
+//! on the thumbnail = Edit. Action row: Edit, Copy, Pin, Copy Text for captures and Play,
+//! Copy for recordings (Copy puts the image, or the recording file, on the clipboard again,
+//! e.g. after a failed copy). Show in Folder is an icon button next to Dismiss so the row
+//! keeps four comfortable buttons.
 
 #[path = "ui_common.rs"]
 pub mod ui_common;
@@ -65,6 +68,7 @@ fn slide_progress(secs: f32) -> f32 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToastAction {
     Edit,
+    Copy,
     Pin,
     CopyText,
     Folder,
@@ -75,6 +79,7 @@ impl ToastAction {
     fn label(self) -> &'static str {
         match self {
             ToastAction::Edit => "Edit",
+            ToastAction::Copy => "Copy",
             ToastAction::Pin => "Pin",
             ToastAction::CopyText => "Copy Text",
             ToastAction::Folder => "Folder",
@@ -84,15 +89,29 @@ impl ToastAction {
     fn command(self, id: ItemId) -> Command {
         match self {
             ToastAction::Edit => Command::EditItem(id),
+            ToastAction::Copy => Command::CopyItemImage(id),
             ToastAction::Pin => Command::PinItem(id),
             ToastAction::CopyText => Command::CopyItemText(id),
             ToastAction::Folder => Command::RevealItem(id),
             ToastAction::Play => Command::OpenItem(id),
         }
     }
+
+    /// Hover text (Title Case).
+    fn tooltip(self, recording: bool) -> &'static str {
+        match self {
+            ToastAction::Edit => "Open in the Editor",
+            ToastAction::Copy if recording => "Copy the File Again",
+            ToastAction::Copy => "Copy the Image Again",
+            ToastAction::Pin => "Pin to Screen",
+            ToastAction::CopyText => "Copy Recognized Text",
+            ToastAction::Folder => "Show in Folder",
+            ToastAction::Play => "Play",
+        }
+    }
 }
 
-/// Actions shown for a toast kind (design order). Nothing is actionable without a history item.
+/// Buttons of the action row (design order). Nothing is actionable without a history item.
 pub fn actions_for(kind: &ToastKind) -> Vec<ToastAction> {
     match kind {
         ToastKind::Capture {
@@ -104,10 +123,20 @@ pub fn actions_for(kind: &ToastKind) -> Vec<ToastAction> {
             if *can_edit {
                 v.push(ToastAction::Edit);
             }
-            v.extend([ToastAction::Pin, ToastAction::CopyText, ToastAction::Folder]);
+            v.extend([ToastAction::Copy, ToastAction::Pin, ToastAction::CopyText]);
             v
         }
-        ToastKind::Recording { item: Some(_), .. } => vec![ToastAction::Play, ToastAction::Folder],
+        ToastKind::Recording { item: Some(_), .. } => vec![ToastAction::Play, ToastAction::Copy],
+        _ => Vec::new(),
+    }
+}
+
+/// Header icon actions next to Dismiss.
+pub fn header_actions_for(kind: &ToastKind) -> Vec<ToastAction> {
+    match kind {
+        ToastKind::Capture { item: Some(_), .. } | ToastKind::Recording { item: Some(_), .. } => {
+            vec![ToastAction::Folder]
+        }
         _ => Vec::new(),
     }
 }
@@ -317,6 +346,7 @@ impl Surface for Toast {
         let tex = self.thumb_texture(ctx);
         let (tw, th) = self.texture_dims();
         let actions = actions_for(&self.kind);
+        let header_actions = header_actions_for(&self.kind);
         let ocr_available = shared.ocr.is_some();
         let item = kind_item(&self.kind);
         let is_recording = matches!(self.kind, ToastKind::Recording { .. });
@@ -405,8 +435,48 @@ impl Surface for Toast {
                 close = true;
             }
 
+            // Header icon actions (Show in Folder), right to left from Dismiss.
+            let mut header_left = dismiss_rect.left();
+            for a in header_actions.iter().rev() {
+                let r = Rect::from_min_size(
+                    pos2(header_left - DISMISS - 2.0, dismiss_rect.top()),
+                    vec2(DISMISS, DISMISS),
+                );
+                header_left = r.left();
+                let resp = ui.interact(r, ui.scope_id().with(a.label()), Sense::click());
+                if resp.hovered() {
+                    ui.painter().rect_filled(
+                        r,
+                        CornerRadius::same(6),
+                        theme::subtle_fill(
+                            shared.dark,
+                            if resp.is_pointer_button_down_on() {
+                                2
+                            } else {
+                                1
+                            },
+                        ),
+                    );
+                }
+                theme::widgets::paint_icon(
+                    ui.painter(),
+                    Rect::from_center_size(r.center(), vec2(15.0, 15.0)),
+                    Icon::Folder,
+                    p.text_secondary,
+                );
+                let resp = resp
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text(a.tooltip(is_recording));
+                if resp.clicked()
+                    && let Some(id) = item
+                {
+                    command = Some(a.command(id));
+                    close = true;
+                }
+            }
+
             // Text column.
-            let text_w = (dismiss_rect.left() - 4.0 - text_x).max(40.0);
+            let text_w = (header_left - 4.0 - text_x).max(40.0);
             let top = inner.top();
             let painter = ui.painter();
             let sq = Rect::from_min_size(pos2(text_x, top + 1.0), vec2(14.0, 14.0));
@@ -478,9 +548,11 @@ impl Surface for Toast {
                         accent,
                     );
                     let resp = if !enabled {
-                        resp.on_hover_text("No OCR language is installed")
+                        resp.on_disabled_hover_text(
+                            "Copy Text Needs an OCR Language in Windows Settings",
+                        )
                     } else {
-                        resp
+                        resp.on_hover_text(a.tooltip(is_recording))
                     };
                     if resp.clicked()
                         && let Some(id) = item
@@ -537,15 +609,20 @@ mod tests {
             actions_for(&cap(Some(1), true)),
             vec![
                 ToastAction::Edit,
+                ToastAction::Copy,
                 ToastAction::Pin,
                 ToastAction::CopyText,
-                ToastAction::Folder
             ]
         );
         assert_eq!(
             actions_for(&cap(Some(1), false)),
-            vec![ToastAction::Pin, ToastAction::CopyText, ToastAction::Folder]
+            vec![ToastAction::Copy, ToastAction::Pin, ToastAction::CopyText]
         );
+        assert_eq!(
+            header_actions_for(&cap(Some(1), true)),
+            vec![ToastAction::Folder]
+        );
+        assert!(header_actions_for(&cap(None, true)).is_empty());
         assert!(actions_for(&cap(None, true)).is_empty());
         let rec = ToastKind::Recording {
             thumb: None,
@@ -555,8 +632,9 @@ mod tests {
         };
         assert_eq!(
             actions_for(&rec),
-            vec![ToastAction::Play, ToastAction::Folder]
+            vec![ToastAction::Play, ToastAction::Copy]
         );
+        assert_eq!(header_actions_for(&rec), vec![ToastAction::Folder]);
         let msg = ToastKind::Message {
             title: String::new(),
             body: String::new(),
@@ -568,6 +646,10 @@ mod tests {
     #[test]
     fn actions_push_expected_commands() {
         assert!(matches!(ToastAction::Edit.command(7), Command::EditItem(7)));
+        assert!(matches!(
+            ToastAction::Copy.command(7),
+            Command::CopyItemImage(7)
+        ));
         assert!(matches!(ToastAction::Pin.command(7), Command::PinItem(7)));
         assert!(matches!(
             ToastAction::CopyText.command(7),
@@ -578,6 +660,15 @@ mod tests {
             Command::RevealItem(7)
         ));
         assert!(matches!(ToastAction::Play.command(7), Command::OpenItem(7)));
+    }
+
+    #[test]
+    fn action_row_never_gets_cramped() {
+        // Four buttons at most, each wide enough for "Copy Text" at 12 px (~60 pt + padding).
+        let most = actions_for(&cap(Some(1), true)).len() as f32;
+        assert!(most <= 4.0);
+        let w = (CARD_W - 2.0 * PAD - BTN_GAP * (most - 1.0)) / most;
+        assert!(w >= 80.0, "{w}");
     }
 
     #[test]

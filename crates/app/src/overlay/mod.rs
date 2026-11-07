@@ -28,6 +28,7 @@
 // The shell does not construct `Overlay` until integration; drop this allow then.
 
 mod hover;
+mod keys;
 mod paint;
 mod render;
 mod selection;
@@ -154,6 +155,7 @@ struct Keys {
     redo: bool,
     delete: bool,
     hex: bool,
+    help: bool,
     tool: Option<Tool>,
     palette: Option<usize>,
     bracket: i32,
@@ -187,6 +189,10 @@ pub struct Overlay {
     snap_sig: Option<PxRect>,
     snap_req: Option<PxPoint>,
     snapper: Option<ElementSnapper>,
+    /// Label of the highlighted element ("Pane \u{201c}Files\u{201d} \u{b7} Level 2 of 4"),
+    /// shown once the wheel was used on the current element chain.
+    snap_label: Option<String>,
+    snap_wheel_used: bool,
 
     // Annotation state.
     base: Option<Arc<Rgba>>,
@@ -229,6 +235,72 @@ pub struct Overlay {
     closed: bool,
     /// First Esc with unsaved annotations: a second Esc within `DISCARD_WINDOW` cancels.
     discard_armed: Option<Instant>,
+
+    /// Inline hint-bar notice (replaces toasts while the screen is frozen).
+    notice: Option<Notice>,
+    /// The F1 / ? shortcut cheat sheet is showing.
+    help_open: bool,
+    /// Last C (copy color) result, shown in the loupe plate for a moment.
+    hex_flash: Option<HexFlash>,
+    /// Opened by a tray icon click (see `OverlayRequest::from_tray_click`).
+    from_tray_click: bool,
+    opened_at: Instant,
+}
+
+/// A short message in the hint bar's leading slot.
+struct Notice {
+    text: String,
+    /// None: until a selection exists.
+    until: Option<Instant>,
+}
+
+struct HexFlash {
+    hex: String,
+    ok: bool,
+    at: Instant,
+}
+
+/// How long a transient notice or the copied-color flash stays.
+const NOTICE_SECS: Duration = Duration::from_millis(2500);
+const HEX_FLASH: Duration = Duration::from_millis(1400);
+/// A press on the tray icon spot this soon after a tray-click overlay opened is the second
+/// half of a double click (Windows' default double-click time is 500 ms).
+const TRAY_DOUBLE_CLICK: Duration = Duration::from_millis(500);
+const TRAY_DOUBLE_CLICK_SLOP_PX: i32 = 8;
+
+/// Whether a press at `p` (overlay-local px) `since_open` after a tray-click overlay opened
+/// with the cursor at `cursor` is really the second click of a double click on the icon.
+fn is_tray_double_click(
+    from_tray: bool,
+    since_open: Duration,
+    cursor: (i32, i32),
+    p: (i32, i32),
+) -> bool {
+    from_tray
+        && since_open < TRAY_DOUBLE_CLICK
+        && (p.0 - cursor.0).abs() <= TRAY_DOUBLE_CLICK_SLOP_PX
+        && (p.1 - cursor.1).abs() <= TRAY_DOUBLE_CLICK_SLOP_PX
+}
+
+/// Text for the wheel-snapping label. `level` is 0 for the innermost element.
+fn snap_label_text(control: &str, name: &str, level: usize, count: usize) -> String {
+    let name: String = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    let name = if name.chars().count() > 40 {
+        let cut: String = name.chars().take(39).collect();
+        format!("{}\u{2026}", cut.trim_end())
+    } else {
+        name
+    };
+    let what = if name.is_empty() {
+        control.to_string()
+    } else {
+        format!("{control} \u{201c}{name}\u{201d}")
+    };
+    format!(
+        "{what} \u{b7} Level {} of {}",
+        level + 1,
+        count.max(level + 1)
+    )
 }
 
 /// How long the "press Esc again to discard" prompt waits for the second Esc.
@@ -246,6 +318,8 @@ impl Overlay {
             frozen,
             windows,
             last_region,
+            notice,
+            from_tray_click,
         } = req;
         let bounds = frozen.bounds;
         let cfg = &shared.config.editor;
@@ -289,6 +363,8 @@ impl Overlay {
             snap_sig: None,
             snap_req: None,
             snapper: None,
+            snap_label: None,
+            snap_wheel_used: false,
             base: None,
             doc: Doc::new(1, 1),
             undo: UndoStack::new(),
@@ -324,6 +400,14 @@ impl Overlay {
             finishing: None,
             closed: false,
             discard_armed: None,
+            notice: notice.map(|t| Notice {
+                text: t.to_string(),
+                until: None,
+            }),
+            help_open: false,
+            hex_flash: None,
+            from_tray_click,
+            opened_at: Instant::now(),
         };
 
         if shared.config.capture.snap_to_elements {
@@ -584,47 +668,25 @@ impl Overlay {
             k.esc = i.key_pressed(Key::Escape);
             k.enter = i.key_pressed(Key::Enter) && !cmd;
             k.copy_event = i.events.iter().any(|e| matches!(e, Event::Copy));
-            k.save = cmd && i.key_pressed(Key::S);
-            k.pin = cmd && i.key_pressed(Key::P);
-            k.text = cmd && i.key_pressed(Key::T);
-            k.undo = cmd && !i.modifiers.shift && i.key_pressed(Key::Z);
-            k.redo = cmd && (i.key_pressed(Key::Y) || (i.modifiers.shift && i.key_pressed(Key::Z)));
+            k.save = keys::SAVE.pressed(i);
+            k.pin = keys::PIN.pressed(i);
+            k.text = keys::COPY_TEXT.pressed(i);
+            k.undo = keys::UNDO.pressed(i) && !i.modifiers.shift;
+            k.redo = keys::REDO.pressed(i)
+                || (cmd && i.modifiers.shift && i.key_pressed(keys::UNDO.key));
             k.delete = i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace);
+            k.help = keys::HELP.pressed(i)
+                || i.events
+                    .iter()
+                    .any(|e| matches!(e, Event::Text(t) if t == keys::HELP_CHAR));
             if plain {
-                k.hex = i.key_pressed(Key::C);
-                let map: [(Key, Tool); 15] = [
-                    (Key::V, Tool::Select),
-                    (Key::A, Tool::Arrow),
-                    (Key::L, Tool::Line),
-                    (Key::R, Tool::Rect),
-                    (Key::E, Tool::Ellipse),
-                    (Key::P, Tool::Pen),
-                    (Key::H, Tool::Highlighter),
-                    (Key::T, Tool::Text),
-                    (Key::N, Tool::Step),
-                    (Key::B, Tool::Blur),
-                    (Key::X, Tool::Pixelate),
-                    (Key::K, Tool::Redact),
-                    (Key::M, Tool::Magnifier),
-                    (Key::O, Tool::Callout),
-                    (Key::S, Tool::Spotlight),
-                ];
-                for (key, tool) in map {
+                k.hex = keys::COPY_COLOR.pressed(i);
+                for (tool, key) in keys::TOOL_KEYS {
                     if i.key_pressed(key) {
                         k.tool = Some(tool);
                     }
                 }
-                let nums = [
-                    Key::Num1,
-                    Key::Num2,
-                    Key::Num3,
-                    Key::Num4,
-                    Key::Num5,
-                    Key::Num6,
-                    Key::Num7,
-                    Key::Num8,
-                ];
-                for (idx, key) in nums.iter().enumerate() {
+                for (idx, key) in keys::PALETTE_KEYS.iter().enumerate() {
                     if i.key_pressed(*key) {
                         k.palette = Some(idx);
                     }
@@ -662,8 +724,19 @@ impl Overlay {
         if self.exact_open {
             return;
         }
+        if k.help {
+            self.help_open = !self.help_open;
+            return;
+        }
+        if self.help_open {
+            // The cheat sheet is modal for the keyboard: Esc (or F1 / ?) closes it.
+            if k.esc {
+                self.help_open = false;
+            }
+            return;
+        }
         if k.hex {
-            self.copy_hex(shared);
+            self.copy_hex();
         }
 
         if k.esc {
@@ -776,6 +849,10 @@ impl Overlay {
             }
             return;
         }
+        if self.help_open {
+            self.help_open = false;
+            return;
+        }
         if self.popup.is_some() {
             self.popup = None;
             return;
@@ -812,22 +889,64 @@ impl Overlay {
         self.closed = true;
     }
 
-    fn copy_hex(&mut self, shared: &mut Shared) {
+    /// C: copy the hex color under the cursor. Feedback stays inside the overlay (loupe
+    /// plate, or the hint bar when the loupe is hidden) instead of a toast.
+    fn copy_hex(&mut self) {
         let Some(p) = self.last_pos_px() else { return };
         let c = paint::sample(&self.frozen_image, p.0, p.1);
         let hex = hover::hex_string(c);
-        match clipboard::set_text(&hex) {
-            Ok(()) => shared.outbox.push(Command::Notify {
-                title: "Color Copied".into(),
-                body: hex,
-                error: false,
-            }),
-            Err(e) => shared.outbox.push(Command::Notify {
-                title: "Could Not Copy Color".into(),
-                body: format!("{e:#}"),
-                error: true,
-            }),
+        let ok = match clipboard::set_text(&hex) {
+            Ok(()) => true,
+            Err(e) => {
+                log::warn!("copy color: {e:#}");
+                false
+            }
+        };
+        self.hex_flash = Some(HexFlash {
+            hex,
+            ok,
+            at: Instant::now(),
+        });
+    }
+
+    /// Copied-color feedback text while it is fresh.
+    fn hex_flash_text(&self) -> Option<(String, bool)> {
+        let f = self.hex_flash.as_ref()?;
+        if f.at.elapsed() >= HEX_FLASH {
+            return None;
         }
+        Some(if f.ok {
+            (format!("Copied {}", f.hex), true)
+        } else {
+            ("Clipboard Busy, Press C Again".to_string(), false)
+        })
+    }
+
+    /// Show `text` in the hint bar for a few seconds.
+    fn flash_notice(&mut self, text: &str) {
+        self.notice = Some(Notice {
+            text: text.to_string(),
+            until: Some(Instant::now() + NOTICE_SECS),
+        });
+    }
+
+    /// The current hint-bar notice, if still due.
+    fn notice_text(&self) -> Option<&str> {
+        let n = self.notice.as_ref()?;
+        let live = match n.until {
+            Some(t) => Instant::now() < t,
+            None => self.sel.is_none(),
+        };
+        live.then_some(n.text.as_str())
+    }
+
+    /// Nothing has happened in this overlay yet (no selection, no gesture, no edits): it can
+    /// be dropped without losing anything.
+    pub fn is_untouched(&self) -> bool {
+        matches!(self.kind, Kind::Capture)
+            && self.sel.is_none()
+            && matches!(self.drag, Drag::None)
+            && self.doc.shapes.is_empty()
     }
 
     fn last_pos_px(&self) -> Option<(i32, i32)> {
@@ -882,6 +1001,38 @@ impl Surface for Overlay {
 #[cfg(test)]
 mod esc_tests {
     use super::*;
+
+    #[test]
+    fn tray_double_click_needs_the_same_spot_and_quick_timing() {
+        let at = (100, 1060);
+        let soon = Duration::from_millis(150);
+        assert!(is_tray_double_click(true, soon, at, (103, 1058)));
+        assert!(!is_tray_double_click(false, soon, at, at));
+        assert!(!is_tray_double_click(
+            true,
+            TRAY_DOUBLE_CLICK + Duration::from_millis(1),
+            at,
+            at
+        ));
+        assert!(!is_tray_double_click(true, soon, at, (140, 1060)));
+    }
+
+    #[test]
+    fn snap_label_names_type_name_and_level() {
+        assert_eq!(
+            snap_label_text("Button", "Save", 0, 3),
+            "Button \u{201c}Save\u{201d} \u{b7} Level 1 of 3"
+        );
+        assert_eq!(
+            snap_label_text("Pane", "  ", 2, 3),
+            "Pane \u{b7} Level 3 of 3"
+        );
+        let long = snap_label_text("Document", &"x".repeat(80), 1, 2);
+        assert!(long.contains('\u{2026}'));
+        assert!(long.chars().count() < 80);
+        // Count never reads lower than the level.
+        assert!(snap_label_text("Group", "", 4, 2).ends_with("Level 5 of 5"));
+    }
 
     #[test]
     fn esc_with_edits_needs_a_second_press() {

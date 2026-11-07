@@ -530,6 +530,16 @@ pub struct HistoryWindow {
     load_error: Option<String>,
 }
 
+/// Inline text when the history index can not be read (details go to the log).
+fn history_load_error(e: &anyhow::Error) -> String {
+    let why = crate::errors::report(
+        "history query",
+        e,
+        "Restart StinkShot; if it keeps happening, choose another history folder in Settings.",
+    );
+    format!("Could not read the history index. {why}")
+}
+
 impl HistoryWindow {
     pub fn new(shared: &Shared) -> Self {
         let mut w = Self {
@@ -604,7 +614,7 @@ impl HistoryWindow {
                 }) {
                     Ok(v) => all.extend(v),
                     Err(e) => {
-                        self.load_error = Some(format!("{e:#}"));
+                        self.load_error = Some(history_load_error(&e));
                         return;
                     }
                 }
@@ -622,8 +632,7 @@ impl HistoryWindow {
                 self.load_error = None;
             }
             Err(e) => {
-                log::warn!("history query failed: {e:#}");
-                self.load_error = Some(format!("{e:#}"));
+                self.load_error = Some(history_load_error(&e));
             }
         }
         if let Ok(s) = shared.history.stats() {
@@ -1292,7 +1301,7 @@ impl Surface for HistoryWindow {
             }
             if let Some(err) = &load_error {
                 let g = ui.painter().layout(
-                    format!("Could not read the history index: {err}"),
+                    err.clone(),
                     uc::font(12.0),
                     p.danger,
                     inner.width() - 28.0,
@@ -1682,7 +1691,11 @@ impl Surface for HistoryWindow {
         if open_folder && let Err(e) = stinkshot_platform::system::open_path(&folder) {
             shared.outbox.push(Command::Notify {
                 title: "Could Not Open Folder".into(),
-                body: e.to_string(),
+                body: crate::errors::report(
+                    "open history folder",
+                    &e,
+                    "Windows could not open the history folder. Check it in Settings > History.",
+                ),
                 error: true,
             });
         }

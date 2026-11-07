@@ -8,7 +8,9 @@
 //! - `TrimWindow`: filmstrip (record::thumbnails), draggable in/out handles, preview frame,
 //!   Discard / Save GIF / Save MP4 -> `Command::TrimDone`. Discard pushes
 //!   `Command::RecordCancel` (documented semantics: the shell deletes the untrimmed source
-//!   recording and closes the window), after an in-window confirmation.
+//!   recording and closes the window), after an in-window confirmation. Closing the window
+//!   (X or Esc) asks: Save Untrimmed (the whole recording in the format it was started
+//!   for, via `TrimDone`), Discard, or Keep Editing.
 //! - `ScrollHud`: "Stitching frame N", W x H, progress, Cancel / Stop here.
 //!
 //! Countdown, RecordFrame and ScrollHud-free areas rely on transparent windows: the shell's
@@ -592,7 +594,11 @@ impl Surface for RecordHud {
             // Summary / error line.
             let line_y = row.bottom() + 8.0;
             let (text, col) = match &error {
-                Some(e) => (format!("Recording Error: {e}"), p.danger),
+                // The shell logs the details and explains them in a toast as it stops.
+                Some(_) => (
+                    "Recording Problem, Stopping and Keeping What Was Recorded".to_string(),
+                    p.danger,
+                ),
                 None if dropped > 0 => (
                     format!("{summary} \u{b7} {dropped} dropped"),
                     p.text_secondary,
@@ -632,6 +638,62 @@ const TRIM_MARGIN: f32 = 20.0;
 const STRIP_H: f32 = 56.0;
 const HANDLE_W: f32 = 8.0;
 
+/// In-window question shown over the Trim window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrimPrompt {
+    /// The Discard button: confirm deleting the recording.
+    Discard,
+    /// The window's close button or Esc: save as is, discard, or keep editing.
+    Close,
+}
+
+/// What a prompt's buttons do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromptChoice {
+    KeepEditing,
+    Discard,
+    SaveUntrimmed,
+}
+
+/// Buttons a prompt offers, left to right (the last one is the primary button).
+pub fn prompt_choices(p: TrimPrompt) -> &'static [PromptChoice] {
+    match p {
+        TrimPrompt::Discard => &[PromptChoice::KeepEditing, PromptChoice::Discard],
+        TrimPrompt::Close => &[
+            PromptChoice::KeepEditing,
+            PromptChoice::Discard,
+            PromptChoice::SaveUntrimmed,
+        ],
+    }
+}
+
+/// Prompt title and body. `gif`: the recording was started as a GIF.
+pub fn prompt_text(p: TrimPrompt, gif: bool) -> (&'static str, String) {
+    let fmt = if gif { "GIF" } else { "MP4" };
+    match p {
+        TrimPrompt::Discard => (
+            "Discard This Recording?",
+            "It has not been saved yet. This cannot be undone.".to_string(),
+        ),
+        TrimPrompt::Close => (
+            "Save This Recording?",
+            format!(
+                "It has not been saved yet. Save Untrimmed keeps the whole recording as {fmt} in History. Discard asks once more, then deletes it."
+            ),
+        ),
+    }
+}
+
+/// The `TrimDone` that saves the whole recording in its preferred format.
+pub fn untrimmed_done(dur_secs: f64, gif: bool) -> Command {
+    Command::TrimDone {
+        start: Duration::ZERO,
+        end: secs(dur_secs),
+        as_gif: gif,
+        as_mp4: !gif,
+    }
+}
+
 pub struct TrimWindow {
     source: PathBuf,
     info: MediaInfo,
@@ -654,7 +716,7 @@ pub struct TrimWindow {
     workers_started: bool,
     progress: Option<f32>,
     submitted: bool,
-    confirm_discard: bool,
+    prompt: Option<TrimPrompt>,
     rect: PxRect,
     scale: f32,
 }
@@ -688,7 +750,7 @@ impl TrimWindow {
             workers_started: false,
             progress: None,
             submitted: false,
-            confirm_discard: false,
+            prompt: None,
             rect,
             scale: area.scale,
         }
@@ -859,14 +921,17 @@ impl Surface for TrimWindow {
         let p = uc::pal(shared);
         let accent = uc::accent(shared);
 
-        // Closing the window is a discard: ask first.
-        if ctx.input(|i| i.viewport().close_requested()) && !self.submitted {
+        // Closing the window never loses the recording silently: ask what to do. While an
+        // export runs, the shell closes the window when it is done.
+        if ctx.input(|i| i.viewport().close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.confirm_discard = true;
+            if !self.submitted && self.prompt.is_none() {
+                self.prompt = Some(TrimPrompt::Close);
+            }
         }
 
         // Keyboard.
-        if !self.confirm_discard && !ctx.egui_wants_keyboard_input() {
+        if self.prompt.is_none() && !ctx.egui_wants_keyboard_input() {
             let (esc, enter, left, right, shift) = ctx.input(|i| {
                 (
                     i.key_pressed(Key::Escape),
@@ -877,7 +942,7 @@ impl Surface for TrimWindow {
                 )
             });
             if esc && !self.submitted {
-                self.confirm_discard = true;
+                self.prompt = Some(TrimPrompt::Close);
             }
             if enter && !self.submitted && self.progress.is_none() {
                 let gif = self.prefer_gif;
@@ -1285,7 +1350,7 @@ impl Surface for TrimWindow {
         ));
 
         if ask_discard {
-            self.confirm_discard = true;
+            self.prompt = Some(TrimPrompt::Discard);
         }
         if save_gif {
             self.save(shared, true);
@@ -1295,58 +1360,66 @@ impl Surface for TrimWindow {
         }
 
         let mut status = SurfaceStatus::Open;
-        if self.confirm_discard {
-            let modal = egui::Modal::new(egui::Id::unique("trim_discard_modal")).show(ctx, |ui| {
-                ui.set_width(340.0);
+        if let Some(prompt) = self.prompt {
+            let (title, body) = prompt_text(prompt, self.prefer_gif);
+            let choices = prompt_choices(prompt);
+            let n = choices.len() as f32;
+            let btn_w = 132.0;
+            let modal = egui::Modal::new(egui::Id::unique("trim_prompt")).show(ctx, |ui| {
+                ui.set_width(btn_w * n + 8.0 * (n - 1.0));
                 ui.label(
-                    egui::RichText::new("Discard This Recording?")
-                        .size(15.0)
+                    egui::RichText::new(title)
+                        .font(theme::semibold(15.0))
                         .color(p.text),
                 );
                 ui.add_space(4.0);
-                ui.label(
-                    egui::RichText::new("It has not been saved yet. This cannot be undone.")
-                        .size(12.0)
-                        .color(p.text_secondary),
-                );
+                ui.label(egui::RichText::new(body).size(12.0).color(p.text_secondary));
                 ui.add_space(14.0);
-                let mut keep = false;
-                let mut discard = false;
+                let mut picked = None;
                 ui.horizontal(|ui| {
-                    let (r1, _) = ui.allocate_exact_size(vec2(160.0, 34.0), Sense::hover());
-                    keep = uc::rect_button(
-                        ui,
-                        "keep",
-                        r1,
-                        "Keep Editing",
-                        uc::BtnKind::Neutral,
-                        true,
-                        p,
-                        accent,
-                    )
-                    .clicked();
-                    let (r2, _) = ui.allocate_exact_size(vec2(160.0, 34.0), Sense::hover());
-                    discard = uc::rect_button(
-                        ui,
-                        "really_discard",
-                        r2,
-                        "Discard",
-                        uc::BtnKind::Danger,
-                        true,
-                        p,
-                        accent,
-                    )
-                    .clicked();
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    for (i, choice) in choices.iter().enumerate() {
+                        let (label, kind) = match choice {
+                            PromptChoice::KeepEditing => ("Keep Editing", uc::BtnKind::Neutral),
+                            PromptChoice::Discard if prompt == TrimPrompt::Discard => {
+                                ("Discard", uc::BtnKind::Danger)
+                            }
+                            PromptChoice::Discard => ("Discard", uc::BtnKind::Neutral),
+                            PromptChoice::SaveUntrimmed => ("Save Untrimmed", uc::BtnKind::Accent),
+                        };
+                        let (r, _) = ui.allocate_exact_size(vec2(btn_w, 34.0), Sense::hover());
+                        if uc::rect_button(ui, ("trim_prompt", i), r, label, kind, true, p, accent)
+                            .clicked()
+                        {
+                            picked = Some(*choice);
+                        }
+                    }
                 });
-                (keep, discard)
+                picked
             });
-            let (keep, discard) = modal.inner;
-            if discard {
-                // RecordCancel semantics here: the shell drops the untrimmed recording.
-                shared.outbox.push(Command::RecordCancel);
-                status = SurfaceStatus::Close;
-            } else if keep || modal.should_close() {
-                self.confirm_discard = false;
+            let picked = modal.inner;
+            match picked {
+                Some(PromptChoice::Discard) if prompt == TrimPrompt::Close => {
+                    // Discard from the close prompt still goes through the usual confirm.
+                    self.prompt = Some(TrimPrompt::Discard);
+                }
+                Some(PromptChoice::Discard) => {
+                    // RecordCancel semantics here: the shell drops the untrimmed recording.
+                    shared.outbox.push(Command::RecordCancel);
+                    status = SurfaceStatus::Close;
+                }
+                Some(PromptChoice::SaveUntrimmed) => {
+                    self.prompt = None;
+                    if self.progress.is_none() {
+                        shared
+                            .outbox
+                            .push(untrimmed_done(self.dur, self.prefer_gif));
+                        self.submitted = true;
+                    }
+                }
+                Some(PromptChoice::KeepEditing) => self.prompt = None,
+                None if modal.should_close() => self.prompt = None,
+                None => {}
             }
         }
         status
@@ -1607,6 +1680,42 @@ mod tests {
         assert!((preview_time(Handle::Out, 3.2, 38.3, 10.0, 40.0) - 38.25).abs() < 1e-9);
         assert_eq!(preview_time(Handle::Playhead, 3.2, 38.3, 1.0, 40.0), 3.2);
         assert_eq!(preview_time(Handle::Playhead, 3.2, 38.3, 20.0, 40.0), 20.0);
+    }
+
+    #[test]
+    fn closing_the_trim_window_offers_save_untrimmed() {
+        assert_eq!(
+            prompt_choices(TrimPrompt::Close),
+            &[
+                PromptChoice::KeepEditing,
+                PromptChoice::Discard,
+                PromptChoice::SaveUntrimmed
+            ]
+        );
+        assert!(!prompt_choices(TrimPrompt::Discard).contains(&PromptChoice::SaveUntrimmed));
+        assert!(prompt_text(TrimPrompt::Close, true).1.contains("GIF"));
+        assert!(prompt_text(TrimPrompt::Close, false).1.contains("MP4"));
+        match untrimmed_done(12.5, true) {
+            Command::TrimDone {
+                start,
+                end,
+                as_gif,
+                as_mp4,
+            } => {
+                assert_eq!(start, Duration::ZERO);
+                assert_eq!(end, Duration::from_secs_f64(12.5));
+                assert!(as_gif && !as_mp4);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        assert!(matches!(
+            untrimmed_done(3.0, false),
+            Command::TrimDone {
+                as_gif: false,
+                as_mp4: true,
+                ..
+            }
+        ));
     }
 
     #[test]

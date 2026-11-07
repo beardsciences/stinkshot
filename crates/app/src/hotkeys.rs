@@ -12,58 +12,43 @@ use std::sync::{Mutex, OnceLock};
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
+use crate::actions::Action;
 use crate::state::Command;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Action {
-    Region,
-    Window,
-    Fullscreen,
-    Scrolling,
-    Ocr,
-    RepeatLast,
-    RecordMp4,
-    RecordGif,
-}
-
-impl Action {
-    fn command(self) -> Command {
-        match self {
-            Action::Region => Command::CaptureRegion,
-            Action::Window => Command::CaptureWindow,
-            Action::Fullscreen => Command::CaptureFullscreen,
-            Action::Scrolling => Command::CaptureScrolling,
-            Action::Ocr => Command::OcrRegion,
-            Action::RepeatLast => Command::RepeatLastRegion,
-            Action::RecordMp4 => Command::RecordMp4,
-            Action::RecordGif => Command::RecordGif,
-        }
-    }
-    fn label(self) -> &'static str {
-        match self {
-            Action::Region => "Region",
-            Action::Window => "Window",
-            Action::Fullscreen => "Full Screen",
-            Action::Scrolling => "Scrolling",
-            Action::Ocr => "Copy Text (OCR)",
-            Action::RepeatLast => "Repeat Last Region",
-            Action::RecordMp4 => "Record MP4",
-            Action::RecordGif => "Record GIF",
-        }
-    }
-}
-
 fn bindings(cfg: &stinkshot_core::config::Hotkeys) -> [(Action, &str); 8] {
-    [
-        (Action::Region, cfg.region.as_str()),
-        (Action::Window, cfg.window.as_str()),
-        (Action::Fullscreen, cfg.fullscreen.as_str()),
-        (Action::Scrolling, cfg.scrolling.as_str()),
-        (Action::Ocr, cfg.ocr.as_str()),
-        (Action::RepeatLast, cfg.repeat_last_region.as_str()),
-        (Action::RecordMp4, cfg.record_mp4.as_str()),
-        (Action::RecordGif, cfg.record_gif.as_str()),
-    ]
+    Action::ALL.map(|a| (a, a.hotkey(cfg).as_str()))
+}
+
+/// Hotkey problem texts. Each starts with the key's display form so Settings can attach it
+/// to the matching row (`settings_ui::error_for`), and each says what to do.
+fn parse_error_text(key: &str, action: Action) -> String {
+    format!(
+        "{key} ({}) is not a valid key combination. Record it again in Settings > Hotkeys.",
+        action.label()
+    )
+}
+
+fn duplicate_text(key: &str, action: Action, other: Action) -> String {
+    format!(
+        "{key} is set for both {} and {}; only {} works. Change one of them in Settings > Hotkeys.",
+        other.label(),
+        action.label(),
+        other.label()
+    )
+}
+
+fn register_error_text(key: &str, action: Action, in_use: bool) -> String {
+    if in_use {
+        format!(
+            "{key} ({}) is already used by another program. Pick a different key in Settings > Hotkeys.",
+            action.label()
+        )
+    } else {
+        format!(
+            "{key} ({}) could not be registered with Windows. Pick a different key in Settings > Hotkeys.",
+            action.label()
+        )
+    }
 }
 
 pub struct Hotkeys {
@@ -116,7 +101,11 @@ impl Hotkeys {
         let manager = match GlobalHotKeyManager::new() {
             Ok(m) => Some(m),
             Err(e) => {
-                errors.push(format!("Global hotkeys are unavailable: {e}"));
+                log::error!("global hotkey manager failed: {e}");
+                errors.push(
+                    "Global hotkeys are unavailable. Use the tray icon, or restart StinkShot."
+                        .to_string(),
+                );
                 None
             }
         };
@@ -146,9 +135,10 @@ impl Hotkeys {
                 Ok(_) => self.took_over_printscreen = want_takeover,
                 Err(e) => {
                     log::warn!("PrintScreen takeover change failed: {e:#}");
-                    errors.push(format!(
-                        "Could not change the Windows PrintScreen setting: {e}"
-                    ));
+                    errors.push(
+                        "Windows did not let StinkShot take over PrtSc, so it may still open the Snipping Tool. Turn off Take Over PrintScreen or try again."
+                            .to_string(),
+                    );
                 }
             }
         }
@@ -165,16 +155,13 @@ impl Hotkeys {
             let hotkey: HotKey = match text.parse() {
                 Ok(h) => h,
                 Err(e) => {
-                    errors.push(format!("{} ({}): {e}", display(text), action.label()));
+                    log::warn!("hotkey {text} for {} does not parse: {e}", action.label());
+                    errors.push(parse_error_text(&display(text), action));
                     continue;
                 }
             };
             if let Some(other) = claimed.get(&hotkey.id()) {
-                errors.push(format!(
-                    "{}: already used for {}",
-                    display(text),
-                    other.label()
-                ));
+                errors.push(duplicate_text(&display(text), action, *other));
                 continue;
             }
             match manager.register(hotkey) {
@@ -184,12 +171,8 @@ impl Hotkeys {
                 }
                 Err(e) => {
                     log::warn!("hotkey {text} for {} failed: {e}", action.label());
-                    errors.push(format!(
-                        "{}: {} ({})",
-                        display(text),
-                        describe_register_error(&e),
-                        action.label()
-                    ));
+                    let in_use = matches!(e, global_hotkey::Error::AlreadyRegistered(_));
+                    errors.push(register_error_text(&display(text), action, in_use));
                 }
             }
         }
@@ -269,15 +252,6 @@ impl Hotkeys {
             }
             self.took_over_printscreen = false;
         }
-    }
-}
-
-fn describe_register_error(e: &global_hotkey::Error) -> String {
-    match e {
-        global_hotkey::Error::AlreadyRegistered(_) => {
-            "already in use by another program".to_string()
-        }
-        other => other.to_string(),
     }
 }
 
@@ -386,6 +360,20 @@ mod tests {
         for (action, text) in bindings(&cfg) {
             let parsed: Result<HotKey, _> = text.parse();
             assert!(parsed.is_ok(), "{} ({text}) should parse", action.label());
+        }
+    }
+
+    #[test]
+    fn error_texts_lead_with_the_key_and_say_what_to_do() {
+        for t in [
+            parse_error_text("Ctrl+Q", Action::Window),
+            duplicate_text("Ctrl+Q", Action::Window, Action::Region),
+            register_error_text("Ctrl+Q", Action::Window, true),
+            register_error_text("Ctrl+Q", Action::Window, false),
+        ] {
+            assert!(t.starts_with("Ctrl+Q"), "{t}");
+            assert!(t.contains("Settings > Hotkeys"), "{t}");
+            assert!(t.contains("Window") || t.contains("Region"), "{t}");
         }
     }
 

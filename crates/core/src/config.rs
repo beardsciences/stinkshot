@@ -71,6 +71,9 @@ pub struct Capture {
     pub scroll_max_height: u32,
     pub scroll_delay_ms: u32,
     pub last_region: Option<crate::geom::PxRect>,
+    /// Window and full-screen captures open in the editor first. Off: they are finished
+    /// right away (clipboard, history, toast) and the toast's Edit opens the editor.
+    pub open_editor_after_capture: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -175,6 +178,7 @@ impl Default for Capture {
             scroll_max_height: 30000,
             scroll_delay_ms: 120,
             last_region: None,
+            open_editor_after_capture: false,
         }
     }
 }
@@ -499,6 +503,37 @@ mod tests {
         assert_eq!(cfg.hotkeys.region, "F9");
         assert_eq!(cfg.hotkeys.window, Hotkeys::default().window);
         assert_eq!(cfg.recording, Recording::default());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn old_config_without_editor_flag_loads_with_it_off() {
+        let d = tmp("editor_flag");
+        let p = d.join("config.toml");
+        // A config written before the flag existed: the [capture] table lacks it.
+        std::fs::write(
+            &p,
+            "[capture]
+include_cursor = true
+",
+        )
+        .unwrap();
+        let cfg = Config::load_from(&p).unwrap();
+        assert!(cfg.capture.include_cursor);
+        assert!(!cfg.capture.open_editor_after_capture);
+        std::fs::write(
+            &p,
+            "[capture]
+open_editor_after_capture = true
+",
+        )
+        .unwrap();
+        assert!(
+            Config::load_from(&p)
+                .unwrap()
+                .capture
+                .open_editor_after_capture
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 

@@ -312,6 +312,10 @@ impl Overlay {
             ];
         }
         // Esc steps back one level before it cancels; say which.
+        let help = ("?", "Shortcuts");
+        if self.help_open {
+            return vec![("F1", "Close Shortcuts"), ("Esc", "Close Shortcuts")];
+        }
         let esc = if self.annotating()
             && self.sel.is_some()
             && (self.selected.is_some() || self.tool != Tool::Select)
@@ -329,20 +333,23 @@ impl Overlay {
                 ("Wheel", "Parent or Child"),
                 ("Enter", "Select Highlight"),
                 esc,
+                help,
             ],
             (true, Kind::Annotate) => vec![
                 ("Enter", "Copy"),
-                ("Ctrl+S", "Save"),
-                ("Ctrl+Z", "Undo"),
+                (keys::SAVE.label, "Save"),
+                (keys::UNDO.label, "Undo"),
                 ("Del", "Delete"),
                 esc,
+                help,
             ],
             (true, _) => vec![
                 ("Enter", "Copy"),
-                ("Ctrl+S", "Save"),
-                ("Ctrl+Z", "Undo"),
+                (keys::SAVE.label, "Save"),
+                (keys::UNDO.label, "Undo"),
                 ("Arrows", "Nudge"),
                 esc,
+                help,
             ],
         }
     }
@@ -377,14 +384,37 @@ impl Overlay {
             return;
         }
 
+        // Loupe visibility decides where copied-color feedback goes.
+        let loupe_active = shared.config.capture.show_loupe
+            && inp.pos.is_some()
+            && !inp.over_ui
+            && self.edit.is_none()
+            && !self.help_open
+            && (self.sel.is_none()
+                || matches!(
+                    self.drag,
+                    Drag::Selecting { .. } | Drag::ResizeSel { .. } | Drag::MoveSel { .. }
+                ));
+        let hex_flash = self.hex_flash_text();
+        if hex_flash.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+        if self.notice.as_ref().is_some_and(|n| n.until.is_some()) {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
+
         // Hint bar.
-        let leading = if self.discard_prompt_active() {
+        let leading: Option<String> = if self.discard_prompt_active() {
             if let Some(t) = self.discard_armed {
                 ctx.request_repaint_after(DISCARD_WINDOW.saturating_sub(t.elapsed()));
             }
-            Some("Press Esc Again to Discard Your Annotations")
+            Some("Press Esc Again to Discard Your Annotations".into())
+        } else if let (Some((text, _)), false) = (&hex_flash, loupe_active) {
+            Some(text.clone())
+        } else if let Some(n) = self.notice_text() {
+            Some(n.to_string())
         } else if let Kind::Select(p) = self.kind {
-            Some(hover::purpose_label(p))
+            Some(hover::purpose_label(p).into())
         } else {
             None
         };
@@ -395,11 +425,38 @@ impl Overlay {
                 (ref_mon.x as f32 + ref_mon.w as f32 / 2.0) * k,
                 ref_mon.y as f32 * k + 18.0,
             ),
-            leading,
+            leading.as_deref(),
             &items,
             pal,
             accent,
         );
+
+        if self.help_open {
+            ui::shortcut_sheet(
+                ctx,
+                Pos2::new(
+                    (ref_mon.x as f32 + ref_mon.w as f32 / 2.0) * k,
+                    (ref_mon.y as f32 + ref_mon.h as f32 / 2.0) * k,
+                ),
+                &keys::sheet(),
+                pal,
+                accent,
+            );
+        }
+
+        // Which element the wheel picked (type, name, level), next to the highlight.
+        if self.sel.is_none()
+            && matches!(self.drag, Drag::None)
+            && !self.help_open
+            && let (Some(h), Some(label)) = (self.hover, &self.snap_label)
+        {
+            let pos_pt = if (h.y as f32) * k >= 40.0 {
+                Pos2::new(h.x as f32 * k, h.y as f32 * k - 34.0)
+            } else {
+                Pos2::new(h.x as f32 * k + 6.0, h.y as f32 * k + 6.0)
+            };
+            ui::element_chip(ctx, pos_pt, label, pal);
+        }
 
         let selecting = matches!(self.drag, Drag::Selecting { moved: true, .. });
         let preview = self.preview_rect(inp.shift);
@@ -499,15 +556,6 @@ impl Overlay {
         self.text_edit_ui(ctx, ppp, accent);
 
         // Loupe.
-        let loupe_active = shared.config.capture.show_loupe
-            && inp.pos.is_some()
-            && !inp.over_ui
-            && self.edit.is_none()
-            && (self.sel.is_none()
-                || matches!(
-                    self.drag,
-                    Drag::Selecting { .. } | Drag::ResizeSel { .. } | Drag::MoveSel { .. }
-                ));
         if loupe_active && let Some(p) = inp.pos {
             let cell = (p.0.floor() as i32, p.1.floor() as i32);
             let ptr = Pos2::new(p.0 * k, p.1 * k);
@@ -542,7 +590,9 @@ impl Overlay {
                 (ref_scale * 100.0).round() as i32,
                 &hex,
                 rgb,
+                hex_flash.as_ref().map(|(t, ok)| (t.as_str(), *ok)),
                 pal,
+                accent,
             );
         }
     }

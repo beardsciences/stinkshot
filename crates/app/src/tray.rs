@@ -1,7 +1,9 @@
 //! Tray icon + menu (docs/design/Tray.dc.html): header "StinkShot <version> · offline",
 //! capture modes with their hotkey labels, record MP4/GIF, History, Settings, Quit.
-//! Left click = region capture; double click = History. Icon generated in code (rounded
-//! accent square with a small white shutter mark) at 16/20/24/32 px for DPI.
+//! Left click = region capture, started on the button-up with no delay; double click =
+//! History (the overlay the first click opened is dropped, see `Command::TrayDoubleClick`
+//! and the overlay's own double-click check). Icon generated in code (rounded accent
+//! square with a small white shutter mark) at 16/20/24/32 px for DPI.
 
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
@@ -11,13 +13,12 @@ use stinkshot_core::config::{Config, parse_hex_color};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
+use crate::actions::Action;
 use crate::hotkeys::display;
 use crate::icon_gen;
 use crate::state::Command;
 use crate::update::Release;
 
-/// A single left click waits this long for a possible double click before it counts.
-const CLICK_DELAY: Duration = Duration::from_millis(300);
 /// The trailing button-up of a double click must not count as a new single click.
 const DOUBLE_CLICK_QUIET: Duration = Duration::from_millis(700);
 
@@ -28,9 +29,8 @@ enum Msg {
 }
 
 struct Entry {
-    label: &'static str,
+    action: Action,
     item: MenuItem,
-    hotkey: fn(&Config) -> &str,
 }
 
 pub struct Tray {
@@ -41,13 +41,10 @@ pub struct Tray {
     update_item: Option<MenuItem>,
     update_url: Option<String>,
     rx: Receiver<Msg>,
-    pending_click: Option<Instant>,
     last_double: Option<Instant>,
     accent: [u8; 3],
     dpi_size: u32,
 }
-
-type MenuSpec = (&'static str, &'static str, fn(&Config) -> &str);
 
 const ID_HISTORY: &str = "history";
 const ID_SETTINGS: &str = "settings";
@@ -81,37 +78,33 @@ fn make_icon(size: u32, accent: [u8; 3]) -> anyhow::Result<Icon> {
     Icon::from_rgba(icon_gen::render_rgba(size, accent), size, size).context("build tray icon")
 }
 
+/// True while `at` is less than `window` ago.
+fn recent(at: Option<Instant>, window: Duration) -> bool {
+    at.is_some_and(|t| t.elapsed() < window)
+}
+
 impl Tray {
     pub fn new(config: &Config) -> anyhow::Result<Tray> {
         let menu = Menu::new();
         let header = MenuItem::new(header_text(config), false, None);
         menu.append(&header).context("tray menu")?;
 
-        let spec: [MenuSpec; 8] = [
-            ("region", "Region", |c| &c.hotkeys.region),
-            ("window", "Window", |c| &c.hotkeys.window),
-            ("full", "Full Screen", |c| &c.hotkeys.fullscreen),
-            ("scroll", "Scrolling", |c| &c.hotkeys.scrolling),
-            ("ocr", "Copy Text (OCR)", |c| &c.hotkeys.ocr),
-            ("repeat", "Repeat Last Region", |c| {
-                &c.hotkeys.repeat_last_region
-            }),
-            ("rec_mp4", "Record MP4", |c| &c.hotkeys.record_mp4),
-            ("rec_gif", "Record GIF", |c| &c.hotkeys.record_gif),
-        ];
         let mut entries = Vec::new();
-        for (i, (id, label, hotkey)) in spec.into_iter().enumerate() {
-            if i == 6 {
+        let mut prev_recording = false;
+        for action in Action::ALL {
+            if action.is_recording() && !prev_recording {
                 menu.append(&PredefinedMenuItem::separator())
                     .context("tray menu")?;
             }
-            let item = MenuItem::with_id(id, entry_text(label, hotkey(config)), true, None);
+            prev_recording = action.is_recording();
+            let item = MenuItem::with_id(
+                action.id(),
+                entry_text(action.label(), action.hotkey(&config.hotkeys)),
+                true,
+                None,
+            );
             menu.append(&item).context("tray menu")?;
-            entries.push(Entry {
-                label,
-                item,
-                hotkey,
-            });
+            entries.push(Entry { action, item });
         }
         menu.append(&PredefinedMenuItem::separator())
             .context("tray menu")?;
@@ -181,7 +174,6 @@ impl Tray {
             update_item: None,
             update_url: None,
             rx,
-            pending_click: None,
             last_double: None,
             accent,
             dpi_size,
@@ -192,7 +184,10 @@ impl Tray {
     pub fn update_labels(&mut self, config: &Config) {
         self.header.set_text(header_text(config));
         for e in &self.entries {
-            e.item.set_text(entry_text(e.label, (e.hotkey)(config)));
+            e.item.set_text(entry_text(
+                e.action.label(),
+                e.action.hotkey(&config.hotkeys),
+            ));
         }
         let accent = accent_of(config);
         if accent != self.accent {
@@ -243,42 +238,26 @@ impl Tray {
                     }
                 }
                 Msg::LeftClick => {
-                    let recent_double = self
-                        .last_double
-                        .is_some_and(|t| t.elapsed() < DOUBLE_CLICK_QUIET);
-                    if !recent_double {
-                        self.pending_click = Some(Instant::now());
-                        crate::wake::wake_after(CLICK_DELAY + Duration::from_millis(30));
+                    // Act on the first click at once (PrtSc-fast). The button-up that ends a
+                    // double click is not a new click.
+                    if !recent(self.last_double, DOUBLE_CLICK_QUIET) {
+                        out.push(Command::TrayClick);
                     }
                 }
                 Msg::DoubleClick => {
-                    self.pending_click = None;
                     self.last_double = Some(Instant::now());
-                    out.push(Command::OpenHistory);
+                    out.push(Command::TrayDoubleClick);
                 }
-            }
-        }
-        if let Some(t) = self.pending_click {
-            if t.elapsed() >= CLICK_DELAY {
-                self.pending_click = None;
-                out.push(Command::CaptureRegion);
-            } else {
-                crate::wake::wake_after(CLICK_DELAY - t.elapsed() + Duration::from_millis(10));
             }
         }
         out
     }
 
     fn menu_command(&self, id: &str) -> Option<Command> {
+        if let Some(a) = Action::from_id(id) {
+            return Some(a.command());
+        }
         Some(match id {
-            "region" => Command::CaptureRegion,
-            "window" => Command::CaptureWindow,
-            "full" => Command::CaptureFullscreen,
-            "scroll" => Command::CaptureScrolling,
-            "ocr" => Command::OcrRegion,
-            "repeat" => Command::RepeatLastRegion,
-            "rec_mp4" => Command::RecordMp4,
-            "rec_gif" => Command::RecordGif,
             ID_HISTORY => Command::OpenHistory,
             ID_SETTINGS => Command::OpenSettings,
             ID_QUIT => Command::Quit,
@@ -300,6 +279,19 @@ mod tests {
             "Scrolling\tCtrl+Shift+S"
         );
         assert_eq!(entry_text("Window", ""), "Window");
+    }
+
+    #[test]
+    fn menu_ids_map_to_their_actions() {
+        let tray_ids = [
+            "region", "window", "full", "scroll", "ocr", "repeat", "rec_mp4",
+        ];
+        for id in tray_ids {
+            assert!(Action::from_id(id).is_some(), "{id}");
+        }
+        assert!(Action::from_id(ID_HISTORY).is_none());
+        assert!(!recent(None, DOUBLE_CLICK_QUIET));
+        assert!(recent(Some(Instant::now()), DOUBLE_CLICK_QUIET));
     }
 
     #[test]

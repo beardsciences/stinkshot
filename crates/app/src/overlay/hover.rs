@@ -17,16 +17,26 @@ pub fn pick_snap_rect(
     window: Option<PxRect>,
     monitor: Option<PxRect>,
 ) -> Option<(PxRect, usize)> {
-    let valid: Vec<PxRect> = rects
-        .iter()
-        .copied()
-        .filter(|r| r.contains(p) && r.w >= 4 && r.h >= 4)
+    let valid: Vec<PxRect> = valid_snap_indices(rects, p)
+        .into_iter()
+        .map(|i| rects[i])
         .collect();
     if !valid.is_empty() {
         let l = level.min(valid.len() - 1);
         return Some((valid[l], l));
     }
     window.filter(|r| !r.is_empty()).or(monitor).map(|r| (r, 0))
+}
+
+/// Indices into `rects` that `pick_snap_rect` considers (contain `p`, at least 4x4), in
+/// level order; `valid[level]` is the element a level refers to.
+pub fn valid_snap_indices(rects: &[PxRect], p: PxPoint) -> Vec<usize> {
+    rects
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.contains(p) && r.w >= 4 && r.h >= 4)
+        .map(|(i, _)| i)
+        .collect()
 }
 
 /// Next wheel level: scroll up (positive delta) goes outward (parent), down goes inward.
@@ -118,6 +128,25 @@ mod tests {
             pick_snap_rect(&tiny, 0, PxPoint { x: 1, y: 1 }, Some(win), None),
             Some((win, 0))
         );
+    }
+
+    #[test]
+    fn valid_indices_line_up_with_levels() {
+        let rects = [
+            PxRect::new(500, 500, 50, 20),
+            PxRect::new(10, 10, 50, 20),
+            PxRect::new(0, 0, 2, 2),
+            PxRect::new(0, 0, 800, 600),
+        ];
+        let p = PxPoint { x: 20, y: 15 };
+        let v = valid_snap_indices(&rects, p);
+        assert_eq!(v, vec![1, 3]);
+        for (level, idx) in v.iter().enumerate() {
+            assert_eq!(
+                pick_snap_rect(&rects, level, p, None, None),
+                Some((rects[*idx], level))
+            );
+        }
     }
 
     #[test]

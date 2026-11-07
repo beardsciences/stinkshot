@@ -540,7 +540,9 @@ pub fn hint_bar(
         });
 }
 
-/// Loupe info plate: coordinates, scale, hex swatch.
+/// Loupe info plate: coordinates, scale, hex swatch. `flash` = (text, ok) right after C:
+/// "Copied #CE9178" replaces the "C to Copy" hint for a moment.
+#[allow(clippy::too_many_arguments)]
 pub fn loupe_plate(
     ctx: &Context,
     pos: Pos2,
@@ -548,8 +550,11 @@ pub fn loupe_plate(
     scale_pct: i32,
     hex: &str,
     rgb: [u8; 3],
+    flash: Option<(&str, bool)>,
     pal: &Palette,
+    accent: Color32,
 ) {
+    let (dark, _) = theme::current(ctx);
     Area::new(Id::unique("stinkshot-ov-loupe-plate"))
         .order(Order::Tooltip)
         .fixed_pos(pos)
@@ -584,13 +589,129 @@ pub fn loupe_plate(
                                 2.0,
                                 Color32::from_rgb(rgb[0], rgb[1], rgb[2]),
                             );
-                            ui.label(RichText::new(hex).size(12.0).color(pal.text));
-                            ui.label(
-                                RichText::new("C to Copy")
-                                    .size(12.0)
-                                    .color(pal.text_tertiary),
-                            );
+                            match flash {
+                                Some((text, ok)) => {
+                                    let col = if ok {
+                                        theme::accent_fg(accent, dark)
+                                    } else {
+                                        pal.danger
+                                    };
+                                    ui.label(
+                                        RichText::new(text).font(theme::semibold(12.0)).color(col),
+                                    );
+                                }
+                                None => {
+                                    ui.label(RichText::new(hex).size(12.0).color(pal.text));
+                                    ui.label(
+                                        RichText::new("C to Copy")
+                                            .size(12.0)
+                                            .color(pal.text_tertiary),
+                                    );
+                                }
+                            }
                         });
+                    });
+                });
+        });
+}
+
+/// Element label chip next to the hover highlight (same look as the size chip).
+pub fn element_chip(ctx: &Context, pos: Pos2, text: &str, pal: &Palette) {
+    Area::new(Id::unique("stinkshot-ov-element"))
+        .order(Order::Foreground)
+        .fixed_pos(pos)
+        .interactable(false)
+        .show(ctx, |ui| {
+            Frame::NONE
+                .fill(pal.flyout.gamma_multiply(0.94))
+                .stroke(egui::Stroke::new(1.0, pal.stroke))
+                .corner_radius(6)
+                .inner_margin(Margin::symmetric(9, 4))
+                .show(ui, |ui| {
+                    ui.label(RichText::new(text).size(12.0).color(pal.text));
+                });
+        });
+}
+
+/// F1 / ? cheat sheet: every overlay shortcut in four columns, centered on the monitor.
+pub fn shortcut_sheet(
+    ctx: &Context,
+    center: Pos2,
+    groups: &super::keys::Sheet,
+    pal: &Palette,
+    accent: Color32,
+) {
+    const KEY_W: f32 = 92.0;
+    const COL_W: f32 = 236.0;
+    Area::new(Id::unique("stinkshot-ov-shortcuts"))
+        .order(Order::Tooltip)
+        .fixed_pos(center)
+        .pivot(Align2::CENTER_CENTER)
+        .interactable(false)
+        .show(ctx, |ui| {
+            Frame::NONE
+                .fill(pal.flyout.gamma_multiply(0.97))
+                .stroke(egui::Stroke::new(1.0, pal.stroke))
+                .corner_radius(10)
+                .inner_margin(Margin::symmetric(22, 18))
+                .shadow(egui::epaint::Shadow {
+                    offset: [0, 8],
+                    blur: 24,
+                    spread: 0,
+                    color: Color32::from_black_alpha(115),
+                })
+                .show(ui, |ui| {
+                    let accent_fg = theme::accent_fg(accent, theme::current(ui.ctx()).0);
+                    ui.spacing_mut().item_spacing = Vec2::new(0.0, 6.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("Keyboard Shortcuts")
+                                .font(theme::semibold(15.0))
+                                .color(pal.text),
+                        );
+                        ui.add_space(14.0);
+                        ui.label(
+                            RichText::new("F1, ? or Esc to Close")
+                                .size(12.0)
+                                .color(pal.text_tertiary),
+                        );
+                    });
+                    ui.add_space(8.0);
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing = Vec2::new(18.0, 0.0);
+                        for (title, rows) in groups {
+                            ui.vertical(|ui| {
+                                ui.set_width(COL_W);
+                                ui.spacing_mut().item_spacing = Vec2::new(0.0, 5.0);
+                                ui.label(
+                                    RichText::new(*title)
+                                        .font(theme::semibold(13.0))
+                                        .color(accent_fg),
+                                );
+                                ui.add_space(2.0);
+                                for (keys, what) in rows {
+                                    ui.horizontal(|ui| {
+                                        ui.spacing_mut().item_spacing.x = 8.0;
+                                        let (r, _) = ui.allocate_exact_size(
+                                            Vec2::new(KEY_W, 16.0),
+                                            Sense::hover(),
+                                        );
+                                        ui.painter().text(
+                                            r.left_center(),
+                                            Align2::LEFT_CENTER,
+                                            keys,
+                                            theme::semibold(12.0),
+                                            pal.text,
+                                        );
+                                        ui.label(
+                                            RichText::new(*what)
+                                                .size(12.0)
+                                                .color(pal.text_secondary),
+                                        );
+                                    });
+                                }
+                            });
+                        }
                     });
                 });
         });

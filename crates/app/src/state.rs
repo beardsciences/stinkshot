@@ -86,6 +86,10 @@ pub enum Command {
     Quit,
     /// Open a web page (the update release page) in the default browser.
     OpenUrl(String),
+    /// Tray icon single left click: region capture, started immediately.
+    TrayClick,
+    /// Tray icon double click: History. Drops the overlay the first click just opened.
+    TrayDoubleClick,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,6 +116,9 @@ pub enum FinishAction {
     Pin,
     /// Copy recognized text instead of the image.
     CopyText,
+    /// Finished without the editor (window / full screen with the editor setting off):
+    /// clipboard per `general.copy_to_clipboard`, history, toast whose Edit opens the editor.
+    Quick,
 }
 
 #[derive(Debug)]
@@ -154,6 +161,12 @@ pub struct OverlayRequest {
     /// Z-ordered window snapshot taken before the overlay appeared.
     pub windows: Vec<WinInfo>,
     pub last_region: Option<PxRect>,
+    /// Short inline hint for the hint bar until a selection exists (e.g. "No Region
+    /// Remembered Yet"), instead of a toast over the frozen screen.
+    pub notice: Option<&'static str>,
+    /// Opened by a tray icon click: a second click on the icon within the double-click
+    /// time means "History", not "select the taskbar".
+    pub from_tray_click: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -8,8 +8,10 @@
 //!    a `Surface` shown as an immediate viewport by `shell::Shell`.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod actions;
 mod capture_ops;
 mod cli;
+mod errors;
 mod filedialog;
 mod history_ui;
 mod hotkeys;
