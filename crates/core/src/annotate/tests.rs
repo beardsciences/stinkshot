@@ -114,6 +114,9 @@ fn doc_json_round_trip_all_kinds() {
         ShapeKind::Arrow {
             from: pt(1.0, 2.0),
             to: pt(3.0, 4.0),
+            ctrl: None,
+            double: false,
+            head: ArrowHead::Notched,
         },
         ShapeKind::Line {
             from: pt(1.0, 2.0),
@@ -135,6 +138,7 @@ fn doc_json_round_trip_all_kinds() {
             text: "hi\nthere".into(),
             size: 18.0,
             background: Some([1, 2, 3, 255]),
+            bold: false,
         },
         ShapeKind::Step {
             center: pt(5.0, 5.0),
@@ -267,6 +271,9 @@ fn hit_arrow_head_counts() {
         ShapeKind::Arrow {
             from: pt(10.0, 100.0),
             to: pt(150.0, 100.0),
+            ctrl: None,
+            double: false,
+            head: ArrowHead::Notched,
         },
         style(RED, 4.0),
     );
@@ -314,6 +321,7 @@ fn hit_step_text_magnifier_callout_spotlight() {
             text: "Hello".into(),
             size: 20.0,
             background: None,
+            bold: false,
         },
         Style::default(),
     );
@@ -396,6 +404,9 @@ fn bounds_include_stroke_and_head() {
         ShapeKind::Arrow {
             from: pt(10.0, 100.0),
             to: pt(110.0, 100.0),
+            ctrl: None,
+            double: false,
+            head: ArrowHead::Notched,
         },
         style(RED, 4.0),
     );
@@ -429,6 +440,7 @@ fn bounds_include_stroke_and_head() {
             text: "Hello".into(),
             size: 20.0,
             background: None,
+            bold: false,
         },
         Style::default(),
     );
@@ -441,6 +453,7 @@ fn bounds_include_stroke_and_head() {
         text: "Hello".into(),
         size: 20.0,
         background: Some(WHITE),
+        bold: false,
     };
     let b2 = shape_bounds(d.get(text).unwrap(), &f);
     assert!(b2.w > b.w && b2.x < b.x);
@@ -506,15 +519,390 @@ fn translate_moves_everything_but_magnifier_source() {
     let mut k = ShapeKind::Arrow {
         from: pt(1.0, 1.0),
         to: pt(2.0, 2.0),
+        ctrl: None,
+        double: false,
+        head: ArrowHead::Notched,
     };
     translate_shape(&mut k, -1.0, -1.0);
     assert_eq!(
         k,
         ShapeKind::Arrow {
             from: pt(0.0, 0.0),
-            to: pt(1.0, 1.0)
+            to: pt(1.0, 1.0),
+            ctrl: None,
+            double: false,
+            head: ArrowHead::Notched,
         }
     );
+    // A curved arrow's control point moves with it.
+    let mut k = ShapeKind::Arrow {
+        from: pt(1.0, 1.0),
+        to: pt(9.0, 1.0),
+        ctrl: Some(pt(5.0, 8.0)),
+        double: true,
+        head: ArrowHead::Open,
+    };
+    translate_shape(&mut k, 2.0, 3.0);
+    assert!(matches!(k, ShapeKind::Arrow { ctrl: Some(c), .. } if c == pt(7.0, 11.0)));
+}
+
+// ----- additive fields: curved / double / head style arrows, bold text --------------------
+
+#[test]
+fn old_sidecar_json_loads_with_defaults() {
+    // A doc written before arrows could curve and text could be bold.
+    let json = r#"{
+        "version": 1, "base_width": 100, "base_height": 80, "next_id": 3,
+        "shapes": [
+            {"id": 1, "kind": {"type": "arrow", "from": {"x": 1.0, "y": 2.0},
+                "to": {"x": 50.0, "y": 60.0}},
+             "style": {"color": [255, 0, 0, 255], "width": 4.0, "fill": null, "shadow": true}},
+            {"id": 2, "kind": {"type": "text", "pos": {"x": 5.0, "y": 5.0}, "text": "Hi",
+                "size": 20.0, "background": null},
+             "style": {"color": [255, 0, 0, 255], "width": 4.0, "fill": null, "shadow": true}}
+        ]
+    }"#;
+    let d = Doc::from_json(json).unwrap();
+    assert_eq!(
+        d.shapes[0].kind,
+        ShapeKind::Arrow {
+            from: pt(1.0, 2.0),
+            to: pt(50.0, 60.0),
+            ctrl: None,
+            double: false,
+            head: ArrowHead::Notched,
+        }
+    );
+    assert!(matches!(
+        d.shapes[1].kind,
+        ShapeKind::Text { bold: false, .. }
+    ));
+    // Defaults are not written back, so straight arrows stay readable by older builds.
+    let out = d.to_json().unwrap();
+    assert!(!out.contains("ctrl") && !out.contains("double") && !out.contains("bold"));
+    assert!(!out.contains("\"head\""));
+}
+
+#[test]
+fn new_arrow_and_text_fields_round_trip() {
+    let mut d = Doc::new(200, 200);
+    d.add(
+        ShapeKind::Arrow {
+            from: pt(10.0, 10.0),
+            to: pt(150.0, 40.0),
+            ctrl: Some(pt(80.0, 120.0)),
+            double: true,
+            head: ArrowHead::Triangle,
+        },
+        style(RED, 4.0),
+    );
+    d.add(
+        ShapeKind::Text {
+            pos: pt(1.0, 1.0),
+            text: "Bold".into(),
+            size: 22.0,
+            background: Some([0, 0, 0, 255]),
+            bold: true,
+        },
+        style(RED, 4.0),
+    );
+    let back = Doc::from_json(&d.to_json().unwrap()).unwrap();
+    assert_eq!(back, d);
+}
+
+#[test]
+fn curve_helpers() {
+    let (a, b) = (pt(0.0, 0.0), pt(100.0, 0.0));
+    // The control point that passes through (50, 40) at t = 0.5.
+    let c = ctrl_through(a, b, pt(50.0, 40.0));
+    assert_eq!(c, pt(50.0, 80.0));
+    assert_eq!(arrow_mid(a, b, Some(c)), pt(50.0, 40.0));
+    assert_eq!(arrow_mid(a, b, None), pt(50.0, 0.0));
+    let q = quad_points(a, c, b, 4);
+    assert_eq!(q.len(), 5);
+    assert_eq!(q[0], a);
+    assert_eq!(q[4], b);
+    assert_eq!(q[2], pt(50.0, 40.0));
+    // Moving an end keeps the bend: doubling the chord doubles the bulge.
+    let c2 = follow_ctrl(a, b, a, pt(200.0, 0.0), c);
+    assert!((c2.x - 100.0).abs() < 1e-3 && (c2.y - 160.0).abs() < 1e-3);
+    // Rotating the chord 90 degrees rotates the control point with it.
+    let c3 = follow_ctrl(a, b, a, pt(0.0, 100.0), c);
+    assert!((c3.x + 80.0).abs() < 1e-3 && (c3.y - 50.0).abs() < 1e-3);
+}
+
+#[test]
+fn curved_arrow_head_follows_the_end_tangent() {
+    // Curve bulging down: the end tangent (to - ctrl) points up and to the right.
+    let parts = arrow_parts(
+        pt(0.0, 0.0),
+        pt(200.0, 0.0),
+        Some(pt(100.0, 200.0)),
+        4.0,
+        false,
+        ArrowHead::Notched,
+    )
+    .unwrap();
+    let g = parts.heads[0];
+    let (dx, dy) = (g.tip.x - g.notch.x, g.tip.y - g.notch.y);
+    let l = (dx * dx + dy * dy).sqrt();
+    // Tangent direction (100, -200) normalised.
+    assert!((dx / l - 0.447).abs() < 0.01 && (dy / l + 0.894).abs() < 0.01);
+    // The shaft ends at the notch, not at the tip.
+    let end = *parts.shaft.last().unwrap();
+    assert!(((end.x - g.notch.x).powi(2) + (end.y - g.notch.y).powi(2)).sqrt() < 1.0);
+    // Double heads: one at each end, the shaft trimmed at both.
+    let parts = arrow_parts(
+        pt(0.0, 0.0),
+        pt(200.0, 0.0),
+        None,
+        4.0,
+        true,
+        ArrowHead::Triangle,
+    )
+    .unwrap();
+    assert_eq!(parts.heads.len(), 2);
+    assert_eq!(parts.heads[1].tip, pt(0.0, 0.0));
+    assert!(parts.shaft[0].x > 5.0 && parts.shaft.last().unwrap().x < 195.0);
+}
+
+#[test]
+fn curved_arrow_hits_and_bounds_follow_the_curve() {
+    let mut d = Doc::new(300, 300);
+    let id = d.add(
+        ShapeKind::Arrow {
+            from: pt(20.0, 20.0),
+            to: pt(220.0, 20.0),
+            ctrl: Some(pt(120.0, 220.0)),
+            double: false,
+            head: ArrowHead::Notched,
+        },
+        style(RED, 4.0),
+    );
+    // The curve passes through (120, 120); the chord at y = 20 is empty.
+    assert_eq!(d.hit_test(pt(120.0, 120.0), 2.0), Some(id));
+    assert_eq!(d.hit_test(pt(120.0, 20.0), 2.0), None);
+    let b = shape_bounds(d.get(id).unwrap(), &test_fonts());
+    assert!(b.y + b.h >= 120.0 && b.y + b.h < 130.0, "{b:?}");
+}
+
+#[test]
+fn head_styles_and_double_heads_render() {
+    let f = test_fonts();
+    for head in ArrowHead::ALL {
+        let mut d = Doc::new(240, 120);
+        d.add(
+            ShapeKind::Arrow {
+                from: pt(20.0, 60.0),
+                to: pt(220.0, 60.0),
+                ctrl: None,
+                double: true,
+                head,
+            },
+            style(RED, 4.0),
+        );
+        let out = render(&white(240, 120), &d, &f);
+        // Both ends get a head wider than the 4 px shaft.
+        for x in [34, 206] {
+            let tall = (0..120).filter(|y| is_reddish(out.pixel(x, *y))).count();
+            assert!(tall >= 8, "{head:?} at x={x}: {tall}");
+        }
+        let mid = (0..120).filter(|y| is_reddish(out.pixel(120, *y))).count();
+        assert!(mid <= 6, "{head:?} shaft: {mid}");
+    }
+}
+
+#[test]
+fn bold_text_is_wider_and_dark_text_gets_a_light_halo() {
+    let f = test_fonts();
+    let text = |bold: bool, color: [u8; 4]| Shape {
+        id: 1,
+        kind: ShapeKind::Text {
+            pos: pt(10.0, 10.0),
+            text: "Wide Words".into(),
+            size: 30.0,
+            background: None,
+            bold,
+        },
+        style: Style {
+            shadow: true,
+            ..style(color, 4.0)
+        },
+    };
+    let r = shape_bounds(&text(false, RED), &f);
+    let b = shape_bounds(&text(true, RED), &f);
+    assert!(b.w > r.w, "{} vs {}", b.w, r.w);
+    // Black text on black: the halo makes some pixels light.
+    let mut d = Doc::new(300, 80);
+    d.shapes.push(text(false, [0, 0, 0, 255]));
+    let out = render(&Rgba::filled(300, 80, [0, 0, 0, 255]), &d, &f);
+    let light = count_where(&out, PxRect::new(0, 0, 300, 80), |p| p[0] > 60);
+    assert!(light > 50, "{light}");
+}
+
+#[test]
+fn text_layout_matches_lines_and_wraps_callouts() {
+    let f = test_fonts();
+    let (size, bold, lines) = text_layout(
+        &f,
+        &ShapeKind::Text {
+            pos: pt(5.0, 7.0),
+            text: "ab\ncde".into(),
+            size: 20.0,
+            background: None,
+            bold: true,
+        },
+    )
+    .unwrap();
+    assert_eq!((size, bold), (20.0, true));
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].range, 0..2);
+    assert_eq!(lines[1].range, 3..6);
+    assert_eq!(lines[1].origin, pt(5.0, 7.0 + 25.0));
+    let kind = ShapeKind::Callout {
+        rect: RectF::new(0.0, 0.0, 120.0, 200.0),
+        tail: pt(0.0, 260.0),
+        text: "one two three four five six seven".into(),
+        size: 16.0,
+    };
+    let (_, _, lines) = text_layout(&f, &kind).unwrap();
+    assert!(lines.len() > 1);
+    let ShapeKind::Callout { text, .. } = &kind else {
+        unreachable!()
+    };
+    // Lines cover the words in order; breaks consume exactly one space.
+    let joined: Vec<&str> = lines.iter().map(|l| &text[l.range.clone()]).collect();
+    assert_eq!(joined.join(" "), *text);
+    // Every line fits inside the padded bubble.
+    for l in &lines {
+        assert!(f.line_width(&text[l.range.clone()], 16.0, false) <= 120.0 - 2.0 * 16.0 * 0.7);
+        assert!(l.origin.x > 0.0);
+    }
+}
+
+#[test]
+fn region_render_matches_full_render() {
+    let f = test_fonts();
+    let mut base = Rgba::new(320, 240);
+    for (i, p) in base.data.chunks_exact_mut(4).enumerate() {
+        let (x, y) = ((i % 320) as u8, (i / 320) as u8);
+        p.copy_from_slice(&[x, y, x ^ y, 255]);
+    }
+    let mut d = Doc::new(320, 240);
+    d.add(
+        ShapeKind::Blur {
+            rect: RectF::new(20.0, 20.0, 80.0, 50.0),
+            radius: 6.0,
+        },
+        style(RED, 4.0),
+    );
+    d.add(
+        ShapeKind::Arrow {
+            from: pt(30.0, 200.0),
+            to: pt(290.0, 40.0),
+            ctrl: Some(pt(250.0, 230.0)),
+            double: true,
+            head: ArrowHead::Notched,
+        },
+        style(RED, 5.0),
+    );
+    d.add(
+        ShapeKind::Text {
+            pos: pt(120.0, 100.0),
+            text: "Region\nrender".into(),
+            size: 24.0,
+            background: None,
+            bold: true,
+        },
+        style([30, 200, 255, 255], 4.0),
+    );
+    d.add(
+        ShapeKind::Magnifier {
+            source: RectF::new(30.0, 30.0, 40.0, 30.0),
+            dest: RectF::new(200.0, 150.0, 90.0, 70.0),
+            circular: true,
+        },
+        style(RED, 4.0),
+    );
+    d.add(
+        ShapeKind::Spotlight {
+            rect: RectF::new(100.0, 80.0, 120.0, 90.0),
+            dim: 0.5,
+        },
+        style(RED, 4.0),
+    );
+    d.add(
+        ShapeKind::Redact {
+            rect: RectF::new(250.0, 10.0, 40.0, 20.0),
+        },
+        style([0, 0, 0, 255], 4.0),
+    );
+    let full = render(&base, &d, &f);
+    let work = bake_destructive(&base, &d);
+    for r in [
+        PxRect::new(0, 0, 320, 240),
+        PxRect::new(110, 90, 60, 50),
+        PxRect::new(190, 140, 120, 90),
+        PxRect::new(-20, -20, 70, 70),
+        PxRect::new(300, 200, 100, 100),
+    ] {
+        let part = render_region(&work, &d, &f, r);
+        let clip = r.intersect(&base.bounds()).unwrap();
+        let want = full.crop(clip);
+        assert_eq!((part.width, part.height), (want.width, want.height));
+        let worst = part
+            .data
+            .iter()
+            .zip(&want.data)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
+        assert!(worst <= 2, "{r:?}: max channel difference {worst}");
+    }
+}
+
+#[test]
+fn shape_patch_matches_the_full_render() {
+    let f = test_fonts();
+    let shape = Shape {
+        id: 1,
+        kind: ShapeKind::Text {
+            pos: pt(40.3, 30.0),
+            text: "Patch".into(),
+            size: 28.0,
+            background: Some([20, 20, 20, 255]),
+            bold: false,
+        },
+        style: style([255, 255, 255, 255], 4.0),
+    };
+    let (r, patch) = render_shape_patch(&shape, &f).unwrap();
+    assert!(r.x <= 30 && r.y <= 25 && r.right() >= 120);
+    // Opaque pill pixels in the patch equal the full render over white.
+    let mut d = Doc::new(300, 120);
+    d.shapes.push(shape);
+    let full = render(&white(300, 120), &d, &f);
+    let mut same = 0;
+    for y in 0..patch.height {
+        for x in 0..patch.width {
+            let p = patch.pixel(x, y);
+            if p[3] == 255 {
+                let q = full.pixel(x + r.x as u32, y + r.y as u32);
+                assert!(p.iter().zip(q.iter()).all(|(a, b)| a.abs_diff(*b) <= 1));
+                same += 1;
+            }
+        }
+    }
+    assert!(same > 200);
+    // Destructive shapes have no patch.
+    let blur = Shape {
+        id: 2,
+        kind: ShapeKind::Blur {
+            rect: RectF::new(0.0, 0.0, 10.0, 10.0),
+            radius: 4.0,
+        },
+        style: style(RED, 4.0),
+    };
+    assert!(render_shape_patch(&blur, &f).is_none());
 }
 
 #[test]
@@ -601,6 +989,9 @@ fn render_arrow_has_head_wider_than_shaft() {
         ShapeKind::Arrow {
             from: pt(20.0, 50.0),
             to: pt(170.0, 50.0),
+            ctrl: None,
+            double: false,
+            head: ArrowHead::Notched,
         },
         style(RED, 4.0),
     );
@@ -625,6 +1016,9 @@ fn render_arrow_head_scales_with_width() {
             ShapeKind::Arrow {
                 from: pt(20.0, 100.0),
                 to: pt(250.0, 100.0),
+                ctrl: None,
+                double: false,
+                head: ArrowHead::Notched,
             },
             style(RED, w),
         );
@@ -647,6 +1041,9 @@ fn render_degenerate_shapes_do_not_panic() {
         ShapeKind::Arrow {
             from: pt(10.0, 10.0),
             to: pt(10.0, 10.0),
+            ctrl: None,
+            double: false,
+            head: ArrowHead::Notched,
         },
         s.clone(),
     );
@@ -689,6 +1086,7 @@ fn render_degenerate_shapes_do_not_panic() {
             text: String::new(),
             size: 10.0,
             background: Some(RED),
+            bold: false,
         },
         s.clone(),
     );
@@ -868,6 +1266,7 @@ fn render_text_draws_inside_its_bounds_only() {
             text: "Hello".into(),
             size: 28.0,
             background: None,
+            bold: false,
         },
         style([0, 0, 0, 255], 4.0),
     );
@@ -887,7 +1286,7 @@ fn render_text_draws_inside_its_bounds_only() {
 fn render_text_multiline_and_shadow() {
     let f = test_fonts();
     let base = white(160, 120);
-    let mk = |shadow: bool| {
+    let mk = |shadow: bool, color: [u8; 4]| {
         let mut d = Doc::new(160, 120);
         d.add(
             ShapeKind::Text {
@@ -895,19 +1294,21 @@ fn render_text_multiline_and_shadow() {
                 text: "AB\nCD".into(),
                 size: 30.0,
                 background: None,
+                bold: false,
             },
             Style {
                 shadow,
-                ..style([0, 0, 0, 255], 4.0)
+                ..style(color, 4.0)
             },
         );
         render(&base, &d, &f)
     };
-    let plain = mk(false);
-    let shadowed = mk(true);
+    let plain = mk(false, [0, 0, 0, 255]);
     // Second line is drawn lower: ink exists in rows of line 2 (y ~ 47..85).
     assert!(count_where(&plain, PxRect::new(0, 50, 160, 40), |p| p[0] < 100) > 30);
-    // Shadow adds non-white pixels that the plain version lacks, but the same dark core.
+    // Shadow adds dark pixels under light text that the plain version lacks.
+    let light = [255, 200, 0, 255];
+    let (plain, shadowed) = (mk(false, light), mk(true, light));
     assert!(count_changed(&plain, &shadowed, PxRect::new(0, 0, 160, 120)) > 20);
 }
 
@@ -922,6 +1323,7 @@ fn render_text_background_pill() {
             text: "Hi".into(),
             size: 24.0,
             background: Some([20, 20, 120, 255]),
+            bold: false,
         },
         style([255, 255, 255, 255], 4.0),
     );
@@ -1512,6 +1914,7 @@ fn sidecar_round_trip_and_layout() {
             text: "ünï\ncode".into(),
             size: 12.0,
             background: None,
+            bold: false,
         },
         Style::default(),
     );
@@ -1674,6 +2077,9 @@ fn showcase() {
         ShapeKind::Arrow {
             from: pt(40.0, 60.0),
             to: pt(200.0, 120.0),
+            ctrl: None,
+            double: false,
+            head: ArrowHead::Notched,
         },
         orange.clone(),
     );
@@ -1681,6 +2087,9 @@ fn showcase() {
         ShapeKind::Arrow {
             from: pt(40.0, 160.0),
             to: pt(220.0, 160.0),
+            ctrl: None,
+            double: false,
+            head: ArrowHead::Notched,
         },
         Style {
             width: 9.0,
@@ -1739,6 +2148,7 @@ fn showcase() {
             text: "Highlighted text".into(),
             size: 22.0,
             background: None,
+            bold: false,
         },
         Style {
             color: [20, 20, 20, 255],
@@ -1751,6 +2161,7 @@ fn showcase() {
             text: "Label with pill".into(),
             size: 22.0,
             background: Some([17, 17, 17, 230]),
+            bold: false,
         },
         Style {
             color: [255, 255, 255, 255],

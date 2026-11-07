@@ -16,7 +16,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 use crate::fonts::Fonts;
-use crate::geom::{PtF, RectF};
+use crate::geom::{PtF, PxRect, RectF};
 use crate::image::Rgba;
 
 mod render;
@@ -45,12 +45,46 @@ impl Default for Style {
     }
 }
 
+/// Arrow head look. Older sidecars have no `head` field and load as `Notched`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArrowHead {
+    /// Filled head with a swept-back notch (the original look).
+    #[default]
+    Notched,
+    /// Filled plain triangle.
+    Triangle,
+    /// Two stroked lines (chevron), no fill.
+    Open,
+}
+
+impl ArrowHead {
+    pub const ALL: [ArrowHead; 3] = [ArrowHead::Notched, ArrowHead::Triangle, ArrowHead::Open];
+
+    fn is_default(&self) -> bool {
+        *self == ArrowHead::Notched
+    }
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ShapeKind {
     Arrow {
         from: PtF,
         to: PtF,
+        /// Quadratic control point of a curved arrow; None = straight. The head follows the
+        /// curve's tangent at `to`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ctrl: Option<PtF>,
+        /// A head at `from` as well.
+        #[serde(default, skip_serializing_if = "is_false")]
+        double: bool,
+        #[serde(default, skip_serializing_if = "ArrowHead::is_default")]
+        head: ArrowHead,
     },
     Line {
         from: PtF,
@@ -77,6 +111,9 @@ pub enum ShapeKind {
         text: String,
         size: f32,
         background: Option<[u8; 4]>,
+        /// Bold face. Older sidecars load as regular.
+        #[serde(default, skip_serializing_if = "is_false")]
+        bold: bool,
     },
     /// Numbered circle; `n` assigned at creation and renumbered by `Doc::renumber_steps`.
     Step {
@@ -148,8 +185,8 @@ pub(crate) const CALLOUT_PAD: f32 = 0.7;
 pub(crate) const HIGHLIGHT_ALPHA: f32 = 0.4;
 
 /// Arrow head geometry derived from the stroke width.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ArrowGeom {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ArrowGeom {
     pub tip: PtF,
     /// Where the shaft ends (the notch at the back of the head).
     pub notch: PtF,
@@ -158,24 +195,324 @@ pub(crate) struct ArrowGeom {
     pub head_half_width: f32,
 }
 
-pub(crate) fn arrow_geom(from: PtF, to: PtF, width: f32) -> Option<ArrowGeom> {
-    let (dx, dy) = (to.x - from.x, to.y - from.y);
-    let len = (dx * dx + dy * dy).sqrt();
-    if !len.is_finite() || len < 0.5 {
+/// Head with its tip at `tip`, pointing along the unit vector `dir`; `avail` limits the
+/// head length (the shaft length).
+fn head_geom(
+    tip: PtF,
+    dir: (f32, f32),
+    avail: f32,
+    width: f32,
+    style: ArrowHead,
+) -> Option<ArrowGeom> {
+    if !avail.is_finite() || avail < 0.5 || !dir.0.is_finite() || !dir.1.is_finite() {
         return None;
     }
-    let (ux, uy) = (dx / len, dy / len);
+    let (ux, uy) = dir;
     let (px, py) = (-uy, ux);
-    let head_len = (width.max(1.0) * 3.2 + 8.0).min(len);
+    let head_len = (width.max(1.0) * 3.2 + 8.0).min(avail);
     let half = head_len * 0.46;
-    let back = |t: f32, s: f32| PtF::new(to.x - ux * t + px * s, to.y - uy * t + py * s);
+    let back = |t: f32, s: f32| PtF::new(tip.x - ux * t + px * s, tip.y - uy * t + py * s);
+    let notch = match style {
+        ArrowHead::Notched => back(head_len * 0.76, 0.0),
+        ArrowHead::Triangle => back(head_len, 0.0),
+        // The shaft runs into the chevron's point; stop half a stroke short so the round cap
+        // does not poke past the tip.
+        ArrowHead::Open => back((width * 0.5).min(head_len), 0.0),
+    };
     Some(ArrowGeom {
-        tip: to,
-        notch: back(head_len * 0.76, 0.0),
+        tip,
+        notch,
         left: back(head_len, half),
         right: back(head_len, -half),
         head_half_width: half,
     })
+}
+
+/// Samples of the quadratic Bezier `a` -> `c` -> `b` (n segments, n + 1 points).
+pub fn quad_points(a: PtF, c: PtF, b: PtF, n: usize) -> Vec<PtF> {
+    let n = n.max(1);
+    (0..=n)
+        .map(|i| {
+            let t = i as f32 / n as f32;
+            let u = 1.0 - t;
+            PtF::new(
+                u * u * a.x + 2.0 * u * t * c.x + t * t * b.x,
+                u * u * a.y + 2.0 * u * t * c.y + t * t * b.y,
+            )
+        })
+        .collect()
+}
+
+/// The point a curved arrow passes through at its middle (t = 0.5), or the chord midpoint.
+pub fn arrow_mid(from: PtF, to: PtF, ctrl: Option<PtF>) -> PtF {
+    match ctrl {
+        Some(c) => PtF::new(
+            (from.x + 2.0 * c.x + to.x) / 4.0,
+            (from.y + 2.0 * c.y + to.y) / 4.0,
+        ),
+        None => PtF::new((from.x + to.x) / 2.0, (from.y + to.y) / 2.0),
+    }
+}
+
+/// The control point that makes the curve pass through `mid` at t = 0.5.
+pub fn ctrl_through(from: PtF, to: PtF, mid: PtF) -> PtF {
+    PtF::new(
+        2.0 * mid.x - (from.x + to.x) / 2.0,
+        2.0 * mid.y - (from.y + to.y) / 2.0,
+    )
+}
+
+/// Centre line of an arrow: two points when straight, a sampled curve when curved.
+pub fn arrow_centerline(from: PtF, to: PtF, ctrl: Option<PtF>) -> Vec<PtF> {
+    match ctrl {
+        Some(c) => quad_points(from, c, to, 48),
+        None => vec![from, to],
+    }
+}
+
+fn polyline_len(pts: &[PtF]) -> f32 {
+    pts.windows(2)
+        .map(|w| ((w[1].x - w[0].x).powi(2) + (w[1].y - w[0].y).powi(2)).sqrt())
+        .sum()
+}
+
+/// Cut `d` of arc length off the end of a polyline.
+fn trim_end(pts: &mut Vec<PtF>, mut d: f32) {
+    while pts.len() >= 2 && d > 0.0 {
+        let n = pts.len();
+        let (a, b) = (pts[n - 2], pts[n - 1]);
+        let seg = ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt();
+        if seg > d {
+            let t = (seg - d) / seg;
+            pts[n - 1] = PtF::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+            return;
+        }
+        d -= seg;
+        pts.pop();
+    }
+}
+
+fn unit(dx: f32, dy: f32) -> Option<(f32, f32)> {
+    let l = (dx * dx + dy * dy).sqrt();
+    (l.is_finite() && l > 1e-4).then(|| (dx / l, dy / l))
+}
+
+/// Everything needed to draw an arrow: the shaft polyline (already shortened under the
+/// heads) and one or two heads. Shared by the renderer, hit testing and the editor preview.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ArrowParts {
+    pub shaft: Vec<PtF>,
+    pub heads: Vec<ArrowGeom>,
+    pub style: ArrowHead,
+}
+
+pub fn arrow_parts(
+    from: PtF,
+    to: PtF,
+    ctrl: Option<PtF>,
+    width: f32,
+    double: bool,
+    style: ArrowHead,
+) -> Option<ArrowParts> {
+    let line = arrow_centerline(from, to, ctrl);
+    let len = polyline_len(&line);
+    if !len.is_finite() || len < 0.5 {
+        return None;
+    }
+    let chord = unit(to.x - from.x, to.y - from.y);
+    // Tangent at the end of a quadratic is (to - ctrl); fall back to the chord when the
+    // control point sits on an end.
+    let end_dir = ctrl.and_then(|c| unit(to.x - c.x, to.y - c.y)).or(chord)?;
+    let avail = if double { len * 0.5 } else { len };
+    let end = head_geom(to, end_dir, avail, width, style)?;
+    let mut shaft = line;
+    trim_end(&mut shaft, dist(end.tip, end.notch));
+    let mut heads = vec![end];
+    if double {
+        let start_dir = ctrl
+            .and_then(|c| unit(from.x - c.x, from.y - c.y))
+            .or(chord.map(|(x, y)| (-x, -y)))?;
+        if let Some(start) = head_geom(from, start_dir, avail, width, style) {
+            shaft.reverse();
+            trim_end(&mut shaft, dist(start.tip, start.notch));
+            shaft.reverse();
+            heads.push(start);
+        }
+    }
+    Some(ArrowParts {
+        shaft,
+        heads,
+        style,
+    })
+}
+
+fn dist(a: PtF, b: PtF) -> f32 {
+    ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
+}
+
+/// Keep a curved arrow's bend when one of its ends moves: the control point follows the
+/// similarity transform (rotate + scale about the fixed end) that maps the old chord onto
+/// the new one. Straight arrows stay straight.
+pub fn follow_ctrl(old_from: PtF, old_to: PtF, new_from: PtF, new_to: PtF, ctrl: PtF) -> PtF {
+    let (ox, oy) = (old_to.x - old_from.x, old_to.y - old_from.y);
+    let (nx, ny) = (new_to.x - new_from.x, new_to.y - new_from.y);
+    let ol2 = ox * ox + oy * oy;
+    if ol2 < 1e-6 {
+        return PtF::new(
+            ctrl.x + new_from.x - old_from.x,
+            ctrl.y + new_from.y - old_from.y,
+        );
+    }
+    // Complex division n / o gives the rotation + scale.
+    let a = (nx * ox + ny * oy) / ol2;
+    let b = (ny * ox - nx * oy) / ol2;
+    let (rx, ry) = (ctrl.x - old_from.x, ctrl.y - old_from.y);
+    PtF::new(new_from.x + a * rx - b * ry, new_from.y + b * rx + a * ry)
+}
+
+/// Rounded-corner radius of a callout bubble.
+pub fn callout_radius(r: RectF) -> f32 {
+    (r.w.min(r.h) * 0.25).clamp(4.0, 16.0)
+}
+
+/// Where a callout's tail leaves the bubble: the two base points on the side facing the tail.
+/// None when the tail point is inside the bubble.
+pub fn callout_tail_base(r: RectF, tail: PtF) -> Option<(PtF, PtF)> {
+    if r.w < 1.0 || r.h < 1.0 || r.contains(tail) || !tail.x.is_finite() || !tail.y.is_finite() {
+        return None;
+    }
+    let radius = callout_radius(r);
+    let c = r.center();
+    let (dx, dy) = (tail.x - c.x, tail.y - c.y);
+    let (hw, hh) = (r.w / 2.0, r.h / 2.0);
+    let horizontal = (dx / hw).abs() >= (dy / hh).abs();
+    let inset = 1.0;
+    Some(if horizontal {
+        let side_x = if dx > 0.0 { r.x + r.w } else { r.x };
+        let t = (side_x - c.x) / dx;
+        let bw = (r.h * 0.45).clamp(6.0, 28.0);
+        let lo = r.y + radius + bw / 2.0;
+        let hi = r.y + r.h - radius - bw / 2.0;
+        let ay = if lo < hi {
+            (c.y + dy * t).clamp(lo, hi)
+        } else {
+            c.y
+        };
+        let ix = if dx > 0.0 { -inset } else { inset };
+        (
+            PtF::new(side_x + ix, ay - bw / 2.0),
+            PtF::new(side_x + ix, ay + bw / 2.0),
+        )
+    } else {
+        let side_y = if dy > 0.0 { r.y + r.h } else { r.y };
+        let t = (side_y - c.y) / dy;
+        let bw = (r.w * 0.2).clamp(6.0, 28.0);
+        let lo = r.x + radius + bw / 2.0;
+        let hi = r.x + r.w - radius - bw / 2.0;
+        let ax = if lo < hi {
+            (c.x + dx * t).clamp(lo, hi)
+        } else {
+            c.x
+        };
+        let iy = if dy > 0.0 { -inset } else { inset };
+        (
+            PtF::new(ax - bw / 2.0, side_y + iy),
+            PtF::new(ax + bw / 2.0, side_y + iy),
+        )
+    })
+}
+
+/// One laid-out line of a text or callout shape: the byte range of the shape's text it shows
+/// and the top-left of its line box (image px). Lines are `size * LINE_HEIGHT` tall.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextLine {
+    pub range: std::ops::Range<usize>,
+    pub origin: PtF,
+}
+
+/// Text layout of a textual shape, exactly as the renderer places it: (size, bold, lines).
+/// Text shapes break only at '\n'; callouts also wrap at spaces to the bubble width and
+/// centre the block vertically.
+pub fn text_layout(fonts: &Fonts, kind: &ShapeKind) -> Option<(f32, bool, Vec<TextLine>)> {
+    match kind {
+        ShapeKind::Text {
+            pos,
+            text,
+            size,
+            bold,
+            ..
+        } => {
+            let size = size.max(1.0);
+            let lh = size * crate::fonts::LINE_HEIGHT;
+            let mut lines = Vec::new();
+            let mut start = 0;
+            for (i, line) in text.split('\n').enumerate() {
+                lines.push(TextLine {
+                    range: start..start + line.len(),
+                    origin: PtF::new(pos.x, pos.y + i as f32 * lh),
+                });
+                start += line.len() + 1;
+            }
+            Some((size, *bold, lines))
+        }
+        ShapeKind::Callout {
+            rect, text, size, ..
+        } => {
+            let size = size.max(1.0);
+            let r = norm(*rect);
+            let pad = size * CALLOUT_PAD;
+            let ranges = wrap_ranges(fonts, text, size, (r.w - 2.0 * pad).max(size));
+            let lh = size * crate::fonts::LINE_HEIGHT;
+            let top = r.y + (r.h - ranges.len() as f32 * lh) / 2.0;
+            let lines = ranges
+                .into_iter()
+                .enumerate()
+                .map(|(i, range)| TextLine {
+                    range,
+                    origin: PtF::new(r.x + pad, top + i as f32 * lh),
+                })
+                .collect();
+            Some((size, false, lines))
+        }
+        _ => None,
+    }
+}
+
+/// Greedy word wrap at single spaces; every paragraph ('\n') starts a new line. Returns the
+/// byte range of each line (a break consumes the space it happens at).
+pub(crate) fn wrap_ranges(
+    fonts: &Fonts,
+    text: &str,
+    size: f32,
+    max_w: f32,
+) -> Vec<std::ops::Range<usize>> {
+    let mut out = Vec::new();
+    let mut para_start = 0;
+    for para in text.split('\n') {
+        let mut line: Option<std::ops::Range<usize>> = None;
+        let mut word_start = para_start;
+        for word in para.split(' ') {
+            let w = word_start..word_start + word.len();
+            line = Some(match line {
+                None => w.clone(),
+                Some(l) => {
+                    let candidate = l.start..w.end;
+                    if !text[l.clone()].is_empty()
+                        && fonts.line_width(&text[candidate.clone()], size, false) > max_w
+                    {
+                        out.push(l);
+                        w.clone()
+                    } else {
+                        candidate
+                    }
+                }
+            });
+            word_start = w.end + 1;
+        }
+        out.push(line.unwrap_or(para_start..para_start));
+        para_start += para.len() + 1;
+    }
+    out
 }
 
 pub(crate) fn dist_to_segment(p: PtF, a: PtF, b: PtF) -> f32 {
@@ -263,8 +600,15 @@ fn union(a: RectF, b: RectF) -> RectF {
 }
 
 /// Rectangle covering a text block (and its pill when `background` is set).
-pub(crate) fn text_rect(fonts: &Fonts, pos: PtF, text: &str, size: f32, background: bool) -> RectF {
-    let (w, h) = fonts.measure(text, size, false);
+pub(crate) fn text_rect(
+    fonts: &Fonts,
+    pos: PtF,
+    text: &str,
+    size: f32,
+    background: bool,
+    bold: bool,
+) -> RectF {
+    let (w, h) = fonts.measure(text, size, bold);
     let r = RectF::new(pos.x, pos.y, w, h);
     if background {
         r.expand(0.0).pad(size * TEXT_PAD_X, size * TEXT_PAD_Y)
@@ -366,14 +710,22 @@ impl Doc {
 fn shape_hit(shape: &Shape, p: PtF, tol: f32) -> bool {
     let half = shape.style.width.max(0.0) / 2.0;
     match &shape.kind {
-        ShapeKind::Arrow { from, to } => {
-            if dist_to_segment(p, *from, *to) <= half + tol {
+        ShapeKind::Arrow {
+            from,
+            to,
+            ctrl,
+            double,
+            head,
+        } => {
+            if dist_to_polyline(p, &arrow_centerline(*from, *to, *ctrl)) <= half + tol {
                 return true;
             }
-            match arrow_geom(*from, *to, shape.style.width) {
-                Some(g) => dist_to_segment(p, g.notch, g.tip) <= g.head_half_width * 0.7 + tol,
-                None => false,
-            }
+            arrow_parts(*from, *to, *ctrl, shape.style.width, *double, *head).is_some_and(|parts| {
+                parts
+                    .heads
+                    .iter()
+                    .any(|g| dist_to_segment(p, g.notch, g.tip) <= g.head_half_width * 0.7 + tol)
+            })
         }
         ShapeKind::Line { from, to } => dist_to_segment(p, *from, *to) <= half + tol,
         ShapeKind::Pen { points } | ShapeKind::Highlighter { points } => {
@@ -400,6 +752,7 @@ fn shape_hit(shape: &Shape, p: PtF, tol: f32) -> bool {
             text,
             size,
             background,
+            ..
         } => {
             // Fonts are not available here; approximate with a conservative glyph box.
             let lines = text.split('\n').count().max(1) as f32;
@@ -444,10 +797,21 @@ fn shape_hit(shape: &Shape, p: PtF, tol: f32) -> bool {
 pub fn shape_bounds(shape: &Shape, fonts: &Fonts) -> RectF {
     let half = shape.style.width.max(0.0) / 2.0;
     match &shape.kind {
-        ShapeKind::Arrow { from, to } => {
-            let mut r = RectF::from_points(*from, *to).expand(half);
-            if let Some(g) = arrow_geom(*from, *to, shape.style.width) {
-                r = union(r, points_bounds(&[g.tip, g.left, g.right]));
+        ShapeKind::Arrow {
+            from,
+            to,
+            ctrl,
+            double,
+            head,
+        } => {
+            let mut r = points_bounds(&arrow_centerline(*from, *to, *ctrl)).expand(half);
+            if let Some(parts) = arrow_parts(*from, *to, *ctrl, shape.style.width, *double, *head) {
+                for g in &parts.heads {
+                    r = union(
+                        r,
+                        points_bounds(&[g.tip, g.left, g.right]).expand(half * 0.5),
+                    );
+                }
             }
             r
         }
@@ -461,7 +825,8 @@ pub fn shape_bounds(shape: &Shape, fonts: &Fonts) -> RectF {
             text,
             size,
             background,
-        } => text_rect(fonts, *pos, text, *size, background.is_some()),
+            bold,
+        } => text_rect(fonts, *pos, text, *size, background.is_some(), *bold),
         ShapeKind::Step { center, radius, .. } => RectF::new(
             center.x - radius,
             center.y - radius,
@@ -493,7 +858,14 @@ pub fn translate_shape(kind: &mut ShapeKind, dx: f32, dy: f32) {
         r.y += dy;
     };
     match kind {
-        ShapeKind::Arrow { from, to } | ShapeKind::Line { from, to } => {
+        ShapeKind::Arrow { from, to, ctrl, .. } => {
+            mv(from);
+            mv(to);
+            if let Some(c) = ctrl {
+                mv(c);
+            }
+        }
+        ShapeKind::Line { from, to } => {
             mv(from);
             mv(to);
         }
@@ -526,6 +898,23 @@ pub fn translate_shape(kind: &mut ShapeKind, dx: f32, dy: f32) {
 pub fn render(base: &Rgba, doc: &Doc, fonts: &Fonts) -> Rgba {
     let shapes: Vec<&Shape> = doc.shapes.iter().collect();
     render::render_shapes(base, &shapes, fonts, false)
+}
+
+/// The part `region` (image px, clipped to the image) of `render(base, doc)`, drawn over
+/// `work`, which must be `bake_destructive(base, doc)` for the same doc. Vector shapes,
+/// spotlights and redact boxes are drawn; the destructive pixels come from `work`. The editor
+/// keeps `work` while only vector shapes change and re-renders just the area an edit touched.
+pub fn render_region(work: &Rgba, doc: &Doc, fonts: &Fonts, region: PxRect) -> Rgba {
+    let shapes: Vec<&Shape> = doc.shapes.iter().collect();
+    render::render_over_region(work, &shapes, fonts, region)
+}
+
+/// One non-destructive shape (text, callout, arrow...) alone on a transparent canvas just
+/// big enough for it, at integer image px `origin`. The editor shows a text shape being typed
+/// with this, so it looks exactly like the final render. None for destructive shapes,
+/// magnifiers and spotlights (they need the image) or degenerate shapes.
+pub fn render_shape_patch(shape: &Shape, fonts: &Fonts) -> Option<(PxRect, Rgba)> {
+    render::render_patch(shape, fonts)
 }
 
 /// Render only shapes in `ids` order onto a transparent canvas the size of the base

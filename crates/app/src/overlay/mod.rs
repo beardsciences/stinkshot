@@ -5,27 +5,35 @@
 //! spanning window may differ from other monitors, so convert physical px <-> points with
 //! `ctx.pixels_per_point()` and draw the frozen texture 1:1 in physical pixels).
 //!
-//! Behavior summary (full spec in docs/ARCHITECTURE.md, "Overlay"):
+//! Behavior summary (full spec in docs/ARCHITECTURE.md, "Overlay", and
+//! docs/notes/app-overlay.md):
 //! - Frozen screenshot fills the window; outside the selection is dimmed (palette.overlay_dim).
 //! - Hover: highlight the UI element (via `uia::ElementSnapper`) or window under the cursor;
 //!   wheel cycles element -> parent -> window; click selects it. Drag draws a free region.
 //! - Selection has 8 handles; Space+drag moves; arrows nudge 1px (Shift = 10px, Ctrl =
 //!   resize). Size label + aspect presets (Free, 16:9, 4:3, 1:1, exact WxH input) above it.
+//!   The region stays adjustable after annotating (shapes keep their place on the image).
 //! - Loupe near the cursor: 11x11 px grid zoomed, coords, scale, hex color; C copies hex.
 //! - After a selection exists, the tool bar (design order) appears below it (or above /
 //!   inside when no room); action bar on its right: OCR, Pin, Save, Cancel, Copy (Enter).
-//! - Tools create `annotate::ShapeKind`s in base-image px; shapes are selectable, movable,
-//!   resizable, deletable (Del), recolorable; Ctrl+Z / Ctrl+Y undo/redo; text editing inline.
-//! - Committed shapes render through `stinkshot_core::annotate::render` into a texture
-//!   (re-rendered on change, off the UI thread if > 16 ms); the shape being dragged is
-//!   previewed with the egui painter.
+//! - Tools create `annotate::ShapeKind`s in base-image px; shapes are selectable (Shift+click,
+//!   marquee), movable with smart guides, resizable, deletable, recolorable, reorderable,
+//!   duplicable and copyable; Ctrl+Z / Ctrl+Y undo/redo; text is typed straight onto the
+//!   image. Ctrl+wheel zooms, Space or middle drag pans.
+//! - Committed shapes render through `stinkshot_core::annotate` into a texture on a worker
+//!   (only the area an edit touched is re-rendered); the shapes being dragged are previewed
+//!   with the egui painter.
 //! - Finish pushes `Command::CaptureDone` / `RegionChosen` / `Cancelled` and returns Close.
 //!
-//! Module layout: `selection` (rect math), `shapes` (annotation math), `undo`, `hover`
-//! (snap picking), `render` (worker + tiled textures), `paint` (painter drawing), `ui`
-//! (egui widgets). This file owns the state machine.
-
-// The shell does not construct `Overlay` until integration; drop this allow then.
+//! Coordinates: "canvas" px are overlay-local physical px of the frozen screen (the selection,
+//! hover rects and gestures live there); "screen" px are what the window shows, the same as
+//! canvas px until the editor is zoomed or panned (`view.rs`). Image px are base-image px
+//! (annotations), mapped onto the canvas by `Mapping`.
+//!
+//! Module layout: `selection` (rect math), `shapes` (annotation math), `snap` (guides),
+//! `view` (zoom/pan), `textedit` (caret logic), `undo`, `hover` (snap picking), `render`
+//! (worker + tiled textures), `paint` (painter drawing), `ui` (egui widgets). This file owns
+//! the state machine.
 
 mod hover;
 mod keys;
@@ -34,17 +42,21 @@ mod render;
 mod selection;
 mod shapes;
 mod smart_redact;
+mod snap;
+mod textedit;
 mod toolbar;
 mod ui;
 mod undo;
+mod view;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
 use egui::{Color32, Context, CursorIcon, Event, Key, LayerId, Order, Pos2, Rect, Vec2};
 use stinkshot_core::annotate::{Doc, Shape, ShapeId, ShapeKind, Style};
-use stinkshot_core::config::{parse_hex_color, to_hex_color};
+use stinkshot_core::config::{ToolStyle, parse_hex_color, to_hex_color};
 use stinkshot_core::fonts::Fonts;
 use stinkshot_core::{PtF, PxPoint, PxRect, RectF, Rgba};
 use stinkshot_platform::occlusion::{self, Layer};
@@ -55,9 +67,11 @@ use stinkshot_platform::{Hwnd, clipboard, monitors, window_util};
 use self::paint::ImgToPt;
 use self::render::{Renderer, TiledTexture};
 use self::selection::{Handle8, Mapping, Ratio};
-use self::shapes::{Tool, ToolParams};
+use self::shapes::{ShapeHandle, ShapeOptions, Tool, ToolParams};
+use self::textedit::Caret;
 use self::ui::{ChipState, GripEvent, Popup, UiAction};
 use self::undo::UndoStack;
+use self::view::View;
 use crate::state::{
     CaptureOutput, Command, FinishAction, OverlayMode, OverlayRequest, RegionPurpose, Shared,
     SourceInfo, Surface, SurfaceStatus,
@@ -70,6 +84,10 @@ const SHAPE_HANDLE_PT: f32 = 9.0;
 const SHAPE_TOL_PT: f32 = 4.0;
 /// A press that moves less than this many points is a click, not a drag.
 const CLICK_SLOP_PT: f32 = 4.0;
+/// Ctrl+D / Ctrl+V offset, in screen points.
+const COPY_OFFSET_PT: f32 = 16.0;
+/// Most recent colors kept.
+const RECENT_COLORS: usize = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
@@ -78,19 +96,38 @@ enum Kind {
     Annotate,
 }
 
+/// Rendered pixels of the text shape being typed (exactly what the final render draws).
+struct TextPatch {
+    shape: Shape,
+    rect: PxRect,
+    tex: Option<egui::TextureHandle>,
+}
+
 struct EditState {
     id: ShapeId,
     is_new: bool,
     pre: Doc,
     buffer: String,
-    just_started: bool,
+    caret: Caret,
+    /// When the caret last moved or text changed (the caret stays solid for a moment).
+    blink_from: Instant,
+    patch: Option<TextPatch>,
+    /// Pointer is dragging a text selection.
+    selecting: bool,
+}
+
+/// What the pointer is over, for handle hover highlights and cursors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HoverHandle {
+    Shape(ShapeHandle),
+    Sel(Handle8),
 }
 
 enum Drag {
     None,
     /// Pressed on UI chrome: ignore the rest of the gesture.
     Ignore,
-    /// Dragging a new region (or clicking to snap). Coordinates are overlay-local px.
+    /// Dragging a new region (or clicking to snap). Coordinates are canvas px.
     Selecting {
         anchor: (f32, f32),
         start: (f32, f32),
@@ -111,18 +148,39 @@ enum Drag {
         cur: PtF,
         points: Vec<PtF>,
     },
-    MoveShape {
-        id: ShapeId,
-        last: PtF,
+    /// Moving the selected shapes; `start` is the press in image px, `applied` the offset
+    /// already applied to the doc.
+    MoveShapes {
+        ids: Vec<ShapeId>,
+        start: PtF,
+        start_screen: (f32, f32),
+        applied: (f32, f32),
+        bbox: Option<RectF>,
         pre: Doc,
-        start: (f32, f32),
         moved: bool,
+        /// Shift+click toggled this shape on press: a click without a drag keeps the toggle.
+        toggled: bool,
     },
     ResizeShape {
         id: ShapeId,
-        handle: shapes::ShapeHandle,
+        handle: ShapeHandle,
         pre: Doc,
     },
+    /// Rubber-band selection with the Select tool (image px).
+    Marquee {
+        start: PtF,
+        cur: PtF,
+        additive: bool,
+        before: Vec<ShapeId>,
+        start_screen: (f32, f32),
+    },
+    /// Panning the zoomed view (screen px).
+    Pan {
+        start: (f32, f32),
+        view: View,
+    },
+    /// Selecting text with the pointer while typing on the image.
+    TextSelect,
 }
 
 struct Finishing {
@@ -133,17 +191,25 @@ struct Finishing {
     rect: PxRect,
 }
 
-/// Per-frame input snapshot. Positions are overlay-local physical px.
+/// Per-frame input snapshot. `pos` is canvas px, `spos` screen px.
 #[derive(Default)]
 struct Input {
     pos: Option<(f32, f32)>,
+    spos: Option<(f32, f32)>,
     pressed: bool,
     down: bool,
     released: bool,
+    middle_pressed: bool,
+    middle_down: bool,
     shift: bool,
+    alt: bool,
     space: bool,
-    wheel_y: f32,
+    /// Plain wheel (no Ctrl), points.
+    wheel: Vec2,
+    /// Ctrl+wheel / pinch zoom factor this frame (1.0 = none).
+    zoom: f32,
     over_ui: bool,
+    double_click: bool,
 }
 
 #[derive(Default)]
@@ -151,6 +217,8 @@ struct Keys {
     esc: bool,
     enter: bool,
     copy_event: bool,
+    paste: bool,
+    duplicate: bool,
     save: bool,
     pin: bool,
     text: bool,
@@ -160,6 +228,14 @@ struct Keys {
     delete: bool,
     hex: bool,
     help: bool,
+    eyedropper: bool,
+    bold: bool,
+    /// Z-order: +1 forward, -1 backward, +2 to front, -2 to back.
+    order: i32,
+    /// Zoom: +1 in, -1 out.
+    zoom_step: i32,
+    zoom_fit: bool,
+    zoom_actual: bool,
     tool: Option<Tool>,
     palette: Option<usize>,
     bracket: i32,
@@ -178,14 +254,21 @@ pub struct Overlay {
     layers: Vec<Layer>,
     last_region: Option<PxRect>,
     fonts: Arc<Fonts>,
-    /// Monitor rects in overlay-local px with their DPI scale.
+    /// Monitor rects in overlay-local (screen) px with their DPI scale.
     monitors: Vec<(PxRect, f32)>,
     annotate_meta: Option<(&'static str, Option<stinkshot_history::ItemId>, SourceInfo)>,
 
-    // Selection (overlay-local px). In Annotate mode this is the displayed image rect.
+    // Selection (canvas px). In Annotate mode this is the crop of the displayed image.
     sel: Option<PxRect>,
-    /// Local px per image px (1.0 outside Annotate mode).
+    /// Canvas px per image px (1.0 outside Annotate mode).
     scale: f32,
+    /// Annotate mode: the whole pre-captured image, where its top-left sits on the canvas,
+    /// and the crop (image px) the selection shows.
+    orig: Option<Arc<Rgba>>,
+    img_origin: (f32, f32),
+    crop: PxRect,
+    /// Zoom and pan (identity = unzoomed).
+    view: View,
     aspect: Option<Ratio>,
     exact_open: bool,
     exact_just_opened: bool,
@@ -211,14 +294,32 @@ pub struct Overlay {
     blur_radius: f32,
     pixelate_block: u32,
     palette: Vec<[u8; 4]>,
-    selected: Option<ShapeId>,
+    /// Newest first.
+    recent: Vec<[u8; 4]>,
+    /// Per-tool color and width (seeded from config, saved back on finish).
+    tool_styles: HashMap<Tool, ([u8; 4], f32)>,
+    /// Sticky arrow and text options for new shapes.
+    options: ShapeOptions,
+    /// Selected shapes, in the order they were picked.
+    selected: Vec<ShapeId>,
+    /// Shapes copied with Ctrl+C (editor only) and how often they were pasted.
+    clipboard: Vec<Shape>,
+    pastes: u32,
     magnifier_source: Option<RectF>,
     magnifier_cursor: Option<PtF>,
     edit: Option<EditState>,
+    /// The last typed text's rendered pixels, shown until the cached render includes it (no
+    /// flash of the painter's approximation after Esc).
+    settled_text: Option<TextPatch>,
     drag: Drag,
+    /// Smart guides of the gesture in progress (image px).
+    guides: Vec<snap::Guide>,
+    hover_handle: Option<HoverHandle>,
+    /// Eyedropper is picking (I or the toolbar button).
+    picking: bool,
     popup: Option<Popup>,
     bar_sizes: (Vec2, Vec2),
-    /// Undocked toolbar origin (top-left of the tool bar, local px, unclamped); None =
+    /// Undocked toolbar origin (top-left of the tool bar, screen px, unclamped); None =
     /// docked under the selection. See `toolbar.rs`.
     bar_origin: Option<(f32, f32)>,
     /// `bar_origin` came from an earlier overlay (not dragged in this one): it applies only
@@ -226,12 +327,14 @@ pub struct Overlay {
     bar_from_memory: bool,
     /// Grip drag in progress.
     grip_drag: Option<toolbar::GripDrag>,
-    /// Where the tool bar was drawn last frame (local px), the start of a first undock.
+    /// Where the tool bar was drawn last frame (screen px), the start of a first undock.
     bar_drawn_at: Option<(f32, f32)>,
     color_btn: Rect,
     width_btn: Rect,
     prefs_dirty: bool,
+    /// Last pointer position, canvas px and screen px.
     last_pointer: Option<(f32, f32)>,
+    last_screen: Option<(f32, f32)>,
 
     // Rendering.
     renderer: Option<Renderer>,
@@ -239,11 +342,10 @@ pub struct Overlay {
     base_tex: Option<TiledTexture>,
     rendered_tex: Option<TiledTexture>,
     rendered_doc: Option<Doc>,
-    rendered_img: Option<Arc<Rgba>>,
     submitted: Option<Doc>,
     render_ok: bool,
-    /// Shape excluded from cached renders while it is manipulated and painted live.
-    live: Option<ShapeId>,
+    /// Shapes excluded from cached renders while they are manipulated and painted live.
+    live: Vec<ShapeId>,
     live_release_pending: bool,
     initialized: bool,
 
@@ -332,6 +434,34 @@ fn esc_needs_confirm(edited: bool, armed_at: Option<Instant>, now: Instant) -> b
     edited && armed_at.is_none_or(|t| now.saturating_duration_since(t) >= DISCARD_WINDOW)
 }
 
+/// Push `c` to the front of the recent colors (no duplicates, at most `RECENT_COLORS`).
+fn push_recent(recent: &mut Vec<[u8; 4]>, c: [u8; 4]) {
+    let c = [c[0], c[1], c[2], 255];
+    recent.retain(|r| r[..3] != c[..3]);
+    recent.insert(0, c);
+    recent.truncate(RECENT_COLORS);
+}
+
+/// Default color and width for a tool without a remembered style: redaction boxes start
+/// black, everything else uses the editor color.
+fn default_tool_style(tool: Tool, color: [u8; 4], width: f32) -> ([u8; 4], f32) {
+    match tool {
+        Tool::Redact => ([0, 0, 0, 255], width),
+        _ => (color, width),
+    }
+}
+
+fn load_tool_styles(cfg: &stinkshot_core::config::Editor) -> HashMap<Tool, ([u8; 4], f32)> {
+    cfg.tool_styles
+        .iter()
+        .filter_map(|(k, v)| {
+            let t = Tool::from_config_key(k)?;
+            let c = parse_hex_color(&v.color)?;
+            Some((t, ([c[0], c[1], c[2], 255], v.width.clamp(1.0, 64.0))))
+        })
+        .collect()
+}
+
 impl Overlay {
     pub fn new(req: OverlayRequest, shared: &Shared) -> Self {
         let OverlayRequest {
@@ -356,6 +486,13 @@ impl Overlay {
         } else {
             palette
         };
+        let recent: Vec<[u8; 4]> = cfg
+            .recent_colors
+            .iter()
+            .filter_map(|h| parse_hex_color(h))
+            .map(|c| [c[0], c[1], c[2], 255])
+            .take(RECENT_COLORS)
+            .collect();
 
         let mon_list = monitors::list();
         let monitors_local: Vec<(PxRect, f32)> = mon_list
@@ -381,6 +518,10 @@ impl Overlay {
             annotate_meta: None,
             sel: None,
             scale: 1.0,
+            orig: None,
+            img_origin: (0.0, 0.0),
+            crop: PxRect::default(),
+            view: View::IDENTITY,
             aspect: None,
             exact_open: false,
             exact_just_opened: false,
@@ -402,13 +543,22 @@ impl Overlay {
             blur_radius: cfg.blur_radius,
             pixelate_block: cfg.pixelate_block,
             palette,
-            selected: None,
+            recent,
+            tool_styles: load_tool_styles(cfg),
+            options: ShapeOptions::default(),
+            selected: Vec::new(),
+            clipboard: Vec::new(),
+            pastes: 0,
             magnifier_source: None,
             magnifier_cursor: None,
             edit: None,
+            settled_text: None,
             drag: Drag::None,
+            guides: Vec::new(),
+            hover_handle: None,
+            picking: false,
             popup: None,
-            bar_sizes: (Vec2::new(690.0, 46.0), Vec2::new(280.0, 46.0)),
+            bar_sizes: (Vec2::new(760.0, 46.0), Vec2::new(280.0, 46.0)),
             bar_origin: toolbar::remembered().map(|v| toolbar::to_local(v, bounds)),
             bar_from_memory: true,
             grip_drag: None,
@@ -417,15 +567,15 @@ impl Overlay {
             width_btn: Rect::NOTHING,
             prefs_dirty: false,
             last_pointer: None,
+            last_screen: None,
             renderer: None,
             frozen_tex: None,
             base_tex: None,
             rendered_tex: None,
             rendered_doc: None,
-            rendered_img: None,
             submitted: None,
             render_ok: true,
-            live: None,
+            live: Vec::new(),
             live_release_pending: false,
             initialized: false,
             finishing: None,
@@ -470,7 +620,9 @@ impl Overlay {
                 o.doc = doc;
                 o.annotate_meta = Some((mode, editing, source));
                 o.layout_annotate(&base);
-                o.base = Some(Arc::new(base));
+                let base = Arc::new(base);
+                o.orig = Some(base.clone());
+                o.base = Some(base);
             }
         }
         o
@@ -503,12 +655,9 @@ impl Overlay {
         );
         let (x, y) = selection::center_in(w, h, usable);
         self.scale = s;
-        self.sel = Some(PxRect::new(
-            x.round() as i32,
-            y.round() as i32,
-            w as i32,
-            h as i32,
-        ));
+        self.img_origin = (x.round(), y.round());
+        self.crop = PxRect::new(0, 0, base.width as i32, base.height as i32);
+        self.sel = Some(self.sel_from_crop());
     }
 
     // ---------------------------------------------------------------- geometry helpers
@@ -517,7 +666,42 @@ impl Overlay {
         PxRect::new(0, 0, self.bounds.w, self.bounds.h)
     }
 
+    /// Annotate mode: the canvas rect the crop occupies.
+    fn sel_from_crop(&self) -> PxRect {
+        let x0 = (self.img_origin.0 + self.crop.x as f32 * self.scale).round() as i32;
+        let y0 = (self.img_origin.1 + self.crop.y as f32 * self.scale).round() as i32;
+        let x1 = (self.img_origin.0 + self.crop.right() as f32 * self.scale).round() as i32;
+        let y1 = (self.img_origin.1 + self.crop.bottom() as f32 * self.scale).round() as i32;
+        PxRect::new(x0, y0, (x1 - x0).max(1), (y1 - y0).max(1))
+    }
+
+    /// Where the selection may go: the screen, or in Annotate mode the displayed image.
+    fn sel_bounds(&self) -> PxRect {
+        match (&self.orig, self.kind) {
+            (Some(o), Kind::Annotate) => {
+                let x0 = self.img_origin.0.round() as i32;
+                let y0 = self.img_origin.1.round() as i32;
+                PxRect::new(
+                    x0,
+                    y0,
+                    ((o.width as f32 * self.scale).round() as i32).max(1),
+                    ((o.height as f32 * self.scale).round() as i32).max(1),
+                )
+            }
+            _ => self.local_bounds(),
+        }
+    }
+
     fn mapping(&self) -> Option<Mapping> {
+        if matches!(self.kind, Kind::Annotate) {
+            return Some(Mapping {
+                origin: (
+                    self.img_origin.0 + self.crop.x as f32 * self.scale,
+                    self.img_origin.1 + self.crop.y as f32 * self.scale,
+                ),
+                scale: self.scale,
+            });
+        }
         self.sel.map(|s| Mapping {
             origin: (s.x as f32, s.y as f32),
             scale: self.scale,
@@ -542,7 +726,59 @@ impl Overlay {
         PtF::new(p.x.clamp(0.0, w), p.y.clamp(0.0, h))
     }
 
+    /// Screen points of `pt` per image px.
+    fn img_pt(&self, ppp: f32) -> f32 {
+        self.scale * self.view.zoom / ppp
+    }
+
+    /// `pt` screen points in image px (handle radii, tolerances).
+    fn pt_to_img(&self, pt: f32, ppp: f32) -> f32 {
+        pt / self.img_pt(ppp)
+    }
+
+    /// `pt` screen points in canvas px.
+    fn pt_to_canvas(&self, pt: f32, ppp: f32) -> f32 {
+        pt * ppp / self.view.zoom
+    }
+
+    /// Canvas rect -> screen rect in points.
+    fn canvas_rect_pt(&self, r: PxRect, ppp: f32) -> Rect {
+        let (x, y, w, h) = self
+            .view
+            .rect_to_screen((r.x as f32, r.y as f32, r.w as f32, r.h as f32));
+        Rect::from_min_size(Pos2::new(x / ppp, y / ppp), Vec2::new(w / ppp, h / ppp))
+    }
+
+    /// Canvas rect -> screen px rect (for toolbar and chip placement).
+    fn canvas_rect_screen(&self, r: PxRect) -> PxRect {
+        let (x, y, w, h) = self
+            .view
+            .rect_to_screen((r.x as f32, r.y as f32, r.w as f32, r.h as f32));
+        PxRect::new(
+            x.round() as i32,
+            y.round() as i32,
+            w.round() as i32,
+            h.round() as i32,
+        )
+    }
+
+    /// Image px -> screen points mapping for painting.
+    fn img_to_pt(&self, ppp: f32) -> Option<ImgToPt> {
+        let m = self.mapping()?;
+        let (x, y) = self.view.to_screen(m.origin);
+        Some(ImgToPt {
+            origin: Pos2::new(x / ppp, y / ppp),
+            k: self.img_pt(ppp),
+        })
+    }
+
     fn sel_editable(&self) -> bool {
+        true
+    }
+
+    /// A press outside the selection may start a new region (not in the editor, whose
+    /// region is the image).
+    fn can_start_region(&self) -> bool {
         !matches!(self.kind, Kind::Annotate)
     }
 
@@ -564,7 +800,7 @@ impl Overlay {
 
     /// The undocked origin to lay the bars out from this frame, or None to dock. A spot
     /// remembered from an earlier overlay is ignored while the selection is on another
-    /// monitor.
+    /// monitor. `sel` is in screen px.
     fn effective_bar_origin(&self, ppp: f32, sel: PxRect) -> Option<(f32, f32)> {
         let origin = self.bar_origin?;
         if !self.bar_from_memory {
@@ -583,7 +819,7 @@ impl Overlay {
     }
 
     /// Undocked toolbar placement for `origin`: (tool bar pos, action bar pos, monitor),
-    /// local px. Sizes are last frame's, in physical px.
+    /// screen px. Sizes are last frame's, in physical px.
     fn undocked_bars(
         &self,
         origin: (f32, f32),
@@ -614,9 +850,9 @@ impl Overlay {
         if shift { Some((1, 1)) } else { self.aspect }
     }
 
-    fn measurer(&self) -> impl Fn(&str, f32) -> (f32, f32) + 'static {
+    fn measurer(&self) -> impl Fn(&str, f32, bool) -> (f32, f32) + 'static {
         let fonts = self.fonts.clone();
-        move |t: &str, s: f32| fonts.measure(t, s, false)
+        move |t: &str, s: f32, b: bool| fonts.measure(t, s, b)
     }
 
     fn params(&self) -> ToolParams {
@@ -630,33 +866,90 @@ impl Overlay {
             font_size: self.font_size,
             blur_radius: self.blur_radius,
             pixelate_block: self.pixelate_block,
+            options: self.options,
         }
     }
 
-    /// Change the selection rect. Annotations keep their on-screen position when the
-    /// origin or size changes (shapes are re-based onto the new top-left).
-    fn set_sel(&mut self, new: PxRect) {
-        let old = self.sel;
-        if self.sel_editable() {
-            if let Some(o) = old
-                && (o.x, o.y) != (new.x, new.y)
-                && !self.doc.shapes.is_empty()
-            {
-                let (dx, dy) = ((o.x - new.x) as f32, (o.y - new.y) as f32);
-                shapes::translate_all(&mut self.doc, dx, dy);
-                self.undo.map_docs(|d| shapes::translate_all(d, dx, dy));
+    /// The single selected shape, if exactly one is selected.
+    fn sel_one(&self) -> Option<ShapeId> {
+        match self.selected.as_slice() {
+            [id] => Some(*id),
+            _ => None,
+        }
+    }
+
+    fn select_only(&mut self, id: ShapeId) {
+        self.selected = vec![id];
+    }
+
+    /// Keep the doc's base size in step with the selection (or the crop).
+    fn sync_doc_size(&mut self) {
+        match self.kind {
+            Kind::Annotate => {
+                self.doc.base_width = self.crop.w.max(1) as u32;
+                self.doc.base_height = self.crop.h.max(1) as u32;
             }
-            self.doc.base_width = new.w.max(1) as u32;
-            self.doc.base_height = new.h.max(1) as u32;
-            if old != Some(new) {
-                self.base = None;
-                self.rendered_tex = None;
-                self.rendered_doc = None;
-                self.rendered_img = None;
-                self.submitted = None;
+            _ => {
+                if let Some(sel) = self.sel {
+                    self.doc.base_width = sel.w.max(1) as u32;
+                    self.doc.base_height = sel.h.max(1) as u32;
+                }
             }
         }
+    }
+
+    /// Change the selection rect (canvas px). Annotations keep their place on the picture:
+    /// when the region's origin moves they are re-based onto the new top-left (history too).
+    /// In Annotate mode the rect becomes a crop of the image (inside it).
+    fn set_sel(&mut self, new: PxRect) {
+        let old = self.sel;
+        if matches!(self.kind, Kind::Annotate) {
+            let Some(orig) = self.orig.clone() else {
+                self.sel = Some(new);
+                return;
+            };
+            let to_img = |v: i32, o: f32| ((v as f32 - o) / self.scale).round() as i32;
+            let (w, h) = (orig.width as i32, orig.height as i32);
+            let x0 = to_img(new.x, self.img_origin.0).clamp(0, w - 1);
+            let y0 = to_img(new.y, self.img_origin.1).clamp(0, h - 1);
+            let x1 = to_img(new.right(), self.img_origin.0).clamp(x0 + 1, w);
+            let y1 = to_img(new.bottom(), self.img_origin.1).clamp(y0 + 1, h);
+            let crop = PxRect::new(x0, y0, x1 - x0, y1 - y0);
+            if crop != self.crop {
+                let (dx, dy) = ((self.crop.x - crop.x) as f32, (self.crop.y - crop.y) as f32);
+                if dx != 0.0 || dy != 0.0 {
+                    shapes::translate_all(&mut self.doc, dx, dy);
+                    self.undo.map_docs(|d| shapes::translate_all(d, dx, dy));
+                }
+                self.crop = crop;
+                self.base = None;
+                self.clear_render_cache();
+            }
+            self.sel = Some(self.sel_from_crop());
+            self.sync_doc_size();
+            return;
+        }
+        if let Some(o) = old
+            && (o.x, o.y) != (new.x, new.y)
+            && !self.doc.shapes.is_empty()
+        {
+            let (dx, dy) = ((o.x - new.x) as f32, (o.y - new.y) as f32);
+            shapes::translate_all(&mut self.doc, dx, dy);
+            self.undo.map_docs(|d| shapes::translate_all(d, dx, dy));
+        }
+        self.doc.base_width = new.w.max(1) as u32;
+        self.doc.base_height = new.h.max(1) as u32;
+        if old != Some(new) {
+            self.base = None;
+            self.clear_render_cache();
+        }
         self.sel = Some(new);
+    }
+
+    fn clear_render_cache(&mut self) {
+        self.rendered_tex = None;
+        self.rendered_doc = None;
+        self.submitted = None;
     }
 
     /// Unannotated pixels of the selection.
@@ -664,10 +957,34 @@ impl Overlay {
         if let Some(b) = &self.base {
             return b.clone();
         }
-        let sel = self.sel.unwrap_or(self.local_bounds());
-        let b = Arc::new(self.frozen_image.crop(sel));
+        let b = match (&self.orig, self.kind) {
+            (Some(o), Kind::Annotate) => {
+                if self.crop == PxRect::new(0, 0, o.width as i32, o.height as i32) {
+                    o.clone()
+                } else {
+                    Arc::new(o.crop(self.crop))
+                }
+            }
+            _ => {
+                let sel = self.sel.unwrap_or(self.local_bounds());
+                Arc::new(self.frozen_image.crop(sel))
+            }
+        };
         self.base = Some(b.clone());
         b
+    }
+
+    /// Color under canvas point `p` for the eyedropper and the loupe: the captured image
+    /// (in the editor the picture itself, elsewhere the frozen screen).
+    fn sample_at(&self, p: (f32, f32)) -> [u8; 3] {
+        if let (Kind::Annotate, Some(orig)) = (self.kind, &self.orig) {
+            let ix = ((p.0 - self.img_origin.0) / self.scale).floor() as i32;
+            let iy = ((p.1 - self.img_origin.1) / self.scale).floor() as i32;
+            if ix >= 0 && iy >= 0 && ix < orig.width as i32 && iy < orig.height as i32 {
+                return paint::sample(orig, ix, iy);
+            }
+        }
+        paint::sample(&self.frozen_image, p.0.floor() as i32, p.1.floor() as i32)
     }
 
     fn source_info(&self, local: PxRect) -> SourceInfo {
@@ -710,7 +1027,7 @@ impl Overlay {
             true,
         ));
         if matches!(self.kind, Kind::Annotate)
-            && let Some(b) = &self.base
+            && let Some(b) = &self.orig
         {
             self.base_tex = Some(TiledTexture::upload(ctx, "ov-base", b, false));
         }
@@ -720,31 +1037,68 @@ impl Overlay {
 
     // ---------------------------------------------------------------- input reading
 
-    fn read_input(ctx: &Context, ppp: f32) -> Input {
+    fn read_input(&self, ctx: &Context, ppp: f32) -> Input {
         let over_ui = ctx.is_pointer_over_egui();
-        ctx.input(|i| Input {
-            pos: i.pointer.latest_pos().map(|p| (p.x * ppp, p.y * ppp)),
-            pressed: i.pointer.primary_pressed(),
-            down: i.pointer.primary_down(),
-            released: i.pointer.primary_released(),
-            shift: i.modifiers.shift,
-            space: i.key_down(Key::Space),
-            wheel_y: i
-                .events
-                .iter()
-                .filter_map(|e| {
-                    if let Event::MouseWheel { delta, .. } = e {
-                        Some(delta.y)
-                    } else {
-                        None
-                    }
-                })
-                .sum(),
-            over_ui,
+        let view = self.view;
+        ctx.input(|i| {
+            let spos = i.pointer.latest_pos().map(|p| (p.x * ppp, p.y * ppp));
+            let ctrl = i.modifiers.command;
+            let mut wheel = Vec2::ZERO;
+            for e in &i.events {
+                if let Event::MouseWheel {
+                    unit,
+                    delta,
+                    modifiers,
+                    ..
+                } = e
+                    && !modifiers.command
+                {
+                    let k = match unit {
+                        egui::MouseWheelUnit::Point => 1.0,
+                        egui::MouseWheelUnit::Line => 40.0,
+                        egui::MouseWheelUnit::Page => 400.0,
+                    };
+                    wheel += *delta * k;
+                }
+            }
+            Input {
+                pos: spos.map(|s| view.to_canvas(s)),
+                spos,
+                pressed: i.pointer.primary_pressed(),
+                down: i.pointer.primary_down(),
+                released: i.pointer.primary_released(),
+                middle_pressed: i.pointer.button_pressed(egui::PointerButton::Middle),
+                middle_down: i.pointer.button_down(egui::PointerButton::Middle),
+                shift: i.modifiers.shift,
+                alt: i.modifiers.alt,
+                space: i.key_down(Key::Space),
+                wheel,
+                zoom: if ctrl { i.zoom_delta() } else { 1.0 },
+                over_ui,
+                double_click: i
+                    .pointer
+                    .button_double_clicked(egui::PointerButton::Primary),
+            }
         })
     }
 
     fn read_keys(ctx: &Context) -> Keys {
+        // egui zooms the whole UI on Ctrl+= / Ctrl+- / Ctrl+0 at the end of the frame; the
+        // editor uses them for its own zoom, so take them first.
+        let (zoom_in, zoom_out, zoom_fit) = ctx.input_mut(|i| {
+            use egui::{KeyboardShortcut, Modifiers};
+            let mut take = |k: Key| {
+                i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, k))
+                    | i.consume_shortcut(&KeyboardShortcut::new(
+                        Modifiers::COMMAND | Modifiers::SHIFT,
+                        k,
+                    ))
+            };
+            let zin = take(Key::Equals) | take(Key::Plus);
+            let zout = take(Key::Minus);
+            let fit = take(keys::ZOOM_FIT.key);
+            (zin, zout, fit)
+        });
         ctx.input(|i| {
             let cmd = i.modifiers.command;
             let plain = !cmd && !i.modifiers.alt;
@@ -756,6 +1110,13 @@ impl Overlay {
             k.esc = i.key_pressed(Key::Escape);
             k.enter = i.key_pressed(Key::Enter) && !cmd;
             k.copy_event = i.events.iter().any(|e| matches!(e, Event::Copy));
+            // egui-winit turns Ctrl+V into a paste of whatever the clipboard holds (text or
+            // an image) instead of a key press.
+            k.paste = i.events.iter().any(|e| {
+                matches!(e, Event::Paste(_) | Event::PasteImage(_))
+                    || matches!(e, Event::Key { key: Key::V, pressed: true, modifiers, .. } if modifiers.command)
+            });
+            k.duplicate = keys::DUPLICATE.pressed(i);
             k.save = keys::SAVE.pressed(i);
             k.pin = keys::PIN.pressed(i);
             k.text = keys::COPY_TEXT.pressed(i);
@@ -768,8 +1129,25 @@ impl Overlay {
                 || i.events
                     .iter()
                     .any(|e| matches!(e, Event::Text(t) if t == keys::HELP_CHAR));
+            k.bold = keys::BOLD.pressed(i);
+            k.zoom_step = i32::from(zoom_in) - i32::from(zoom_out);
+            k.zoom_fit = zoom_fit;
+            k.zoom_actual = keys::ZOOM_ACTUAL.pressed(i);
+            if cmd && !i.modifiers.alt {
+                let fwd = i.key_pressed(Key::CloseBracket) || i.key_pressed(Key::CloseCurlyBracket);
+                let back = i.key_pressed(Key::OpenBracket) || i.key_pressed(Key::OpenCurlyBracket);
+                let far = if i.modifiers.shift { 2 } else { 1 };
+                k.order = if fwd {
+                    far
+                } else if back {
+                    -far
+                } else {
+                    0
+                };
+            }
             if plain {
                 k.hex = keys::COPY_COLOR.pressed(i);
+                k.eyedropper = keys::EYEDROPPER.pressed(i);
                 for (tool, key) in keys::TOOL_KEYS {
                     if i.key_pressed(key) {
                         k.tool = Some(tool);
@@ -806,7 +1184,7 @@ impl Overlay {
     // ---------------------------------------------------------------- keyboard
 
     fn handle_keys(&mut self, ctx: &Context, shared: &mut Shared, k: &Keys, inp: &Input) {
-        // Text editing owns the keyboard (Esc / Ctrl+Enter are handled by the editor itself).
+        // Text editing owns the keyboard (handled in `text_keys`).
         if self.edit.is_some() {
             return;
         }
@@ -832,7 +1210,15 @@ impl Overlay {
             self.on_escape(shared);
             return;
         }
+        // Find Sensitive Info decides Enter and Ctrl+C first (they must not copy the
+        // findings in the clear).
         if (k.enter || k.copy_event) && self.smart_key(shared, k.enter) {
+            return;
+        }
+        // Ctrl+C with shapes selected copies the shapes (inside the editor only); Enter
+        // always copies the image.
+        if k.copy_event && !k.enter && self.annotating() && !self.selected.is_empty() {
+            self.copy_shapes();
             return;
         }
         if k.enter || k.copy_event {
@@ -852,6 +1238,24 @@ impl Overlay {
                 }
             }
             return;
+        }
+        if self.sel.is_some() {
+            if k.zoom_step != 0 {
+                let f = if k.zoom_step > 0 {
+                    view::STEP
+                } else {
+                    1.0 / view::STEP
+                };
+                let anchor = self.zoom_anchor();
+                self.set_view(view::zoom_by(self.view, anchor, f, self.scale));
+            }
+            if k.zoom_fit {
+                self.set_view(View::IDENTITY);
+            }
+            if k.zoom_actual {
+                let anchor = self.zoom_anchor();
+                self.set_view(view::actual_size(self.view, anchor, self.scale));
+            }
         }
         if self.annotating() && self.sel.is_some() {
             if k.save {
@@ -878,6 +1282,21 @@ impl Overlay {
             if k.delete {
                 self.delete_selected();
             }
+            if k.paste {
+                self.paste_shapes(ctx.pixels_per_point());
+            }
+            if k.duplicate {
+                self.duplicate_selected(ctx.pixels_per_point());
+            }
+            if k.order != 0 {
+                self.reorder(k.order);
+            }
+            if k.bold {
+                self.toggle_bold();
+            }
+            if k.eyedropper {
+                self.toggle_eyedropper();
+            }
             if let Some(t) = k.tool {
                 self.set_tool(t);
             }
@@ -891,36 +1310,44 @@ impl Overlay {
             }
         }
 
-        // Arrows: nudge a selected shape, otherwise the selection rectangle.
+        // Arrows: nudge the selected shapes, otherwise the selection rectangle.
         if k.arrows != (0, 0) && self.sel.is_some() && matches!(self.drag, Drag::None) {
             let (dx, dy) = k.arrows;
             let step = if k.shift { 10 } else { 1 };
-            if let Some(id) = self.selected.filter(|_| self.annotating()) {
+            if self.annotating() && !self.selected.is_empty() {
                 let pre = self.doc.clone();
-                let scale = self.scale.max(0.01);
+                // One screen px per press, whatever the zoom.
+                let k_img = 1.0 / (self.scale * self.view.zoom).max(0.01);
                 let (ix, iy) = (
-                    dx as f32 * step as f32 / scale,
-                    dy as f32 * step as f32 / scale,
+                    dx as f32 * step as f32 * k_img,
+                    dy as f32 * step as f32 * k_img,
                 );
-                if let Some(s) = self.doc.get_mut(id) {
-                    shapes::translate(&mut s.kind, ix, iy);
+                for id in self.selected.clone() {
+                    if let Some(s) = self.doc.get_mut(id) {
+                        shapes::translate(&mut s.kind, ix, iy);
+                    }
                 }
                 self.undo.push(&pre);
             } else if self.sel_editable() {
                 let sel = self.sel.unwrap_or_default();
-                let bounds = self.local_bounds();
-                let new = if k.ctrl {
-                    selection::grow_rect(sel, dx * step, dy * step, bounds)
+                let bounds = self.sel_bounds();
+                let s = if matches!(self.kind, Kind::Annotate) {
+                    // Crop edges move by whole image px.
+                    (step as f32 * self.scale).round().max(1.0) as i32
                 } else {
-                    selection::move_rect(sel, dx * step, dy * step, bounds)
+                    step
+                };
+                let new = if k.ctrl {
+                    selection::grow_rect(sel, dx * s, dy * s, bounds)
+                } else {
+                    selection::move_rect(sel, dx * s, dy * s, bounds)
                 };
                 self.set_sel(new);
             }
         } else if k.arrows != (0, 0) && self.sel.is_none() {
-            // Nudge the hover highlight's cursor-equivalent: move the hover rect selection
-            // by confirming the hover first, so arrows work for keyboard-only users.
+            // Arrows with nothing selected confirm the hover highlight, so keyboard-only
+            // users can nudge it next.
             if let Some(h) = self.hover
-                && self.sel_editable()
                 && !matches!(self.kind, Kind::Select(_))
             {
                 self.accept_region(h, shared);
@@ -929,23 +1356,59 @@ impl Overlay {
         let _ = inp;
     }
 
+    /// Screen px point zoom keys zoom around: the pointer if it is on screen, else the
+    /// selection centre.
+    fn zoom_anchor(&self) -> (f32, f32) {
+        if let Some(p) = self.last_screen {
+            return p;
+        }
+        let s = self
+            .sel
+            .map(|s| self.canvas_rect_screen(s))
+            .unwrap_or_default();
+        ((s.x + s.w / 2) as f32, (s.y + s.h / 2) as f32)
+    }
+
+    /// Apply a new view, keeping the selection on screen.
+    fn set_view(&mut self, v: View) {
+        let v = match self.sel {
+            Some(s) if !v.is_identity() => {
+                let mon = self.monitor_for(self.canvas_rect_screen(s));
+                view::clamp_pan(
+                    v,
+                    (s.x as f32, s.y as f32, s.w as f32, s.h as f32),
+                    (mon.x as f32, mon.y as f32, mon.w as f32, mon.h as f32),
+                    64.0,
+                )
+            }
+            _ => v,
+        };
+        self.view = v;
+    }
+
     fn on_escape(&mut self, shared: &mut Shared) {
         if !matches!(self.drag, Drag::None | Drag::Ignore) {
             // Abort the gesture in progress; undo any live edit.
             match std::mem::replace(&mut self.drag, Drag::None) {
-                Drag::MoveShape { pre, .. } | Drag::ResizeShape { pre, .. } => {
+                Drag::MoveShapes { pre, .. } | Drag::ResizeShape { pre, .. } => {
                     self.doc = pre;
                     self.release_live();
                 }
                 Drag::ResizeSel { start_sel, .. } | Drag::MoveSel { start_sel, .. } => {
                     self.set_sel(start_sel)
                 }
+                Drag::Marquee { before, .. } => self.selected = before,
                 _ => {}
             }
+            self.guides.clear();
             return;
         }
         if self.help_open {
             self.help_open = false;
+            return;
+        }
+        if self.picking {
+            self.picking = false;
             return;
         }
         if self.smart.take().is_some() {
@@ -958,9 +1421,9 @@ impl Overlay {
         if self.magnifier_source.take().is_some() {
             return;
         }
-        if self.annotating() && (self.selected.is_some() || self.tool != Tool::Select) {
-            self.selected = None;
-            self.tool = Tool::Select;
+        if self.annotating() && (!self.selected.is_empty() || self.tool != Tool::Select) {
+            self.selected.clear();
+            self.set_tool(Tool::Select);
             return;
         }
         let now = Instant::now();
@@ -990,8 +1453,8 @@ impl Overlay {
     /// C: copy the hex color under the cursor. Feedback stays inside the overlay (loupe
     /// plate, or the hint bar when the loupe is hidden) instead of a toast.
     fn copy_hex(&mut self) {
-        let Some(p) = self.last_pos_px() else { return };
-        let c = paint::sample(&self.frozen_image, p.0, p.1);
+        let Some(p) = self.last_pointer else { return };
+        let c = self.sample_at(p);
         let hex = hover::hex_string(c);
         let ok = match clipboard::set_text(&hex) {
             Ok(()) => true,
@@ -1047,9 +1510,21 @@ impl Overlay {
             && self.doc.shapes.is_empty()
     }
 
-    fn last_pos_px(&self) -> Option<(i32, i32)> {
-        self.last_pointer
-            .map(|p| (p.0.floor() as i32, p.1.floor() as i32))
+    /// The editor color memory to save: (global color, global width, per-tool styles,
+    /// recent colors).
+    fn tool_style_config(&self) -> std::collections::BTreeMap<String, ToolStyle> {
+        self.tool_styles
+            .iter()
+            .map(|(t, (c, w))| {
+                (
+                    t.config_key().to_string(),
+                    ToolStyle {
+                        color: to_hex_color(*c),
+                        width: *w,
+                    },
+                )
+            })
+            .collect()
     }
 }
 
@@ -1149,5 +1624,29 @@ mod esc_tests {
             Some(now),
             now + DISCARD_WINDOW + Duration::from_millis(1)
         ));
+    }
+
+    #[test]
+    fn recent_colors_are_most_recent_first_without_duplicates() {
+        let mut r = Vec::new();
+        for c in [[1, 0, 0, 255], [2, 0, 0, 255], [1, 0, 0, 128]] {
+            push_recent(&mut r, c);
+        }
+        assert_eq!(r, vec![[1, 0, 0, 255], [2, 0, 0, 255]]);
+        for i in 0..10u8 {
+            push_recent(&mut r, [i, 9, 9, 255]);
+        }
+        assert_eq!(r.len(), RECENT_COLORS);
+        assert_eq!(r[0], [9, 9, 9, 255]);
+    }
+
+    #[test]
+    fn redaction_boxes_default_to_black() {
+        let orange = [255, 138, 61, 255];
+        assert_eq!(
+            default_tool_style(Tool::Redact, orange, 4.0),
+            ([0, 0, 0, 255], 4.0)
+        );
+        assert_eq!(default_tool_style(Tool::Arrow, orange, 6.0), (orange, 6.0));
     }
 }

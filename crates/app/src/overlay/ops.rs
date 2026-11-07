@@ -1,7 +1,23 @@
-//! Editing operations: tools, colors, undo/redo, shape creation and deletion, inline text
-//! editing lifecycle, accepting a region, and finishing (flatten + command push).
+//! Editing operations: tools, colors (per-tool memory, recent colors, eyedropper),
+//! undo/redo, shape creation and deletion, copy / paste / duplicate, z-order, the arrow and
+//! text options, the inline text editing lifecycle, accepting a region, and finishing
+//! (flatten + command push).
+
+use stinkshot_core::annotate::ArrowHead;
 
 use super::*;
+
+/// Option buttons on the context bar of a selected arrow or text.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ShapeOpt {
+    TextSmaller,
+    TextLarger,
+    Bold(bool),
+    Pill(bool),
+    Double(bool),
+    Head(ArrowHead),
+    Straighten,
+}
 
 impl Overlay {
     pub(super) fn set_tool(&mut self, t: Tool) {
@@ -13,29 +29,59 @@ impl Overlay {
         };
         self.magnifier_source = None;
         self.magnifier_cursor = None;
+        self.picking = false;
         if self.tool != Tool::Select {
-            self.selected = None;
+            self.selected.clear();
+        }
+        if self.tool.has_style() {
+            let (c, w) = self
+                .tool_styles
+                .get(&self.tool)
+                .copied()
+                .unwrap_or_else(|| default_tool_style(self.tool, self.color, self.width));
+            self.color = c;
+            self.width = w;
         }
         self.popup = None;
     }
 
+    /// Remember `color` / `width` for the active drawing tool.
+    fn remember_tool_style(&mut self) {
+        if self.tool.has_style() {
+            self.tool_styles.insert(self.tool, (self.color, self.width));
+        }
+    }
+
+    /// Apply a color: the selected shapes take it, the active tool remembers it, and it goes
+    /// to the front of the recent colors.
     pub(super) fn set_color(&mut self, c: [u8; 4]) {
         self.color = [c[0], c[1], c[2], 255];
         self.prefs_dirty = true;
-        if let Some(id) = self.selected {
+        push_recent(&mut self.recent, self.color);
+        self.remember_tool_style();
+        let targets = self.option_targets();
+        if !targets.is_empty() {
             let pre = self.doc.clone();
-            if let Some(s) = self.doc.get_mut(id) {
-                shapes::recolor(s, self.color);
+            for id in targets {
+                if let Some(s) = self.doc.get_mut(id) {
+                    shapes::recolor(s, self.color);
+                }
             }
-            self.undo.push(&pre);
+            if self.edit.is_none() && self.doc != pre {
+                self.undo.push(&pre);
+            }
         }
     }
 
     pub(super) fn set_width(&mut self, w: f32) {
         self.width = w.clamp(1.0, 64.0);
         self.prefs_dirty = true;
-        if let Some(id) = self.selected {
-            let pre = self.doc.clone();
+        self.remember_tool_style();
+        if self.selected.is_empty() {
+            return;
+        }
+        let pre = self.doc.clone();
+        for id in self.selected.clone() {
             if let Some(s) = self.doc.get_mut(id) {
                 match &mut s.kind {
                     ShapeKind::Step { radius, .. } => *radius = shapes::step_radius(self.width),
@@ -43,36 +89,37 @@ impl Overlay {
                     _ => s.style.width = self.width,
                 }
             }
+        }
+        if self.doc != pre {
             self.undo.push(&pre);
         }
     }
 
-    /// `[` / `]`: grow or shrink the selected shape, or the default stroke width.
+    /// `[` / `]`: grow or shrink the selected shapes, or the default stroke width.
     pub(super) fn bump_size(&mut self, delta: f32) {
-        if let Some(id) = self.selected {
-            let pre = self.doc.clone();
-            if let Some(s) = self.doc.get_mut(id) {
-                shapes::adjust_size(s, delta);
-                self.width = s.style.width.clamp(1.0, 64.0);
-            }
-            self.undo.push(&pre);
-        } else {
+        if self.selected.is_empty() {
             self.width = (self.width + delta).clamp(1.0, 64.0);
+            self.remember_tool_style();
+        } else {
+            let pre = self.doc.clone();
+            for id in self.selected.clone() {
+                if let Some(s) = self.doc.get_mut(id) {
+                    shapes::adjust_size(s, delta);
+                    self.width = s.style.width.clamp(1.0, 64.0);
+                }
+            }
+            if self.doc != pre {
+                self.undo.push(&pre);
+            }
         }
         self.prefs_dirty = true;
     }
 
     fn after_history_change(&mut self) {
-        if let Some(sel) = self.sel
-            && self.sel_editable()
-        {
-            self.doc.base_width = sel.w.max(1) as u32;
-            self.doc.base_height = sel.h.max(1) as u32;
-        }
-        if self.selected.is_some_and(|id| self.doc.get(id).is_none()) {
-            self.selected = None;
-        }
-        self.live = None;
+        self.sync_doc_size();
+        let doc = &self.doc;
+        self.selected.retain(|id| doc.get(*id).is_some());
+        self.live.clear();
         self.live_release_pending = false;
     }
 
@@ -97,33 +144,185 @@ impl Overlay {
     }
 
     pub(super) fn delete_selected(&mut self) {
-        let Some(id) = self.selected.take() else {
+        let ids = std::mem::take(&mut self.selected);
+        if ids.is_empty() {
             return;
-        };
+        }
         let pre = self.doc.clone();
-        if let Some(removed) = self.doc.remove(id) {
-            if matches!(removed.kind, ShapeKind::Step { .. }) {
-                self.doc.renumber_steps();
+        let mut steps = false;
+        for id in ids {
+            if let Some(removed) = self.doc.remove(id) {
+                steps |= matches!(removed.kind, ShapeKind::Step { .. });
             }
+        }
+        if steps {
+            self.doc.renumber_steps();
+        }
+        if self.doc != pre {
             self.undo.push(&pre);
         }
     }
+
+    // ---------------------------------------------------------------- copies and order
+
+    /// Ctrl+C with shapes selected: copy them inside the editor (the image is not copied).
+    pub(super) fn copy_shapes(&mut self) {
+        self.clipboard = shapes::collect(&self.doc, &self.selected);
+        self.pastes = 0;
+        let n = self.clipboard.len();
+        self.flash_notice(&if n == 1 {
+            "Copied 1 Shape: Ctrl+V to Paste".to_string()
+        } else {
+            format!("Copied {n} Shapes: Ctrl+V to Paste")
+        });
+    }
+
+    /// Add `src` again, `steps` copy offsets down and to the right, and select the copies.
+    fn add_offset_copies(&mut self, src: Vec<Shape>, steps: u32, ppp: f32) {
+        if src.is_empty() {
+            return;
+        }
+        let measure = self.measurer();
+        let k = self.pt_to_img(COPY_OFFSET_PT, ppp) * steps as f32;
+        let group = src
+            .iter()
+            .map(|s| shapes::bounds(s, &measure))
+            .reduce(shapes::union)
+            .unwrap_or_default();
+        let (w, h) = self.image_size();
+        let off = shapes::paste_offset(group, (k, k), w, h);
+        let pre = self.doc.clone();
+        let ids = shapes::add_copies(&mut self.doc, &src, off);
+        self.undo.push(&pre);
+        self.selected = ids;
+        if self.tool != Tool::Select {
+            self.tool = Tool::Select;
+        }
+    }
+
+    /// Ctrl+V: paste shapes copied with Ctrl+C; each paste lands one step further.
+    pub(super) fn paste_shapes(&mut self, ppp: f32) {
+        if self.clipboard.is_empty() {
+            return;
+        }
+        self.pastes += 1;
+        self.add_offset_copies(self.clipboard.clone(), self.pastes, ppp);
+    }
+
+    /// Ctrl+D: duplicate the selected shapes next to the originals.
+    pub(super) fn duplicate_selected(&mut self, ppp: f32) {
+        let src = shapes::collect(&self.doc, &self.selected);
+        self.add_offset_copies(src, 1, ppp);
+    }
+
+    /// Ctrl+] / Ctrl+[ (one step), with Shift to the front / back.
+    pub(super) fn reorder(&mut self, how: i32) {
+        if self.selected.is_empty() {
+            return;
+        }
+        let pre = self.doc.clone();
+        let ids = self.selected.clone();
+        let changed = match how {
+            1 => shapes::bring_forward(&mut self.doc, &ids),
+            -1 => shapes::send_backward(&mut self.doc, &ids),
+            2 => shapes::bring_to_front(&mut self.doc, &ids),
+            -2 => shapes::send_to_back(&mut self.doc, &ids),
+            _ => false,
+        };
+        if changed {
+            self.undo.push(&pre);
+        }
+    }
+
+    // ---------------------------------------------------------------- options
+
+    /// Shapes the context bar and color changes act on: the text being typed, else the
+    /// selection.
+    fn option_targets(&self) -> Vec<ShapeId> {
+        match &self.edit {
+            Some(e) => vec![e.id],
+            None => self.selected.clone(),
+        }
+    }
+
+    pub(super) fn apply_shape_opt(&mut self, opt: ShapeOpt) {
+        let targets = self.option_targets();
+        let pre = self.doc.clone();
+        for id in &targets {
+            let Some(s) = self.doc.get_mut(*id) else {
+                continue;
+            };
+            match opt {
+                ShapeOpt::TextSmaller | ShapeOpt::TextLarger => {
+                    shapes::bump_text_size(&mut s.kind, opt == ShapeOpt::TextLarger);
+                    if let ShapeKind::Text { size, .. } = s.kind {
+                        self.font_size = size.clamp(8.0, 200.0);
+                        self.prefs_dirty = true;
+                    }
+                }
+                ShapeOpt::Bold(on) => {
+                    shapes::set_bold(&mut s.kind, on);
+                    self.options.text_bold = on;
+                }
+                ShapeOpt::Pill(on) => {
+                    shapes::set_pill(s, on);
+                    self.options.text_pill = on;
+                }
+                ShapeOpt::Double(on) => {
+                    shapes::set_arrow_double(&mut s.kind, on);
+                    self.options.arrow_double = on;
+                }
+                ShapeOpt::Head(h) => {
+                    shapes::set_arrow_head(&mut s.kind, h);
+                    self.options.arrow_head = h;
+                }
+                ShapeOpt::Straighten => shapes::straighten(&mut s.kind),
+            }
+        }
+        if let Some(e) = self.edit.as_mut() {
+            e.blink_from = Instant::now();
+        } else if self.doc != pre {
+            self.undo.push(&pre);
+        }
+    }
+
+    /// Ctrl+B: toggle bold on the text being typed or the selected text.
+    pub(super) fn toggle_bold(&mut self) {
+        let on = self
+            .option_targets()
+            .first()
+            .and_then(|id| self.doc.get(*id))
+            .map(|s| matches!(s.kind, ShapeKind::Text { bold: true, .. }));
+        match on {
+            Some(b) => self.apply_shape_opt(ShapeOpt::Bold(!b)),
+            None => self.options.text_bold = !self.options.text_bold,
+        }
+    }
+
+    /// I or the toolbar button: pick a color from the captured image.
+    pub(super) fn toggle_eyedropper(&mut self) {
+        self.commit_text();
+        self.picking = !self.picking;
+        self.popup = None;
+    }
+
+    // ---------------------------------------------------------------- creation
 
     /// Add a shape, record undo, select it.
     pub(super) fn create_shape(&mut self, kind: ShapeKind, style: Style) -> ShapeId {
         let pre = self.doc.clone();
         let id = self.doc.add(kind, style);
         self.undo.push(&pre);
-        self.selected = Some(id);
+        self.select_only(id);
         id
     }
 
-    /// Add a textual shape and open the inline editor on it. The undo snapshot is taken
-    /// when the edit commits (so an abandoned empty shape leaves no history entry).
+    /// Add a textual shape and start typing on it. The undo snapshot is taken when the edit
+    /// commits (so an abandoned empty shape leaves no history entry).
     pub(super) fn create_textual(&mut self, kind: ShapeKind, style: Style) {
         let pre = self.doc.clone();
         let id = self.doc.add(kind, style);
-        self.selected = Some(id);
+        self.select_only(id);
         self.begin_edit(id, true, pre);
     }
 
@@ -134,27 +333,32 @@ impl Overlay {
             .and_then(|s| shapes::text_of(&s.kind))
             .unwrap_or("")
             .to_string();
-        self.live = Some(id);
+        self.live = vec![id];
         self.live_release_pending = false;
+        self.picking = false;
         self.edit = Some(EditState {
             id,
             is_new,
             pre,
+            caret: Caret::at(buffer.len()),
             buffer,
-            just_started: true,
+            blink_from: Instant::now(),
+            patch: None,
+            selecting: false,
         });
     }
 
     /// Finish inline text editing, keeping the text (empty text deletes the shape).
     pub(super) fn commit_text(&mut self) {
-        let Some(e) = self.edit.take() else { return };
+        let Some(mut e) = self.edit.take() else {
+            return;
+        };
+        self.settled_text = e.patch.take();
         let empty = e.buffer.trim().is_empty();
         if self.doc.get(e.id).is_some() {
             if empty {
                 self.doc.remove(e.id);
-                if self.selected == Some(e.id) {
-                    self.selected = None;
-                }
+                self.selected.retain(|id| *id != e.id);
                 if !e.is_new {
                     self.undo.push(&e.pre);
                 }
@@ -175,9 +379,38 @@ impl Overlay {
     }
 
     pub(super) fn release_live(&mut self) {
-        if self.live.is_some() {
+        if !self.live.is_empty() {
             self.live_release_pending = true;
         }
+    }
+
+    /// Byte offset in the text being typed nearest to image point `p`.
+    pub(super) fn caret_at(&self, p: PtF) -> Option<usize> {
+        let e = self.edit.as_ref()?;
+        let shape = self.doc.get(e.id)?;
+        let (size, bold, lines) = stinkshot_core::annotate::text_layout(&self.fonts, &shape.kind)?;
+        let first = lines.first()?;
+        let lh = size * stinkshot_core::fonts::LINE_HEIGHT;
+        let row = (((p.y - first.origin.y) / lh).floor().max(0.0) as usize).min(lines.len() - 1);
+        let line = &lines[row];
+        let text = &e.buffer;
+        let mut best = (line.range.start, f32::INFINITY);
+        let mut i = line.range.start;
+        loop {
+            let x = line.origin.x
+                + self
+                    .fonts
+                    .line_width(&text[line.range.start..i], size, bold);
+            let d = (x - p.x).abs();
+            if d < best.1 {
+                best = (i, d);
+            }
+            if i >= line.range.end {
+                break;
+            }
+            i += text[i..].chars().next().map_or(1, |c| c.len_utf8());
+        }
+        Some(best.0)
     }
 
     // ---------------------------------------------------------------- accepting / finishing
@@ -189,21 +422,39 @@ impl Overlay {
             return;
         }
         self.set_sel(r);
-        self.tool = Tool::Select;
+        self.set_tool(Tool::Select);
         self.drag = Drag::None;
     }
 
     fn persist_prefs(&mut self, shared: &mut Shared) {
-        if !self.prefs_dirty {
-            return;
+        let ed = &mut shared.config.editor;
+        let mut dirty = false;
+        if self.prefs_dirty {
+            let hex = to_hex_color(self.color);
+            if ed.color != hex {
+                ed.color = hex;
+                dirty = true;
+            }
+            if (ed.stroke_width - self.width).abs() > 0.01 {
+                ed.stroke_width = self.width;
+                dirty = true;
+            }
+            if (ed.font_size - self.font_size).abs() > 0.01 {
+                ed.font_size = self.font_size;
+                dirty = true;
+            }
         }
-        let hex = to_hex_color(self.color);
-        if shared.config.editor.color != hex {
-            shared.config.editor.color = hex;
-            shared.config_dirty = true;
+        let recent: Vec<String> = self.recent.iter().map(|c| to_hex_color(*c)).collect();
+        if ed.recent_colors != recent {
+            ed.recent_colors = recent;
+            dirty = true;
         }
-        if (shared.config.editor.stroke_width - self.width).abs() > 0.01 {
-            shared.config.editor.stroke_width = self.width;
+        let styles = self.tool_style_config();
+        if ed.tool_styles != styles {
+            ed.tool_styles = styles;
+            dirty = true;
+        }
+        if dirty {
             shared.config_dirty = true;
         }
     }
@@ -242,12 +493,12 @@ impl Overlay {
             self.complete(shared, action, base, doc, flat, rect);
             return;
         }
-        // The cached render is exactly the flattened output when it matches the document.
+        // The worker's image is exactly the flattened output when it shows this document.
         if self.render_ok
-            && self.rendered_doc.as_ref() == Some(&doc)
-            && let Some(img) = self.rendered_img.clone()
+            && let Some(flat) = self.renderer.as_ref().and_then(|r| r.image_for(&doc))
+            && flat.width == base.width
+            && flat.height == base.height
         {
-            let flat = (*img).clone();
             self.complete(shared, action, base, doc, flat, rect);
             return;
         }
@@ -363,7 +614,7 @@ impl Overlay {
                 // Store the clamped spot, not the raw pointer target, so the next drag
                 // starts from where the bar really is.
                 if moved && let (Some(origin), Some(sel)) = (self.bar_origin, self.sel) {
-                    let (at, _, _) = self.undocked_bars(origin, ppp, sel);
+                    let (at, _, _) = self.undocked_bars(origin, ppp, self.canvas_rect_screen(sel));
                     self.bar_origin = Some(at);
                     toolbar::remember(Some(toolbar::to_virtual(at, self.bounds)));
                 }
@@ -397,12 +648,15 @@ impl Overlay {
                     self.set_width(w);
                     self.popup = None;
                 }
+                UiAction::Eyedropper => self.toggle_eyedropper(),
+                UiAction::Shape(o) => self.apply_shape_opt(o),
+                UiAction::ZoomFit => self.set_view(View::IDENTITY),
                 UiAction::Ratio(r) => {
                     self.aspect = r;
                     if let (Some(rr), Some(sel)) = (r, self.sel)
                         && self.sel_editable()
                     {
-                        let new = selection::apply_ratio(sel, rr, self.local_bounds());
+                        let new = selection::apply_ratio(sel, rr, self.sel_bounds());
                         self.set_sel(new);
                     }
                 }
@@ -415,7 +669,7 @@ impl Overlay {
                 }
                 UiAction::ExactSize(w, h) => {
                     if let Some(sel) = self.sel {
-                        let new = selection::apply_exact_size(sel, w, h, self.local_bounds());
+                        let new = selection::apply_exact_size(sel, w, h, self.sel_bounds());
                         self.set_sel(new);
                         self.aspect = None;
                     }
@@ -423,6 +677,7 @@ impl Overlay {
                 }
                 UiAction::CloseExact => self.exact_open = false,
                 UiAction::TogglePopup(p) => {
+                    self.picking = false;
                     self.popup = if self.popup == Some(p) { None } else { Some(p) };
                 }
                 UiAction::Grip(ev) => self.grip(ctx, ev),

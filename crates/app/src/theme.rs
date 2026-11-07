@@ -680,6 +680,7 @@ pub enum Icon {
     Shield,
     ChevronDown,
     Settings,
+    Eyedropper,
 }
 
 /// Icon vector data (24x24 design grid, stroke 1.8) and the painter that draws it.
@@ -762,6 +763,10 @@ mod icons {
                 Path("M8.5 12l2.5 2.5 4.5-5"),
             ],
             Icon::ChevronDown => &[Path("M6 9l6 6 6-6")],
+            Icon::Eyedropper => &[
+                Path("M13 8l3 3-8 8H5v-3z"),
+                Path("M12 7l5 5M15 4.5a2.1 2.1 0 013 0l1.5 1.5a2.1 2.1 0 010 3L17 11.5 12.5 7z"),
+            ],
             Icon::Settings => &[
                 Path(
                     "M18.9 13.0L21.2 14.4L20.2 16.8L17.6 16.2L16.2 17.6L16.8 20.2L14.4 21.2L13.0 18.9\

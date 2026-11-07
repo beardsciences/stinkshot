@@ -87,6 +87,28 @@ pub struct Editor {
     pub palette: Vec<String>,
     /// Last style picked in Find Sensitive Info: "box", "blur" or "pixelate".
     pub smart_redact_style: String,
+    /// Last colors used in the editor, newest first (at most 6), as hex.
+    pub recent_colors: Vec<String>,
+    /// Color and stroke width each editor tool last used, keyed by tool ("arrow", "rect",
+    /// "redact", ...). Tools without an entry start from `color` / `stroke_width`.
+    pub tool_styles: std::collections::BTreeMap<String, ToolStyle>,
+}
+
+/// A tool's remembered color (hex) and stroke width.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ToolStyle {
+    pub color: String,
+    pub width: f32,
+}
+
+impl Default for ToolStyle {
+    fn default() -> Self {
+        Self {
+            color: "#ff8a3d".into(),
+            width: 4.0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -201,6 +223,8 @@ impl Default for Editor {
             .map(|s| s.to_string())
             .collect(),
             smart_redact_style: "box".into(),
+            recent_colors: Vec::new(),
+            tool_styles: Default::default(),
         }
     }
 }
@@ -484,6 +508,14 @@ mod tests {
         cfg.capture.last_region = Some(crate::geom::PxRect::new(-1920, 10, 800, 600));
         cfg.editor.stroke_width = 0.1;
         cfg.editor.palette = vec!["#010203".into()];
+        cfg.editor.recent_colors = vec!["#112233".into(), "#445566".into()];
+        cfg.editor.tool_styles.insert(
+            "arrow".into(),
+            ToolStyle {
+                color: "#ff0000".into(),
+                width: 6.0,
+            },
+        );
         cfg.history.max_gb = 2.5;
         cfg.privacy.check_for_updates = true;
         cfg.privacy.last_update_check = Some(chrono::Utc::now());
@@ -513,6 +545,8 @@ mod tests {
         assert_eq!(cfg.hotkeys.region, "F9");
         assert_eq!(cfg.hotkeys.window, Hotkeys::default().window);
         assert_eq!(cfg.recording, Recording::default());
+        // Editor memory added later: absent in old files, empty when loaded.
+        assert!(cfg.editor.recent_colors.is_empty() && cfg.editor.tool_styles.is_empty());
         let _ = std::fs::remove_dir_all(&d);
     }
 

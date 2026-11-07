@@ -7,7 +7,8 @@ use tiny_skia::{
 };
 
 use super::{
-    ArrowGeom, CALLOUT_PAD, HIGHLIGHT_ALPHA, Shape, ShapeKind, Style, arrow_geom, norm, text_rect,
+    ArrowHead, ArrowParts, HIGHLIGHT_ALPHA, Shape, ShapeKind, Style, arrow_parts,
+    callout_tail_base, norm, shape_bounds, text_layout, text_rect, translate_shape,
 };
 use crate::fonts::{Fonts, LINE_HEIGHT};
 use crate::geom::{PtF, PxRect, RectF};
@@ -134,6 +135,121 @@ pub(crate) fn render_shapes(
     }
 }
 
+/// Spotlight dimming plus every non-destructive shape (and redact boxes) over `work` (the
+/// base with destructive shapes already applied), for `region` only. Shapes are translated
+/// by whole pixels into a crop, so the pixels match a full render.
+pub(crate) fn render_over_region(
+    work: &Rgba,
+    shapes: &[&Shape],
+    fonts: &Fonts,
+    region: PxRect,
+) -> Rgba {
+    let Some(r) = region.intersect(&work.bounds()) else {
+        return Rgba::new(0, 0);
+    };
+    // Magnifiers sample `work` around their source; include it (plus a bilinear margin) in
+    // the crop when the inset can reach this region.
+    let mut e = r;
+    for s in shapes {
+        if let ShapeKind::Magnifier { source, .. } = &s.kind {
+            let p = norm(*source).to_px();
+            if let Some(src) =
+                PxRect::new(p.x - 2, p.y - 2, p.w + 4, p.h + 4).intersect(&work.bounds())
+            {
+                e = e.union(&src);
+            }
+        }
+    }
+    let crop = work.crop(e);
+    let Some(mut pm) = rgba_to_pixmap(&crop) else {
+        return Rgba::new(r.w as u32, r.h as u32);
+    };
+    let src = shapes
+        .iter()
+        .any(|s| matches!(s.kind, ShapeKind::Magnifier { .. }))
+        .then(|| pm.clone());
+    let (dx, dy) = (-e.x as f32, -e.y as f32);
+    let moved: Vec<Shape> = shapes
+        .iter()
+        .map(|s| {
+            let mut s = (*s).clone();
+            translate_shape(&mut s.kind, dx, dy);
+            if let ShapeKind::Magnifier { source, .. } = &mut s.kind {
+                // translate_shape keeps the source on the content; here the whole image moves.
+                source.x += dx;
+                source.y += dy;
+            }
+            s
+        })
+        .collect();
+    let refs: Vec<&Shape> = moved.iter().collect();
+    draw_spotlights(&mut pm, &refs);
+    for s in &refs {
+        if let ShapeKind::Redact { rect } = &s.kind {
+            fill_pixmap(
+                &mut pm,
+                norm(*rect).to_px(),
+                [s.style.color[0], s.style.color[1], s.style.color[2], 255],
+            );
+            continue;
+        }
+        if is_destructive(&s.kind) || matches!(s.kind, ShapeKind::Spotlight { .. }) {
+            continue;
+        }
+        draw_shape(&mut pm, s, fonts, src.as_ref());
+    }
+    let out = Rgba {
+        width: e.w as u32,
+        height: e.h as u32,
+        data: pm.take_demultiplied(),
+    };
+    if e == r {
+        out
+    } else {
+        out.crop(PxRect::new(r.x - e.x, r.y - e.y, r.w, r.h))
+    }
+}
+
+/// One vector shape alone on a transparent canvas covering its bounds.
+pub(crate) fn render_patch(shape: &Shape, fonts: &Fonts) -> Option<(PxRect, Rgba)> {
+    if is_destructive(&shape.kind)
+        || matches!(
+            shape.kind,
+            ShapeKind::Spotlight { .. } | ShapeKind::Magnifier { .. }
+        )
+    {
+        return None;
+    }
+    let b = shape_bounds(shape, fonts);
+    // Room for the drop shadow, anti-aliasing and glyph overhang.
+    let size = match &shape.kind {
+        ShapeKind::Text { size, .. } | ShapeKind::Callout { size, .. } => *size,
+        _ => 0.0,
+    };
+    let margin = 6.0 + shape.style.width + size * 0.25;
+    let b = b.expand(margin);
+    if !(b.w.is_finite() && b.h.is_finite()) || b.w < 1.0 || b.h < 1.0 || b.w * b.h > 6.0e7 {
+        return None;
+    }
+    let (x0, y0) = (b.x.floor(), b.y.floor());
+    let (w, h) = (
+        (b.x + b.w - x0).ceil() as u32,
+        (b.y + b.h - y0).ceil() as u32,
+    );
+    let mut pm = Pixmap::new(w, h)?;
+    let mut s = shape.clone();
+    translate_shape(&mut s.kind, -x0, -y0);
+    draw_shape(&mut pm, &s, fonts, None);
+    Some((
+        PxRect::new(x0 as i32, y0 as i32, w as i32, h as i32),
+        Rgba {
+            width: w,
+            height: h,
+            data: pm.take_demultiplied(),
+        },
+    ))
+}
+
 /// Opaque rectangle fill straight into pixmap memory (opaque, so premultiplied == straight).
 fn fill_pixmap(pm: &mut Pixmap, rect: PxRect, color: [u8; 4]) {
     let bounds = PxRect {
@@ -208,6 +324,17 @@ fn contrast_color(bg: [u8; 4]) -> [u8; 4] {
         [20, 20, 22, 255]
     } else {
         [255, 255, 255, 255]
+    }
+}
+
+/// Drop shadow under plain text: dark under light text, a light halo under dark text, so
+/// black or navy text stays readable on dark screenshots too.
+pub(crate) fn text_shadow(color: [u8; 4]) -> [u8; 4] {
+    let lum = 0.299 * color[0] as f32 + 0.587 * color[1] as f32 + 0.114 * color[2] as f32;
+    if lum < 80.0 {
+        [255, 255, 255, 150]
+    } else {
+        [0, 0, 0, 120]
     }
 }
 
@@ -367,13 +494,19 @@ fn draw_spotlights(pm: &mut Pixmap, shapes: &[&Shape]) {
 fn draw_shape(pm: &mut Pixmap, shape: &Shape, fonts: &Fonts, magnifier_src: Option<&Pixmap>) {
     let st = &shape.style;
     match &shape.kind {
-        ShapeKind::Arrow { from, to } => {
-            if let Some(g) = arrow_geom(*from, *to, st.width) {
+        ShapeKind::Arrow {
+            from,
+            to,
+            ctrl,
+            double,
+            head,
+        } => {
+            if let Some(parts) = arrow_parts(*from, *to, *ctrl, st.width, *double, *head) {
                 if st.shadow {
                     let off = Transform::from_translate(0.0, shadow_offset(st.width));
-                    draw_arrow(pm, &g, *from, SHADOW_RGBA, st.width, off);
+                    draw_arrow(pm, &parts, SHADOW_RGBA, st.width, off);
                 }
-                draw_arrow(pm, &g, *from, st.color, st.width, Transform::identity());
+                draw_arrow(pm, &parts, st.color, st.width, Transform::identity());
             }
         }
         ShapeKind::Line { from, to } => {
@@ -447,11 +580,12 @@ fn draw_shape(pm: &mut Pixmap, shape: &Shape, fonts: &Fonts, magnifier_src: Opti
             text,
             size,
             background,
+            bold,
         } => {
             let size = size.max(1.0);
             match background {
                 Some(bg) => {
-                    let pill = text_rect(fonts, *pos, text, size, true);
+                    let pill = text_rect(fonts, *pos, text, size, true, *bold);
                     if let Some(path) = rounded_rect_path(pill, (pill.h / 2.0).min(size * 0.7)) {
                         if st.shadow {
                             let off = Transform::from_translate(0.0, shadow_offset(size / 4.0));
@@ -459,9 +593,9 @@ fn draw_shape(pm: &mut Pixmap, shape: &Shape, fonts: &Fonts, magnifier_src: Opti
                         }
                         fill_path(pm, &path, *bg, Transform::identity());
                     }
-                    draw_text_block(pm, fonts, text, *pos, size, false, st.color, false);
+                    draw_text_block(pm, fonts, text, *pos, size, *bold, st.color, false);
                 }
-                None => draw_text_block(pm, fonts, text, *pos, size, false, st.color, st.shadow),
+                None => draw_text_block(pm, fonts, text, *pos, size, *bold, st.color, st.shadow),
             }
         }
         ShapeKind::Step { center, radius, n } => draw_step(pm, fonts, st, *center, *radius, *n),
@@ -490,36 +624,47 @@ fn draw_shape(pm: &mut Pixmap, shape: &Shape, fonts: &Fonts, magnifier_src: Opti
     }
 }
 
-fn draw_arrow(
-    pm: &mut Pixmap,
-    g: &ArrowGeom,
-    from: PtF,
-    color: [u8; 4],
-    width: f32,
-    tf: Transform,
-) {
+fn draw_arrow(pm: &mut Pixmap, parts: &ArrowParts, color: [u8; 4], width: f32, tf: Transform) {
     // Shaft stops at the notch so the head's concave back stays clean.
-    let shaft_len = ((g.notch.x - from.x).powi(2) + (g.notch.y - from.y).powi(2)).sqrt();
+    let shaft = &parts.shaft;
+    let shaft_len: f32 = shaft
+        .windows(2)
+        .map(|w| ((w[1].x - w[0].x).powi(2) + (w[1].y - w[0].y).powi(2)).sqrt())
+        .sum();
     if shaft_len > 0.5 {
         let mut pb = PathBuilder::new();
-        pb.move_to(from.x, from.y);
-        pb.line_to(g.notch.x, g.notch.y);
+        pb.move_to(shaft[0].x, shaft[0].y);
+        for p in &shaft[1..] {
+            pb.line_to(p.x, p.y);
+        }
         if let Some(path) = pb.finish() {
             let stroke = stroke_of(width.max(1.0), LineCap::Round, LineJoin::Round);
             stroke_path(pm, &path, color, &stroke, tf);
         }
     }
-    let mut pb = PathBuilder::new();
-    pb.move_to(g.tip.x, g.tip.y);
-    pb.line_to(g.left.x, g.left.y);
-    pb.line_to(g.notch.x, g.notch.y);
-    pb.line_to(g.right.x, g.right.y);
-    pb.close();
-    if let Some(path) = pb.finish() {
-        fill_path(pm, &path, color, tf);
-        // A hairline of stroke rounds the head's points slightly and avoids a thin look.
-        let stroke = stroke_of((width * 0.25).max(0.8), LineCap::Round, LineJoin::Round);
-        stroke_path(pm, &path, color, &stroke, tf);
+    for g in &parts.heads {
+        let mut pb = PathBuilder::new();
+        if parts.style == ArrowHead::Open {
+            pb.move_to(g.left.x, g.left.y);
+            pb.line_to(g.tip.x, g.tip.y);
+            pb.line_to(g.right.x, g.right.y);
+            if let Some(path) = pb.finish() {
+                let stroke = stroke_of(width.max(1.0), LineCap::Round, LineJoin::Round);
+                stroke_path(pm, &path, color, &stroke, tf);
+            }
+            continue;
+        }
+        pb.move_to(g.tip.x, g.tip.y);
+        pb.line_to(g.left.x, g.left.y);
+        pb.line_to(g.notch.x, g.notch.y);
+        pb.line_to(g.right.x, g.right.y);
+        pb.close();
+        if let Some(path) = pb.finish() {
+            fill_path(pm, &path, color, tf);
+            // A hairline of stroke rounds the head's points slightly and avoids a thin look.
+            let stroke = stroke_of((width * 0.25).max(0.8), LineCap::Round, LineJoin::Round);
+            stroke_path(pm, &path, color, &stroke, tf);
+        }
     }
 }
 
@@ -598,8 +743,9 @@ fn draw_text_block(
         .collect();
     if shadow {
         let off = (size * 0.06).round().clamp(1.0, 3.0) as i32;
+        let halo = text_shadow(color);
         for g in &lines {
-            draw_glyphs(pm, g, 0, off, [0, 0, 0, 120]);
+            draw_glyphs(pm, g, 0, off, halo);
         }
     }
     for g in &lines {
@@ -746,74 +892,13 @@ pub(crate) fn draw_magnifier(
 // Callout
 // ---------------------------------------------------------------------------------------
 
-fn wrap_lines(fonts: &Fonts, text: &str, size: f32, max_w: f32) -> Vec<String> {
-    let mut out = Vec::new();
-    for para in text.split('\n') {
-        let mut line = String::new();
-        for word in para.split(' ') {
-            let candidate = if line.is_empty() {
-                word.to_string()
-            } else {
-                format!("{line} {word}")
-            };
-            if !line.is_empty() && fonts.line_width(&candidate, size, false) > max_w {
-                out.push(std::mem::take(&mut line));
-                line = word.to_string();
-            } else {
-                line = candidate;
-            }
-        }
-        out.push(line);
-    }
-    out
-}
-
 fn callout_path(r: RectF, tail: PtF, radius: f32) -> Option<Path> {
     if r.w < 1.0 || r.h < 1.0 {
         return None;
     }
     let mut pb = PathBuilder::new();
     push_rounded_rect(&mut pb, r, radius);
-    let c = r.center();
-    let (dx, dy) = (tail.x - c.x, tail.y - c.y);
-    let outside = !r.contains(tail);
-    if outside && tail.x.is_finite() && tail.y.is_finite() {
-        let (hw, hh) = (r.w / 2.0, r.h / 2.0);
-        let horizontal = (dx / hw).abs() >= (dy / hh).abs();
-        let inset = 1.0;
-        let (a, b) = if horizontal {
-            let side_x = if dx > 0.0 { r.x + r.w } else { r.x };
-            let t = (side_x - c.x) / dx;
-            let bw = (r.h * 0.45).clamp(6.0, 28.0);
-            let lo = r.y + radius + bw / 2.0;
-            let hi = r.y + r.h - radius - bw / 2.0;
-            let ay = if lo < hi {
-                (c.y + dy * t).clamp(lo, hi)
-            } else {
-                c.y
-            };
-            let ix = if dx > 0.0 { -inset } else { inset };
-            (
-                PtF::new(side_x + ix, ay - bw / 2.0),
-                PtF::new(side_x + ix, ay + bw / 2.0),
-            )
-        } else {
-            let side_y = if dy > 0.0 { r.y + r.h } else { r.y };
-            let t = (side_y - c.y) / dy;
-            let bw = (r.w * 0.2).clamp(6.0, 28.0);
-            let lo = r.x + radius + bw / 2.0;
-            let hi = r.x + r.w - radius - bw / 2.0;
-            let ax = if lo < hi {
-                (c.x + dx * t).clamp(lo, hi)
-            } else {
-                c.x
-            };
-            let iy = if dy > 0.0 { -inset } else { inset };
-            (
-                PtF::new(ax - bw / 2.0, side_y + iy),
-                PtF::new(ax + bw / 2.0, side_y + iy),
-            )
-        };
+    if let Some((a, b)) = callout_tail_base(r, tail) {
         // Match the winding of the rounded rect (positive shoelace area in y-down coords)
         // so the union fills cleanly under the non-zero rule.
         let area =
@@ -837,7 +922,7 @@ fn draw_callout(
     size: f32,
 ) {
     let size = size.max(1.0);
-    let radius = (r.w.min(r.h) * 0.25).clamp(4.0, 16.0);
+    let radius = super::callout_radius(r);
     let Some(path) = callout_path(r, tail, radius) else {
         return;
     };
@@ -853,19 +938,28 @@ fn draw_callout(
         let stroke = stroke_of(st.width, LineCap::Round, LineJoin::Round);
         stroke_path(pm, &path, st.color, &stroke, Transform::identity());
     }
-    let pad = size * CALLOUT_PAD;
-    let lines = wrap_lines(fonts, text, size, (r.w - 2.0 * pad).max(size));
-    let block_h = lines.len() as f32 * size * LINE_HEIGHT;
-    let top = r.y + (r.h - block_h) / 2.0;
-    let color = contrast_color(body);
-    draw_text_block(
-        pm,
-        fonts,
-        &lines.join("\n"),
-        PtF::new(r.x + pad, top),
+    // Same layout the editor uses for its caret (`annotate::text_layout`).
+    let kind = ShapeKind::Callout {
+        rect: r,
+        tail,
+        text: text.to_string(),
         size,
-        false,
-        color,
-        false,
-    );
+    };
+    let Some((_, _, lines)) = text_layout(fonts, &kind) else {
+        return;
+    };
+    let joined: Vec<&str> = lines.iter().map(|l| &text[l.range.clone()]).collect();
+    let color = contrast_color(body);
+    if let Some(first) = lines.first() {
+        draw_text_block(
+            pm,
+            fonts,
+            &joined.join("\n"),
+            first.origin,
+            size,
+            false,
+            color,
+            false,
+        );
+    }
 }
