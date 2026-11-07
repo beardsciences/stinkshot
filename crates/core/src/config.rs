@@ -41,6 +41,9 @@ pub struct General {
 #[serde(default)]
 pub struct Hotkeys {
     pub take_over_printscreen: bool,
+    /// Route the Snipping Tool shortcuts (Win+Shift+S, Win+Shift+R, and PrintScreen through
+    /// the takeover) to Stinkshot with a low-level keyboard hook. Off by default.
+    pub replace_snipping_tool: bool,
     pub region: String,
     pub window: String,
     pub fullscreen: String,
@@ -172,6 +175,7 @@ impl Default for Hotkeys {
     fn default() -> Self {
         Self {
             take_over_printscreen: true,
+            replace_snipping_tool: false,
             region: "PrintScreen".into(),
             window: "Alt+PrintScreen".into(),
             fullscreen: "Control+PrintScreen".into(),
