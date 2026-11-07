@@ -1,0 +1,1106 @@
+[
+  {
+    "developer_and_jurisdiction": "The getfireshot.com footer reads '© 2008 — 2026 TruePage Solutions LTDA.' On Firefox AMO the developer is listed as Evgeny Suslikov. The license agreement names the licensor as 'GETFIRESHOT.COM and its licensors, if any', and its only contact is contacts@getfireshot.com. No address or country appears on getfireshot.com, license.php, privacy.php or extension-policy.php. A web search found no Brazilian (CNPJ) or other registry record for 'TruePage Solutions LTDA'. The 'LTDA' suffix only hints at a Brazilian or Portuguese-style entity, and that is unverified. Section 11 of the license (SLA) says it 'shall be governed by the internal laws of the State of California'. It also names the 'exclusive jurisdiction and venue of the state courts sitting in San Francisco County, California, or the federal courts in California' (https://getfireshot.com/license.php). The Chrome Web Store listing says 'This developer has not identified itself as a trader', so EU consumer rights do not apply to contracts with it. That listing gives no developer name or address, only getfireshot.com and contacts@getfireshot.com.",
+    "license": "Proprietary freemium. Lite is free, and 'Advertisements' appears as a row in the features comparison. Pro is paid. AMO lists the license as 'Custom License'. It is not open source. Pricing on https://getfireshot.com/buy.php as of 2026-11-07: 'FireShot Pro – Yearly' at $39.95/year, labeled 'Save 60%' ('Only $3.33 per month'), or 'FireShot Pro – Lifetime License' at $99.95 one-time. buy.php says the Lifetime plan gives 'Unlimited usage on two devices' (multiple browsers or profiles, personal use only). The SLA instead says 'up to two desktop (home and work) and two laptops.' A money-back guarantee is not stated on buy.php, using.php or privacy.php. Only user forum posts mention one, and they conflict (7 days vs 30 days), so it is unverified. Payment provider: FastSpring, listed as a service provider in the privacy policy. Pro trial: 10 days, after which it reverts to the free version (https://getfireshot.com/using.php). Older third-party listings show a $39.95 one-time lifetime price, which suggests the pricing has changed; those listings were not re-fetched.",
+    "platforms": "A browser extension, not a standalone desktop capture app. Chrome Web Store: v2.1.4.18, updated May 24, 2026, 3,000,000 users, 4.9 from 53K ratings. Firefox AMO: v1.12.18, last updated Jun 5, 2023, 183,707 users. Chromium browsers such as Edge and Opera can install from the Chrome Web Store. Older docs list other browsers (Pale Moon, SeaMonkey, IE, Thunderbird); these were not re-verified in this pass. The advanced features (editing, printing, capturing all tabs in one click, and others) need the Windows helper installed via https://getfireshot.com/enable-advanced.php. That page says 'the advanced features are not available on other platforms at the moment'. AMO lists the 'Exchange messages with programs other than Firefox' permission, which is native messaging. It captures web page content and the browser window only.",
+    "latest_version": "Chrome extension 2.1.4.18; Firefox add-on 1.12.18 (unchanged since 2023)",
+    "latest_release_date": "2026-05-24 (Chrome Web Store 'Updated'); Firefox AMO 2023-06-05",
+    "price": "Lite: free, with ads. Pro: $39.95/year (labeled 'Save 60%') or $99.95 one-time lifetime, per buy.php on 2026-11-07. Pro trial: 10 days.",
+    "privacy_network": "The extension policy (https://getfireshot.com/extension-policy.php, undated) says settings are stored locally, 'This data is not sent outside of the user's PC', and the extension 'does not send out any personal information'. It does not mention analytics. The Chrome Web Store disclosure says the developer will not collect or use user data. However, the AMO privacy policy (https://addons.mozilla.org/en/firefox/addon/fireshot/privacy/, fetched directly) says: 'FireShot uses Google Analytics to collect anonymized usage data related to extension performance and reliability'. It adds that this is 'opted in by default, and can be opted out in the extension's options.' Tabs that open on start or update go to getfireshot.com and fall under the website privacy policy. That policy (https://getfireshot.com/privacy.php, 'Updated: October 10, 2019') names Google Analytics and Adwords (cookies), plus FastSpring and ZenDesk as service providers. Optional uploads: EasyCaptures, Flickr, Picasa, ImageShack, Twitter, and custom FTP or HTTP servers.",
+    "features": [
+      {
+        "feature": "Region capture",
+        "status": "partial",
+        "note": "'Selected area' within a web page only. No desktop or other-app regions.",
+        "source": "https://getfireshot.com/using.php"
+      },
+      {
+        "feature": "Window capture",
+        "status": "partial",
+        "note": "'Browser window' only.",
+        "source": "https://getfireshot.com/using.php"
+      },
+      {
+        "feature": "Full screen capture",
+        "status": "no",
+        "note": "No desktop capture mode. The docs say you can press Print Screen and open the result in FireShot, so the work is done by the OS clipboard.",
+        "source": "https://getfireshot.com/using.php"
+      },
+      {
+        "feature": "Scrolling/long capture (desktop apps)",
+        "status": "no",
+        "note": "Scrolling capture covers web pages, frames, iframes and scrolling DIVs only.",
+        "source": "https://getfireshot.com/features.php"
+      },
+      {
+        "feature": "Web full-page capture",
+        "status": "yes",
+        "note": "'Entire page' is a core mode. Pro handles frames, iframes and scrolling DIVs. All-tabs capture is an advanced (Windows) feature.",
+        "source": "https://getfireshot.com/using.php"
+      },
+      {
+        "feature": "UI element snapping",
+        "status": "partial",
+        "note": "Captures web page elements and scrolling areas (DOM) only, not desktop UI elements.",
+        "source": "https://getfireshot.com/features.php"
+      },
+      {
+        "feature": "Frozen-screen capture",
+        "status": "unknown",
+        "note": "Not documented.",
+        "source": "https://getfireshot.com/using.php"
+      },
+      {
+        "feature": "Annotation editor",
+        "status": "partial",
+        "note": "Advanced feature, Windows only. Rectangle and ellipse highlights, freeform drawing, a line pointer with text, a text box, crop, fill, Gaussian blur, grayscale, invert and other effects, plus watermarks. using.php does not mention numbered markers or a magnifier.",
+        "source": "https://getfireshot.com/using.php"
+      },
+      {
+        "feature": "Re-editable annotations after saving",
+        "status": "yes",
+        "note": "Pro: 'Editing annotations in saved PNGs'.",
+        "source": "https://getfireshot.com/features.php"
+      },
+      {
+        "feature": "OCR / copy text",
+        "status": "partial",
+        "note": "No OCR is described. Pro PDF export keeps direct links and text features (search, select, copy).",
+        "source": "https://getfireshot.com/features.php"
+      },
+      {
+        "feature": "Automatic sensitive info detection/redaction",
+        "status": "no",
+        "note": "Only manual blur and fill are documented.",
+        "source": "https://getfireshot.com/using.php"
+      },
+      {
+        "feature": "Screen recording MP4",
+        "status": "no",
+        "note": "No video capture described.",
+        "source": "https://getfireshot.com/features.php"
+      },
+      {
+        "feature": "GIF recording",
+        "status": "no",
+        "note": "Saves static GIF images only.",
+        "source": "https://getfireshot.com/features.php"
+      },
+      {
+        "feature": "Recording system audio + mic",
+        "status": "no",
+        "note": "No recording feature.",
+        "source": "https://getfireshot.com/features.php"
+      },
+      {
+        "feature": "Webcam overlay",
+        "status": "no",
+        "note": "No recording feature.",
+        "source": "https://getfireshot.com/features.php"
+      },
+      {
+        "feature": "Click/key visualizer",
+        "status": "no",
+        "note": "No recording feature.",
+        "source": "https://getfireshot.com/features.php"
+      },
+      {
+        "feature": "Trim after recording",
+        "status": "no",
+        "note": "No recording feature.",
+        "source": "https://getfireshot.com/features.php"
+      },
+      {
+        "feature": "Pin image to screen",
+        "status": "unknown",
+        "note": "Not documented.",
+        "source": "https://getfireshot.com/features.php"
+      },
+      {
+        "feature": "Capture history with search (text inside captures)",
+        "status": "partial",
+        "note": "History is limited to the 'last week only' in Lite, with full access in Pro. No search inside captures.",
+        "source": "https://getfireshot.com/features.php"
+      },
+      {
+        "feature": "Cloud upload built in",
+        "status": "yes",
+        "note": "EasyCaptures, Flickr, Picasa, ImageShack and Twitter. Pro adds FTP and HTTP servers with customized requests.",
+        "source": "https://getfireshot.com/using.php"
+      },
+      {
+        "feature": "Works fully offline / no telemetry by default",
+        "status": "no",
+        "note": "The AMO privacy policy says Google Analytics is 'opted in by default' with an opt-out in options. The Chrome listing declares no data collection, which conflicts with AMO.",
+        "source": "https://addons.mozilla.org/en/firefox/addon/fireshot/privacy/"
+      },
+      {
+        "feature": "HDR display correct capture",
+        "status": "unknown",
+        "note": "Not documented.",
+        "source": "https://getfireshot.com/features.php"
+      },
+      {
+        "feature": "Per-monitor mixed DPI correctness",
+        "status": "unknown",
+        "note": "Not documented.",
+        "source": "https://getfireshot.com/features.php"
+      },
+      {
+        "feature": "Command line",
+        "status": "no",
+        "note": "No CLI. Web pages can call a JavaScript API (fsapi.js; needs v0.98.23 or later, and the API must be explicitly enabled in options).",
+        "source": "https://getfireshot.com/api.php"
+      },
+      {
+        "feature": "Open source",
+        "status": "no",
+        "note": "'Custom License' on AMO.",
+        "source": "https://addons.mozilla.org/en/firefox/addon/fireshot/"
+      }
+    ],
+    "notable_facts": [
+      {
+        "claim": "FireShot is a browser extension that captures web page content. It cannot capture desktop apps or the full screen, except by pasting a Print Screen image into its editor.",
+        "source": "https://getfireshot.com/using.php"
+      },
+      {
+        "claim": "The advanced features (editing, printing, all-tabs capture) are Windows-only: 'not available on other platforms at the moment'.",
+        "source": "https://getfireshot.com/enable-advanced.php"
+      },
+      {
+        "claim": "The license is governed by 'the internal laws of the State of California', with exclusive venue in San Francisco County state courts or the federal courts in California. The licensor is named only as 'GETFIRESHOT.COM'. The site footer names 'TruePage Solutions LTDA.' with no address or country.",
+        "source": "https://getfireshot.com/license.php"
+      },
+      {
+        "claim": "Chrome Web Store: v2.1.4.18, updated May 24, 2026, 3,000,000 users, 4.9 from 53K ratings. The developer 'has not identified itself as a trader', so EU consumer rights do not apply.",
+        "source": "https://chromewebstore.google.com/detail/take-webpage-screenshots/mcbpblocgmgfnpjjppndjkmgjaogfceg"
+      },
+      {
+        "claim": "The Firefox add-on has not been updated since Jun 5, 2023 (v1.12.18). It requests native messaging, download access and access to data for all websites.",
+        "source": "https://addons.mozilla.org/en/firefox/addon/fireshot/"
+      },
+      {
+        "claim": "The Firefox add-on's AMO privacy policy says it uses Google Analytics for anonymized usage data, 'opted in by default'. The Chrome listing declares no data collection.",
+        "source": "https://addons.mozilla.org/en/firefox/addon/fireshot/privacy/"
+      },
+      {
+        "claim": "Pro pricing as of 2026-11-07: $39.95/year ('Save 60%') or $99.95 lifetime, which buy.php says covers two devices.",
+        "source": "https://getfireshot.com/buy.php"
+      },
+      {
+        "claim": "The website privacy policy was last updated October 10, 2019. It names Google Analytics, Adwords, FastSpring and ZenDesk.",
+        "source": "https://getfireshot.com/privacy.php"
+      },
+      {
+        "claim": "Pro PDF export keeps direct links and searchable, selectable text.",
+        "source": "https://getfireshot.com/features.php"
+      },
+      {
+        "claim": "CORRECTION: The AMO Google Analytics claim (on by default, opt-out) is now verified from the AMO privacy page directly, not secondhand. 'Works offline / no telemetry by default' changed from partial to no.",
+        "source": "https://addons.mozilla.org/en/firefox/addon/fireshot/privacy/"
+      },
+      {
+        "claim": "CORRECTION: The '7-day money-back guarantee' is not stated on buy.php, using.php or privacy.php. Only user forum posts mention a guarantee, and they conflict (7 vs 30 days), so it is unverified.",
+        "source": "https://getfireshot.com/buy.php"
+      },
+      {
+        "claim": "CORRECTION: buy.php has no 'limited-time promotion' wording, only 'Save 60%'. The SLA names the licensor as 'GETFIRESHOT.COM', not TruePage. TruePage appears only in the site footer.",
+        "source": "https://getfireshot.com/license.php"
+      },
+      {
+        "claim": "CORRECTION: Several claims were dropped or unverified: numbered annotations (not on using.php), Firefox Android availability, OneNote and Gmail export, and Pale Moon, SeaMonkey, IE and Thunderbird support. Also dropped: the claim that the API cannot trigger 'capture selection', which came from a forum post and was not re-checked.",
+        "source": "https://getfireshot.com/using.php"
+      }
+    ],
+    "tool": "FireShot (Lite / Pro)"
+  },
+  {
+    "developer_and_jurisdiction": "Microsoft Corporation (Redmond, Washington, USA). It ships with Windows 11 and is updated through the Microsoft Store. It falls under the general Microsoft Privacy Statement and the Windows diagnostic-data settings. I found no privacy policy specific to Snipping Tool.",
+    "license": "Proprietary, closed source, part of Windows. Wikipedia's infobox lists no license.",
+    "platforms": "Windows 11 (current app). Wikipedia's infobox lists the Windows 10 release as 10.2008.3001 (August 2020 Update, dated 2025-04-02) and marks it discontinued. That build number belongs to the Snip & Sketch line, which was Windows 10's version of the tool.",
+    "price": "Free (built into Windows)",
+    "latest_version": "11.2608.41 (\"Windows 11 August 2026 Update\"). Source: Wikipedia infobox only. Not confirmed on an official Microsoft page.",
+    "latest_release_date": "2026-10-07. Source: Wikipedia infobox only. Not confirmed on an official Microsoft page.",
+    "privacy_network": "The Microsoft support page says of Text actions: \"All text recognition processes are performed locally on your device.\" Several features send content off the device: Share, Visual Search with Bing, and the Ask Copilot button. All three were on the capture toolbar per the Insider post of 2025-09-17. In its 2026-05-01 post Microsoft wrote, \"In Snipping Tool and Photos, we've removed the 'Ask Copilot' button entirely\", with the change rolling out through Microsoft Store updates over the previous month. Diagnostic data follows the Windows-wide Required/Optional setting. I could not source a separate telemetry switch for Snipping Tool. Perfect Screenshot and Color picker are labeled Copilot+ PC features. Recordings can be handed off to Clipchamp, and the support page mentions Clipchamp's Transcribe media option.",
+    "features": [
+      {
+        "feature": "Region capture",
+        "status": "yes",
+        "note": "Rectangle and freeform modes, with a 1 to 5 second delay (Alt+D).",
+        "source": "https://support.microsoft.com/en-us/windows/use-snipping-tool-to-capture-screenshots-00246869-1843-655f-f220-97299b865f6b"
+      },
+      {
+        "feature": "Window capture",
+        "status": "yes",
+        "note": "Window snip mode.",
+        "source": "https://support.microsoft.com/en-us/windows/use-snipping-tool-to-capture-screenshots-00246869-1843-655f-f220-97299b865f6b"
+      },
+      {
+        "feature": "Full screen capture",
+        "status": "yes",
+        "note": "Full screen snip mode. The PrtSc key can open Snipping Tool through a Windows setting, which this support page does not cover.",
+        "source": "https://support.microsoft.com/en-us/windows/use-snipping-tool-to-capture-screenshots-00246869-1843-655f-f220-97299b865f6b"
+      },
+      {
+        "feature": "Scrolling / long capture (desktop apps)",
+        "status": "no",
+        "note": "Microsoft's own Windows learning-center page answers 'Not natively. For long scrolling pages, you'll need a third-party screenshot tool.'",
+        "source": "https://www.microsoft.com/windows/learning-center/how-to-use-snipping-tool-on-windows-screenshots-shortcuts-and-screen-recordings"
+      },
+      {
+        "feature": "Web full-page capture",
+        "status": "no",
+        "note": "Not native, per Microsoft's learning-center page. Community answers point to Edge's separate Web Capture feature.",
+        "source": "https://www.microsoft.com/windows/learning-center/how-to-use-snipping-tool-on-windows-screenshots-shortcuts-and-screen-recordings"
+      },
+      {
+        "feature": "UI element snapping",
+        "status": "partial",
+        "note": "Window snip selects whole windows. Perfect Screenshot, a Copilot+ PC feature, 'automatically adjusts the capture area to tightly frame on-screen content' and adds crop handles. I found no documentation of snapping to individual controls.",
+        "source": "https://support.microsoft.com/en-us/windows/use-snipping-tool-to-capture-screenshots-00246869-1843-655f-f220-97299b865f6b"
+      },
+      {
+        "feature": "Frozen-screen capture",
+        "status": "unknown",
+        "note": "Not described in the official docs.",
+        "source": "https://support.microsoft.com/en-us/windows/use-snipping-tool-to-capture-screenshots-00246869-1843-655f-f220-97299b865f6b"
+      },
+      {
+        "feature": "Annotation editor (arrows, shapes, text, step numbers, blur/pixelate, highlight, magnifier, callouts)",
+        "status": "partial",
+        "note": "Quick markup (v11.2508.24.0) offers pen, highlighter, eraser, shapes and emoji. The editor adds crop and undo. A text tool was reported in Insider builds in Nov 2025 (secondary source). I found no documented step numbers, blur/pixelate, magnifier or callouts. The support page sends users to 'Edit with Paint' for text and other edits.",
+        "source": "https://blogs.windows.com/windows-insider/2025/09/17/paint-snipping-tool-and-notepad-app-updates-begin-rolling-out-to-windows-insiders/"
+      },
+      {
+        "feature": "Re-editable annotations after saving",
+        "status": "unknown",
+        "note": "Not documented. No project or layer format is mentioned.",
+        "source": "https://support.microsoft.com/en-us/windows/use-snipping-tool-to-capture-screenshots-00246869-1843-655f-f220-97299b865f6b"
+      },
+      {
+        "feature": "OCR / copy text",
+        "status": "yes",
+        "note": "Text actions run on the device, according to the support page. A Text extractor button on the capture bar arrived in v11.2503.27.0 (Insider, April 2025, per secondary coverage). QR scanning and 'Copy as table' were reported in Insider builds but are not verified on an official page.",
+        "source": "https://support.microsoft.com/en-us/windows/use-snipping-tool-to-capture-screenshots-00246869-1843-655f-f220-97299b865f6b"
+      },
+      {
+        "feature": "Automatic sensitive info detection/redaction",
+        "status": "partial",
+        "note": "Quick redact covers email addresses and phone numbers only, per the support page. Manual redaction of other selected text is described by third-party guides only.",
+        "source": "https://support.microsoft.com/en-us/windows/use-snipping-tool-to-capture-screenshots-00246869-1843-655f-f220-97299b865f6b"
+      },
+      {
+        "feature": "Screen recording MP4",
+        "status": "yes",
+        "note": "Records a rectangle (Win+Shift+R) and auto-saves to the Screen Recordings folder. Recording first reached Insiders on 2022-12-08. Window-mode recording came in v11.2507.14.0+ (Canary/Dev, Aug 2025). Secondary reports say the recording area stays fixed and does not follow the window.",
+        "source": "https://blogs.windows.com/windows-insider/2025/08/15/announcing-windows-11-insider-preview-build-26200-5751dev-channel/"
+      },
+      {
+        "feature": "GIF recording",
+        "status": "partial",
+        "note": "GIF export in low or high quality, from v11.2505.21.0 (2025-06-19). 'GIF export is limited to videos that are 30 seconds or less'; for a longer video the tool offers to export the first 30 seconds.",
+        "source": "https://blogs.windows.com/windows-insider/2025/06/19/gif-export-in-snipping-tool-begins-rolling-out-to-windows-insiders/"
+      },
+      {
+        "feature": "Recording system audio + mic",
+        "status": "yes",
+        "note": "Optional PC audio and microphone voice-over, a default audio setting and device selection, in v11.2307.44.0 (2023-08-31).",
+        "source": "https://blogs.windows.com/windows-insider/2023/08/31/new-updates-for-snipping-tool-and-notepad/"
+      },
+      {
+        "feature": "Webcam overlay",
+        "status": "unknown",
+        "note": "Not mentioned in any official doc or Insider post I found.",
+        "source": "https://support.microsoft.com/en-us/windows/use-snipping-tool-to-capture-screenshots-00246869-1843-655f-f220-97299b865f6b"
+      },
+      {
+        "feature": "Click/key visualizer",
+        "status": "unknown",
+        "note": "Not mentioned in any official doc or Insider post I found.",
+        "source": "https://support.microsoft.com/en-us/windows/use-snipping-tool-to-capture-screenshots-00246869-1843-655f-f220-97299b865f6b"
+      },
+      {
+        "feature": "Trim after recording",
+        "status": "partial",
+        "note": "Basic trim that keeps a single time interval, rolled out to all Windows 11 users via the Store in May 2025. There is no multi-segment editing. Deeper edits go to Clipchamp.",
+        "source": "https://www.windowslatest.com/2025/05/16/windows-11s-built-in-screen-recorder-now-has-trim-feature"
+      },
+      {
+        "feature": "Pin image to screen",
+        "status": "unknown",
+        "note": "Not documented. The support page mentions pinning only the app to the taskbar.",
+        "source": "https://support.microsoft.com/en-us/windows/use-snipping-tool-to-capture-screenshots-00246869-1843-655f-f220-97299b865f6b"
+      },
+      {
+        "feature": "Capture history with search (text search inside captures)",
+        "status": "unknown",
+        "note": "Not documented. Snips are 'automatically saved to your Screenshots folder'. The support page mentions no in-app history or search.",
+        "source": "https://support.microsoft.com/en-us/windows/use-snipping-tool-to-capture-screenshots-00246869-1843-655f-f220-97299b865f6b"
+      },
+      {
+        "feature": "Cloud upload built in",
+        "status": "partial",
+        "note": "No upload or hosting service of its own. It has Share (Windows share sheet), Visual Search with Bing and a Clipchamp hand-off. The Ask Copilot button was removed by May 2026.",
+        "source": "https://blogs.windows.com/windows-insider/2025/09/17/paint-snipping-tool-and-notepad-app-updates-begin-rolling-out-to-windows-insiders/"
+      },
+      {
+        "feature": "Works fully offline / no telemetry by default",
+        "status": "partial",
+        "note": "Capture and text recognition are local, per the support page. Diagnostic data follows the Windows-wide setting, and Required data cannot be turned off on consumer editions. Bing and Share are online. I found no telemetry statement specific to Snipping Tool.",
+        "source": "https://support.microsoft.com/en-us/windows/use-snipping-tool-to-capture-screenshots-00246869-1843-655f-f220-97299b865f6b"
+      },
+      {
+        "feature": "HDR display correct capture",
+        "status": "partial",
+        "note": "'HDR screenshot color corrector' setting, introduced in v11.2403.8.0 and off by default according to third-party guides. Users report mixed results. There is no official Microsoft documentation of the setting.",
+        "source": "https://www.elevenforum.com/t/enable-or-disable-hdr-screenshot-color-corrector-in-snipping-tool-in-windows-11.24243/"
+      },
+      {
+        "feature": "Per-monitor mixed DPI correctness",
+        "status": "unknown",
+        "note": "No official documentation or testing found.",
+        "source": "https://support.microsoft.com/en-us/windows/use-snipping-tool-to-capture-screenshots-00246869-1843-655f-f220-97299b865f6b"
+      },
+      {
+        "feature": "Command line",
+        "status": "partial",
+        "note": "No CLI. The ms-screenclip: URI protocol has capture/image, capture/video and discover hosts. It 'requires a packaged Windows app (MSIX)' to receive responses, and it replaces the now-deprecated 'Launch screen snipping' scheme. The doc gives no deprecation date.",
+        "source": "https://learn.microsoft.com/en-us/windows/apps/develop/launch/launch-snipping-tool"
+      },
+      {
+        "feature": "Open source",
+        "status": "no",
+        "note": "Proprietary Microsoft component.",
+        "source": "https://en.wikipedia.org/wiki/Snipping_Tool"
+      }
+    ],
+    "notable_facts": [
+      {
+        "claim": "Microsoft's 2026-05-01 Insider post: 'In Snipping Tool and Photos, we've removed the Ask Copilot button entirely', rolled out through Microsoft Store updates over the previous month.",
+        "source": "https://blogs.windows.com/windows-insider/2026/05/01/windows-quality-update-progress-weve-made-since-march/"
+      },
+      {
+        "claim": "Quick markup in v11.2508.24.0 (Ctrl+E) lets you annotate before finishing a capture. The capture toolbar had Share, Visual Search with Bing and Ask Copilot. The update reached Beta and Release Preview on Sept 24, 2025.",
+        "source": "https://blogs.windows.com/windows-insider/2025/09/17/paint-snipping-tool-and-notepad-app-updates-begin-rolling-out-to-windows-insiders/"
+      },
+      {
+        "claim": "Perfect Screenshot and Color picker are labeled Copilot+ PC features.",
+        "source": "https://support.microsoft.com/en-us/windows/use-snipping-tool-to-capture-screenshots-00246869-1843-655f-f220-97299b865f6b"
+      },
+      {
+        "claim": "GIF export is limited to videos of 30 seconds or less. For longer clips the tool offers to export the first 30 seconds (v11.2505.21.0, June 2025).",
+        "source": "https://blogs.windows.com/windows-insider/2025/06/19/gif-export-in-snipping-tool-begins-rolling-out-to-windows-insiders/"
+      },
+      {
+        "claim": "The 2023 'aCropalypse' flaw (CVE-2023-28303, CVSS 3.3) could leave cropped-out image data in a file that was cropped and saved over itself. It was fixed in Snipping Tool 11.2302.20.0 (Windows 11) and Snip & Sketch 10.2008.3001.0 (Windows 10).",
+        "source": "https://www.appsecure.security/vulnerability-database/cve-2023-28303/"
+      },
+      {
+        "claim": "Third-party apps can launch Snipping Tool's capture overlay through ms-screenclip: (capture/discover hosts). Receiving the result requires a packaged (MSIX) app launched through Launcher.LaunchUriAsync.",
+        "source": "https://learn.microsoft.com/en-us/windows/apps/develop/launch/launch-snipping-tool"
+      },
+      {
+        "claim": "Microsoft itself says Snipping Tool cannot do scrolling captures natively and points users to third-party tools.",
+        "source": "https://www.microsoft.com/windows/learning-center/how-to-use-snipping-tool-on-windows-screenshots-shortcuts-and-screen-recordings"
+      },
+      {
+        "claim": "CORRECTION: The original listed only community posts for the 'no scrolling capture' status. It is now sourced to Microsoft's own learning-center page, which says 'Not natively'.",
+        "source": "https://www.microsoft.com/windows/learning-center/how-to-use-snipping-tool-on-windows-screenshots-shortcuts-and-screen-recordings"
+      },
+      {
+        "claim": "CORRECTION: The legacy ms-screenclip scheme 'deprecated on 2025-05-01' date is not on the Microsoft Learn page, which says only that the old scheme 'is now deprecated'. The date was removed.",
+        "source": "https://learn.microsoft.com/en-us/windows/apps/develop/launch/launch-snipping-tool"
+      },
+      {
+        "claim": "CORRECTION: The 'more intentional' quote attributed to the May 2026 post was not confirmed and was removed. The confirmed text is that the Ask Copilot button was 'removed entirely' via Store updates over the previous month (April to May 2026).",
+        "source": "https://blogs.windows.com/windows-insider/2026/05/01/windows-quality-update-progress-weve-made-since-march/"
+      },
+      {
+        "claim": "CORRECTION: The Ctrl+R manual redaction and 'Remove all redactions' come from a third-party guide I could not open (HTTP 403). The official page confirms only that Quick redact covers emails and phone numbers. The source was moved to the official page.",
+        "source": "https://support.microsoft.com/en-us/windows/use-snipping-tool-to-capture-screenshots-00246869-1843-655f-f220-97299b865f6b"
+      },
+      {
+        "claim": "CORRECTION: The HDR claim was sourced to PC Gamer, whose body text could not be verified. It is now sourced to guides that give v11.2403.8.0 and off by default. The 'over-saturated highlights' detail was removed as unverified.",
+        "source": "https://www.elevenforum.com/t/enable-or-disable-hdr-screenshot-color-corrector-in-snipping-tool-in-windows-11.24243/"
+      },
+      {
+        "claim": "CORRECTION: The window-recording source was moved from BetaNews (HTTP 403) to the official build 26200.5751 Insider post, which confirms v11.2507.14.0. The claim that the recording area does not follow the window comes from secondary reports only.",
+        "source": "https://blogs.windows.com/windows-insider/2025/08/15/announcing-windows-11-insider-preview-build-26200-5751dev-channel/"
+      },
+      {
+        "claim": "CORRECTION: I found no Windows Insider post about Snipping Tool dated 2026-09-18. The author index shows only a 2026-01-21 Notepad/Paint post. That item stays out of the chart.",
+        "source": "https://blogs.windows.com/windows-insider/author/dave-grochocki/"
+      },
+      {
+        "claim": "CORRECTION: Windows 10 build 10.2008.3001 is in the Snip & Sketch line (Wikipedia dates that entry 2025-04-02). Version 11.2608.41 and the 2026-10-07 date come only from the Wikipedia infobox.",
+        "source": "https://en.wikipedia.org/wiki/Snipping_Tool"
+      }
+    ],
+    "tool": "Windows 11 Snipping Tool (Microsoft, built in)"
+  },
+  {
+    "latest_version": "22.3.0",
+    "latest_release_date": "2026-11-07, per the getsharex.com changelog. The GitHub releases page marks 22.3.0 as Latest, dated 07 Nov. Earlier releases: 22.2.0 (2026-11-06), 22.1.0 (2026-11-02, a GitHub pre-release), 22.0.0 (2026-10-20, a GitHub pre-release) and 21.0.0 (03 Jul, per GitHub).",
+    "license": "GPL-3.0 (open source)",
+    "platforms": "Windows only. Available as setup and portable builds on GitHub, from the Microsoft Store (ID 9NBLGGH4Z1SP, free) and on Steam (app 400040, by ShareX Team, free; Steam lists Windows 7 SP1 as the minimum). Changelog 20.0.2 says native ARM64 support is available via the Microsoft Store. Changelog 22.0.0 says the project was upgraded to .NET 10.",
+    "price": "Free",
+    "developer_and_jurisdiction": "ShareX Team, as named on Steam. It is an open-source project at github.com/ShareX/ShareX (about 40.8k stars). The site, privacy policy, repo and Steam page name no company, registered entity or governing-law jurisdiction. Jurisdiction is unknown and should not be stated in a chart.",
+    "privacy_network": "The privacy policy says the ShareX application \"does not collect data of any kind, including personally identifiable information.\" The app sends files only to third-party services the user chooses and configures. It uses the GitHub API to check for updates at startup and periodically after that, and downloads updates only when the user permits it. The website (not the app) uses Google Analytics to measure page views. Changelog 19.0.1 (2026-01-20) says automatic upload is disabled by default for new installations. OCR uses the Windows OCR engine locally, and recognized text is sent online only if the user picks a web service such as Google Translate, Google Search, Bing, DuckDuckGo or DeepL. The privacy policy page shows no effective date.",
+    "features": [
+      {
+        "feature": "Region capture",
+        "status": "yes",
+        "note": "22.3.0 added a 'Multi region mode' option and a 'Compact region capture toolbar' option. It also made the region toolbar draggable and added 'Region (Transparent)' back to the capture menu.",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "feature": "Window capture",
+        "status": "yes",
+        "note": "Captures the active window, or a window picked from a menu.",
+        "source": "https://getsharex.com/"
+      },
+      {
+        "feature": "Full screen",
+        "status": "yes",
+        "note": "Captures the full screen, the active monitor, or a monitor picked from a menu.",
+        "source": "https://getsharex.com/"
+      },
+      {
+        "feature": "Scrolling/long capture (desktop apps)",
+        "status": "partial",
+        "note": "Scrolls the target, captures repeatedly and stitches the images by comparing each new frame with the last. The docs mention only web pages and documents, not native desktop apps. Static footers or sidebars, animated content and hover effects can break matching. Scrolling capture was rewritten from scratch in 16.0.0 (2024-03-10), and 18.0.0 (2025-08-12) added a 'Scroll method' option.",
+        "source": "https://getsharex.com/docs/scrolling-screenshot"
+      },
+      {
+        "feature": "Web full-page capture",
+        "status": "no",
+        "note": "Added in 10.0.0 (2015). Removed in 12.4.0 ('Removed webpage capture which was using Internet Explorer to render'). Scrolling capture is the only remaining route.",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "feature": "UI element snapping",
+        "status": "partial",
+        "note": "Region capture detects windows, and 20.0.2 filters out non-activatable tool windows during that detection (heise, 2026-04-27). The cited source does not confirm detection of individual controls or UI elements.",
+        "source": "https://heise.de/-11274145"
+      },
+      {
+        "feature": "Frozen-screen capture",
+        "status": "partial",
+        "note": "Not documented as a named feature. Changelog 9.9.0 added 'transparent rectangle capture (without freezing screen)', which implies the default region mode works on a frozen image. 'Region (Transparent)' was re-added to the capture menu in 22.3.0.",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "feature": "Annotation editor (arrows, shapes, text, steps, blur/pixelate, highlight, magnifier, callouts)",
+        "status": "yes",
+        "note": "20.0.2 (2026-04-24) introduced a new image editor built with Avalonia UI. It lists 18 tools including Select: Rectangle, Ellipse, Line, Arrow, Freehand, Text, Emoji, Speech Balloon, Step, Highlight, Smart Eraser, Blur, Pixelate, Magnify, Spotlight, Crop and Cut Out. It also has background and beautify options and 232 image effects. 22.1.0 added a separate 'Photo editor' tool.",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "feature": "Re-editable annotations after saving",
+        "status": "unknown",
+        "note": "The site and changelog show no editor project file or re-edit feature.",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "feature": "OCR / copy text",
+        "status": "yes",
+        "note": "Uses the Windows OCR engine locally and requires Windows 10 1903 (build 18362) or newer. Languages depend on installed Windows OCR language packs. Offline OCR was added in 14.0.0. Optional web services (search, translate) send the text online.",
+        "source": "https://getsharex.com/docs/ocr"
+      },
+      {
+        "feature": "Automatic sensitive info detection/redaction",
+        "status": "unknown",
+        "note": "Not found in the feature list or changelog. The editor has manual Blur, Pixelate and Smart Eraser only.",
+        "source": "https://getsharex.com/"
+      },
+      {
+        "feature": "Screen recording MP4",
+        "status": "yes",
+        "note": "22.0.0 (2026-10-20, a GitHub pre-release) added native screen recording without FFmpeg and raised the FPS limit to 120. It also updated the bundled FFmpeg to 9.0.",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "feature": "GIF recording",
+        "status": "yes",
+        "note": "22.1.0 (2026-11-02) added native GIF recording without FFmpeg. 22.0.0 added the Animated GIF maker and Animated GIF trimmer tools.",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "feature": "Recording system audio + mic",
+        "status": "yes",
+        "note": "22.0.0 added system audio and microphone recording, configured on a new screen recorder bar before recording starts.",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "feature": "Webcam overlay",
+        "status": "yes",
+        "note": "22.0.0 'Added support for recording camera overlays.'",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "feature": "Click/key visualizer",
+        "status": "partial",
+        "note": "22.0.0 added a Mouse highlighter tool and an 'Automatically start mouse highlighter' option for recording. The checked changelog sections show no keystroke visualizer.",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "feature": "Trim after recording",
+        "status": "yes",
+        "note": "Separate Video trimmer and Animated GIF trimmer tools (22.0.0), plus 'Trim video' and 'Trim animated GIF' context-menu options in the main and history windows. Trimming is not an automatic step after recording.",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "feature": "Pin image to screen",
+        "status": "yes",
+        "note": "'Pin to screen' is listed among the tools that 22.0.0 added or redesigned from scratch.",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "feature": "Capture history with search (text search inside captures)",
+        "status": "partial",
+        "note": "Has history and image history windows (video files included since 22.0.0) and a Stats window built from local history (22.1.0). No OCR-indexed text search inside captures was found.",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "feature": "Cloud upload built in",
+        "status": "yes",
+        "note": "Many destinations plus custom uploaders. 22.0.0 added Immich, img.fish and MEGA uploaders and a Remote storage browser for S3, SFTP, FTPS and FTP.",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "feature": "Works fully offline / no telemetry by default",
+        "status": "partial",
+        "note": "The privacy policy says the app collects no data, and OCR is local. The app still checks GitHub for updates at startup and periodically by default. Automatic upload has been off by default for new installs only since 19.0.1.",
+        "source": "https://getsharex.com/privacy-policy"
+      },
+      {
+        "feature": "HDR display correct capture",
+        "status": "partial",
+        "note": "22.0.0 'Added HDR screenshot color corrector option (Task settings -> Capture).' The changelog does not say whether it is on by default.",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "feature": "Per-monitor mixed DPI correctness",
+        "status": "partial",
+        "note": "The changelog has 'High DPI improvements for UI' (12.2.0, 2018) and 'Improved high DPI support' (20.1.0). It makes no explicit mixed-DPI guarantee. The third-party high-DPI cursor-offset report was not re-verified here.",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "feature": "Command line",
+        "status": "yes",
+        "note": "CLI options: -AutoClose (9.4.2), -workflow (9.5.0), URL upload (10.1.0), -Task (10.3.0) and an -ImageEditor file path parameter (11.4.0).",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "feature": "Open source",
+        "status": "yes",
+        "note": "GPL-3.0, about 40.8k GitHub stars.",
+        "source": "https://github.com/ShareX/ShareX"
+      }
+    ],
+    "notable_facts": [
+      {
+        "claim": "CORRECTION: Web full-page capture changes from 'partial' to 'no'. It was added in 10.0.0 and then removed in 12.4.0 ('Removed webpage capture which was using Internet Explorer to render').",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "claim": "CORRECTION: The scrolling capture rewrite was in 16.0.0 (2024-03-10) and 'Scroll method' was added in 18.0.0. The docs do not mention any options being dropped, so that claim is removed.",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "claim": "CORRECTION: The new Avalonia image editor appears in the changelog under 20.0.2 (2026-04-24). Its count of 18 tools includes 'Select'. The 'background beautifier' is a set of background and padding options, not a separately named feature.",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "claim": "CORRECTION: The heise source supports window detection that filters non-activatable tool windows (20.0.2). It does not confirm detection of individual controls, so UI element snapping is downgraded to 'partial'.",
+        "source": "https://heise.de/-11274145"
+      },
+      {
+        "claim": "CORRECTION: On GitHub, 22.0.0 and 22.1.0 are marked pre-release. 22.2.0 and 22.3.0 are stable. A 21.0.0 release (03 Jul) also exists between 20.2.0 and 22.0.0.",
+        "source": "https://github.com/ShareX/ShareX/releases"
+      },
+      {
+        "claim": "CORRECTION: The 22.0.0 changelog lists the HDR color corrector as an option but does not say whether it is on by default, so the 'not on by default' claim is removed.",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "claim": "No legal jurisdiction is stated anywhere checked. The developer appears only as 'ShareX Team' (Steam) and the GitHub org. Do not claim a jurisdiction for ShareX in the comparison chart.",
+        "source": "https://store.steampowered.com/app/400040/"
+      },
+      {
+        "claim": "ShareX is shipping fast: 22.0.0 (2026-10-20) through 22.3.0 (2026-11-07). Any comparison chart should carry an 'as of' date.",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "claim": "22.0.0 added native screen recording without FFmpeg, system and mic audio, camera overlays, a mouse highlighter option and a 120 FPS limit. It still updated the bundled FFmpeg to 9.0. 22.0.0 also says every part of the UI was rewritten with a modern design.",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "claim": "Automatic upload has been disabled by default for new installations since 19.0.1 (2026-01-20).",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "claim": "Per the privacy policy, the app collects no data. It checks GitHub for updates at startup and periodically after that, and downloads updates only with permission. The website uses Google Analytics.",
+        "source": "https://getsharex.com/privacy-policy"
+      },
+      {
+        "claim": "OCR runs offline on the Windows OCR engine and needs Windows 10 1903 or newer. Optional search and translate services send the recognized text to those websites.",
+        "source": "https://getsharex.com/docs/ocr"
+      },
+      {
+        "claim": "22.3.0 'Improved startup speed and first region capture speed.' ShareX is actively competing on performance.",
+        "source": "https://getsharex.com/changelog"
+      },
+      {
+        "claim": "No keystroke visualizer, automatic sensitive-info redaction or OCR text search across capture history was found in the checked changelog sections or feature list. These are possible gaps for StinkShot to fill.",
+        "source": "https://getsharex.com/changelog"
+      }
+    ],
+    "tool": "ShareX"
+  },
+  {
+    "latest_version": "v15.0.0 (preceded by pre-release v15.0.rc1 \"v15 RC1 Beta\", published 2026-09-19, and by v14.0.0, released 19 Jun 2026)",
+    "latest_release_date": "2026-11-07 (GitHub API published_at 2026-11-07T16:42:38Z)",
+    "license": "The README says the main code is \"licensed under GPLv3+\". The logo is under the Free Art License v1.3 and the button icons under Apache License 2.0. Some code is derived from other projects: Lightscreen (GPLv2), a few lines from KSnapshot (LGPL), and Qt-Color-Widgets (LGPL/GPL). Source: https://github.com/flameshot-org/flameshot/blob/master/README.md",
+    "platforms": "Windows, macOS and Linux. flameshot.org says \"64-bit only\" for each platform. The README calls GNOME and Plasma Wayland support experimental; flameshot.org itself does not mention Wayland. Sources: https://flameshot.org/ (platforms, 64-bit) and https://github.com/flameshot-org/flameshot/blob/master/README.md (Wayland)",
+    "price": "Free and open source. Source: https://flameshot.org/",
+    "developer_and_jurisdiction": "A community open-source project in the flameshot-org GitHub organization; maintainer borgmanJeremy publishes releases. The flameshot.org footer reads \"Copyright © 2017-2026 Flameshot contributors\" and lists sponsors (NameCheap, JetBrains, SignPath, AnonAddy). The site names no company, imprint or legal address, so the jurisdiction is unknown. The README says Windows binaries use free code signing from SignPath.io and that \"not every patch release will be signed.\"",
+    "privacy_network": "The README privacy section says the program \"will not transfer any information to other networked systems\" unless \"specifically requested by the user or the person installing or operating it.\" Two caveats come from the source. First, upstream builds check for updates by default: confighandler.cpp sets checkForUpdates to true unless DISABLE_UPDATE_CHECKER is defined, and that CMake option defaults to OFF. Second, Imgur upload is off by default: CMakeLists.txt has option(ENABLE_IMGUR ... OFF), and OMG! Ubuntu reported in Aug 2025 that 13.0 disabled it, citing the risk of accidentally uploading sensitive data. I could not open the openSUSE patch (HTTP 403), so the claim that openSUSE removes the update check is unverified.",
+    "features": [
+      {
+        "feature": "Region capture",
+        "status": "yes",
+        "note": "The core 'flameshot gui' workflow: select an area, annotate it, then save or copy",
+        "source": "https://flameshot.org/"
+      },
+      {
+        "feature": "Window capture",
+        "status": "no",
+        "note": "Issue #5 ('Selecting a window in GUI mode') is still open. In 2023 a maintainer said X11 users can only do it through external tools and that it is not possible on Wayland. #799 was closed as completed in Sep 2020 and was never formally marked a duplicate. The CLI modes are gui, full, screen, launcher and config",
+        "source": "https://github.com/flameshot-org/flameshot/issues/5"
+      },
+      {
+        "feature": "Full screen",
+        "status": "yes",
+        "note": "'flameshot full' captures all screens. 'flameshot screen' captures the screen under the mouse, or a numbered screen with -n. v14.0.0 (not v13.3) added the Capture Active Monitor option on X11 and Windows",
+        "source": "https://github.com/flameshot-org/flameshot/releases/tag/v14.0.0"
+      },
+      {
+        "feature": "Scrolling/long capture (desktop apps)",
+        "status": "no",
+        "note": "Issue #1130 (opened 2020-11-01) is still open. On 2025-06-30 borgmanJeremy commented 'Closed as discussed in #55', but no close event is shown, and a 2026 comment says 'this isn't closed'. It is not implemented",
+        "source": "https://github.com/flameshot-org/flameshot/issues/1130"
+      },
+      {
+        "feature": "Web full-page capture",
+        "status": "no",
+        "note": "Not in the feature list or the docs",
+        "source": "https://flameshot.org/"
+      },
+      {
+        "feature": "UI element snapping",
+        "status": "no",
+        "note": "No window or element snapping is documented. Selection is manual: arrow keys move it 1px and Shift+arrow resizes it",
+        "source": "https://flameshot.org/docs/guide/key-bindings/"
+      },
+      {
+        "feature": "Frozen-screen capture",
+        "status": "unknown",
+        "note": "The docs do not describe frozen-screen behavior. The gui mode is believed to grab the screen first and draw the overlay on it, but no cited source states this. A delay is available with -d",
+        "source": "https://flameshot.org/docs/guide/key-bindings/"
+      },
+      {
+        "feature": "Annotation editor",
+        "status": "partial",
+        "note": "The key-bindings page lists pencil, line, arrow, selection box, rectangle, circle, marker, text, pixelate and color picker. flameshot.org also lists counters and color boxes, and v15 added an arrow style selector. No magnifier or callout tool is documented",
+        "source": "https://flameshot.org/docs/guide/key-bindings/"
+      },
+      {
+        "feature": "Re-editable annotations after saving",
+        "status": "no",
+        "note": "No project file or editable format is documented. Output is a flat image",
+        "source": "https://flameshot.org/"
+      },
+      {
+        "feature": "OCR / copy text",
+        "status": "no",
+        "note": "PR #3074, which adds OCR with Tesseract, is still open and unmerged. Maintainer mmahmoudian wrote that 'OCR is out of the scope of a screenshot tool' and that it belongs only in a plugin system",
+        "source": "https://github.com/flameshot-org/flameshot/pull/3074"
+      },
+      {
+        "feature": "Automatic sensitive info detection/redaction",
+        "status": "no",
+        "note": "Only a manual pixelate/blur tool",
+        "source": "https://flameshot.org/docs/guide/key-bindings/"
+      },
+      {
+        "feature": "Screen recording MP4",
+        "status": "no",
+        "note": "#2201 was closed as a duplicate of #172. Maintainer mmahmoudian said screen recording is 'out of the scope of Flameshot' and that it would at most be a plugin",
+        "source": "https://github.com/flameshot-org/flameshot/issues/2201"
+      },
+      {
+        "feature": "GIF recording",
+        "status": "no",
+        "note": "Not implemented. The request, #172, is still open with an Enhancement label. It was not declined",
+        "source": "https://github.com/flameshot-org/flameshot/issues/172"
+      },
+      {
+        "feature": "Recording system audio + mic",
+        "status": "no",
+        "note": "Flameshot has no recording at all",
+        "source": "https://github.com/flameshot-org/flameshot/issues/2201"
+      },
+      {
+        "feature": "Webcam overlay",
+        "status": "no",
+        "note": "Flameshot has no recording at all",
+        "source": "https://github.com/flameshot-org/flameshot/issues/2201"
+      },
+      {
+        "feature": "Click/key visualizer",
+        "status": "no",
+        "note": "Flameshot has no recording at all",
+        "source": "https://github.com/flameshot-org/flameshot/issues/2201"
+      },
+      {
+        "feature": "Trim after recording",
+        "status": "no",
+        "note": "Flameshot has no recording at all",
+        "source": "https://github.com/flameshot-org/flameshot/issues/2201"
+      },
+      {
+        "feature": "Pin image to screen",
+        "status": "yes",
+        "note": "--pin works with gui and screen (Final Actions, which arrived in 11.0.0). v15 fixed pin size on scaled Windows screens (#4907) and replaced close-on-double-click with a configurable shortcut (#4993)",
+        "source": "https://flameshot.org/docs/advanced/commandline-options"
+      },
+      {
+        "feature": "Capture history with search (text search inside captures)",
+        "status": "partial",
+        "note": "Shift+Print opens the screenshot history. uploadHistoryMax defaults to 25. No search of any kind is documented",
+        "source": "https://raw.githubusercontent.com/flameshot-org/flameshot/master/src/utils/confighandler.cpp"
+      },
+      {
+        "feature": "Cloud upload built in",
+        "status": "partial",
+        "note": "Imgur only, and ENABLE_IMGUR defaults to OFF in CMakeLists.txt, so upload exists only in builds that turn it on. The docs still list Return as 'Upload the selection to Imgur' and the CLI still has -u/--upload",
+        "source": "https://raw.githubusercontent.com/flameshot-org/flameshot/master/CMakeLists.txt"
+      },
+      {
+        "feature": "Works fully offline / no telemetry by default",
+        "status": "partial",
+        "note": "The README privacy policy rules out unrequested transfers and Imgur is off by default. But checkForUpdates defaults to true unless the build sets DISABLE_UPDATE_CHECKER, which defaults to OFF",
+        "source": "https://raw.githubusercontent.com/flameshot-org/flameshot/master/src/utils/confighandler.cpp"
+      },
+      {
+        "feature": "HDR display correct capture",
+        "status": "unknown",
+        "note": "No HDR item appears in the release notes I read (v13.2, v14, v15) or in the docs",
+        "source": "https://github.com/flameshot-org/flameshot/releases"
+      },
+      {
+        "feature": "Per-monitor mixed DPI correctness",
+        "status": "partial",
+        "note": "v13.2.0 (27 Oct) called #4169 'an improvement (but not final fix)'. v14.0.0 then switched to asking which monitor to capture instead of drawing one overlay across all monitors, noting this helps with mixed scaling, and added fractional-scaling and HiDPI region fixes. v15 fixed pin size on scaled Windows screens and capture when logical min/max coordinates are not zero (#4735)",
+        "source": "https://github.com/flameshot-org/flameshot/releases/tag/v14.0.0"
+      },
+      {
+        "feature": "Command line",
+        "status": "yes",
+        "note": "Subcommands gui, screen, full, launcher and config, with options for path, delay, clipboard, region, raw, upload, pin and more. The docs say Windows users must use flameshot-cli. v15 fixed and improved the Windows CLI (#4881, #4888)",
+        "source": "https://flameshot.org/docs/advanced/commandline-options"
+      },
+      {
+        "feature": "Open source",
+        "status": "yes",
+        "note": "GPLv3+ (README)",
+        "source": "https://github.com/flameshot-org/flameshot"
+      }
+    ],
+    "notable_facts": [
+      {
+        "claim": "v15.0.0 shipped 2026-11-07, after v15.0.rc1 on 2026-09-19. It added an arrow style selector (#4769), hex GUI colors, keyboard controls for the monitor selector, mouse-wheel stepping for the circle counter, and an X11 fallback when the portal is unavailable. It enabled Control Flow Guard for MSVC builds (#4967), fixed the Windows CLI (#4881, #4888), fixed pin size on scaled Windows screens (#4907), and fixed capture with non-zero logical coordinates (#4735).",
+        "source": "https://github.com/flameshot-org/flameshot/releases/tag/v15.0.0"
+      },
+      {
+        "claim": "CORRECTION: v14.0.0 was released on 19 Jun 2026, after rc1 and rc3, so the sequence was 13.x, then v14, then v15. v14 added the monitor-selection prompt, Capture Active Monitor (X11 and Windows; not Wayland), a Windows global screenshot hotkey and portable config mode.",
+        "source": "https://github.com/flameshot-org/flameshot/releases/tag/v14.0.0"
+      },
+      {
+        "claim": "CORRECTION: Capture Active Monitor came in v14.0.0, not v13.3. v13.3.0 was a macOS hotfix plus memory-leak fixes.",
+        "source": "https://github.com/flameshot-org/flameshot/releases"
+      },
+      {
+        "claim": "CORRECTION: #799 ('Capture single window') was closed as completed in Sep 2020 and never formally marked a duplicate of #5. The live tracking issue for window selection is #5, which is still open.",
+        "source": "https://github.com/flameshot-org/flameshot/issues/799"
+      },
+      {
+        "claim": "CORRECTION: The GIF request #172 is still open with an Enhancement label, not declined. #2201 (screen recording) was closed as a duplicate of #172, with maintainers calling recording out of scope or plugin-only.",
+        "source": "https://github.com/flameshot-org/flameshot/issues/172"
+      },
+      {
+        "claim": "CORRECTION: OCR PR #3074 is still open and unmerged, not formally declined. A maintainer stated in review that OCR is out of scope and belongs in a plugin, and called this a unanimous decision by the devs.",
+        "source": "https://github.com/flameshot-org/flameshot/pull/3074"
+      },
+      {
+        "claim": "CORRECTION: The OMG! Ubuntu article says Imgur was disabled in 13.0 because of accidental-upload risk. It names no compile flag and gives no plugin plan. The ENABLE_IMGUR CMake option, default OFF, is confirmed in CMakeLists.txt.",
+        "source": "https://raw.githubusercontent.com/flameshot-org/flameshot/master/CMakeLists.txt"
+      },
+      {
+        "claim": "CORRECTION: Frozen-screen capture changed from partial to unknown, because no cited source documents it.",
+        "source": "https://flameshot.org/docs/guide/key-bindings/"
+      },
+      {
+        "claim": "CORRECTION: The openSUSE patch URL returned HTTP 403, so the claim that openSUSE removes the update check is unverified. That upstream defaults checkForUpdates to true is verified in confighandler.cpp, along with DISABLE_UPDATE_CHECKER defaulting to OFF in CMakeLists.txt.",
+        "source": "https://raw.githubusercontent.com/flameshot-org/flameshot/master/src/utils/confighandler.cpp"
+      },
+      {
+        "claim": "The Wayland 'experimental' label comes from the README, not flameshot.org. The '64-bit only' statement comes from flameshot.org.",
+        "source": "https://github.com/flameshot-org/flameshot/blob/master/README.md"
+      },
+      {
+        "claim": "The README still states that on Windows the Print Screen global shortcut is fixed and cannot be changed, and that the config is at C:\\Users\\{YOURNAME}\\AppData\\Roaming\\flameshot\\flameshot.ini. v14 release notes mention a Windows global screenshot hotkey, so the README may be out of date on this point.",
+        "source": "https://github.com/flameshot-org/flameshot/blob/master/README.md"
+      },
+      {
+        "claim": "Scope stays at 'screenshot and annotation'. Maintainers called OCR (#3074) and screen recording (#2201) out of scope or plugin-only. Window selection (#5) and scrolling capture (#1130) remain open and unimplemented.",
+        "source": "https://github.com/flameshot-org/flameshot/issues/5"
+      },
+      {
+        "claim": "No company, imprint or legal jurisdiction is identified. The site footer credits 'Flameshot contributors', and no corporate entity was found. Jurisdiction is unknown, not verified as absent.",
+        "source": "https://flameshot.org/"
+      }
+    ],
+    "tool": "Flameshot"
+  },
+  {
+    "license": "GPL-3.0. GitHub repo license metadata says GPL-3.0, and the FAQ says \"Greenshot is free in terms of the GNU General Public License (GPL)\". The Mac App Store build is a separate paid app.",
+    "platforms": "Windows: the FAQ says \"Greenshot 1.3 is built for the Microsoft .NET Framework 4.7.2 and needs version 4.7.2 or newer to run.\" An FAQ entry that says \"Greenshot no longer supports Windows versions before Windows 10\" is marked obsolete and points to the .NET requirements entry instead. macOS: a separate paid Mac App Store app, version 1.2.19, last updated June 29, 2020, requiring macOS 10.12 or later. App Store reviews say its editor has far fewer tools than the Windows version.",
+    "price": "Windows: free. macOS: USD 1.99 on the Mac App Store, seller Thomas Braun (https://apps.apple.com/us/app/greenshot/id1103915944?mt=12, checked 2026-11-07).",
+    "latest_version": "Stable: 1.3.328, the newest GitHub release that is not a pre-release and the one the API returns as \"latest\". Its notes call it the 11th stable release of the 1.3 series and say 1.3.324 to 1.3.327 were intermediate builds, even though the body opens with \"Pre-release of Greenshot 1.3.328.\" Development: 1.4.459-gd17fcce94b, a continuous-build pre-release.",
+    "latest_release_date": "Stable 1.3.328: 2026-10-19 (GitHub API published_at 2026-10-19T10:30:32Z). Earlier non-pre-release builds: 1.3.323 on 2026-10-08, 1.3.315 on 2026-03-20, 1.3.312 and 1.3.311 both on 2026-01-07, 1.3.304 on 2025-10-31. Newest 1.4 pre-release (1.4.459): 2026-11-06T23:17:32Z.",
+    "developer_and_jurisdiction": "The website imprint (https://getgreenshot.org/impressum/) says Greenshot and getgreenshot.org are run by Thomas Braun, Jens Klingen and Robin Krom. Jens Klingen is the representative and the person responsible for content, at Markgrafenstr. 4, 91207 Lauf, Germany. The imprint is headed \"Information in accordance with §5 TMG (Telemedia Act - Germany)\". It names the content-responsible person \"according to § 55 paragraph 2 RStV (Interstate Broadcasting Treaty - Germany)\". It also says \"The contents and works on these websites prepared by the operator of the websites shall be subject to German copyright law.\" It gives no company, commercial register entry or VAT ID, so it appears to be run by individuals rather than a registered firm. The privacy policy (https://getgreenshot.org/privacy-policy/) names only \"the Greenshot development team\", with no legal entity. It does not mention GDPR/DSGVO and has no governing-law clause. The software is licensed under GPL-3.0, not a German-law EULA. Supported wording: the website is operated from Germany by individuals and carries a German-law imprint (TMG/RStV), and the site's own content is stated to be subject to German copyright law. Not supported by any source: that the software is governed by German law, or that German law constrains its features. Mac App Store seller: Thomas Braun.",
+    "privacy_network": "The privacy policy says the Windows app sends no data to Greenshot's or other servers unless the user starts or configures a transfer, such as an upload plugin, with one exception: the update check. The update check is on by default, fetches a file from the website, and lets GitHub and Cloudflare see the requesting IP address. The policy says the Mac app sends no data. Telemetry is not mentioned. The website uses Google Analytics (configured, the policy says, to store only anonymized IP addresses), Google AdSense ads with third-party cookies, Cloudflare CDN, Google Fonts and GitHub Pages hosting. The Mac App Store listing has no privacy label (\"No Details Provided\"). Upload plugins named in the 1.3.323 notes: Imgur, Box, Dropbox, Flickr, Confluence and Jira. Recent security fixes: 1.3.323 (2026-10-08) fixed TLS certificate validation that was disabled process-wide, which exposed OAuth tokens and plugin uploads to man-in-the-middle attacks (GHSA-q4w7-9m8v-53fm). 1.3.328 (2026-10-19) fixed Greenshot sending the user's Windows credentials to any server it requested content from, so a malicious image URL could trigger an automatic NTLM authentication exchange (GHSA-gjcr-pccx-w2vg).",
+    "features": [
+      {
+        "feature": "Region capture",
+        "status": "yes",
+        "note": "Print key. Last region: Shift+Print.",
+        "source": "https://getgreenshot.org/help/"
+      },
+      {
+        "feature": "Window capture",
+        "status": "yes",
+        "note": "Alt+Print. Interactive window mode lets you point at a window.",
+        "source": "https://getgreenshot.org/help/"
+      },
+      {
+        "feature": "Full screen capture",
+        "status": "yes",
+        "note": "Ctrl+Print.",
+        "source": "https://getgreenshot.org/help/"
+      },
+      {
+        "feature": "Scrolling / long capture (desktop apps)",
+        "status": "no",
+        "note": "Issue #624 asking for scrolling capture is still open (opened 2025-07-17).",
+        "source": "https://github.com/greenshot/greenshot/issues/624"
+      },
+      {
+        "feature": "Web full-page capture",
+        "status": "partial",
+        "note": "Help documents only an Internet Explorer capture (Ctrl+Shift+Print). Issue #972 'Remove support for Internet Explorer' was closed as completed on 2026-02-18. Scrollable capture through a browser extension is open PR #1528 (2026-10-15), not merged and not in a stable release.",
+        "source": "https://github.com/greenshot/greenshot/pull/1528"
+      },
+      {
+        "feature": "UI element snapping",
+        "status": "partial",
+        "note": "Window detection. In interactive window mode, PgDown selects child elements such as a browser viewport or a frame. No general UI Automation element snapping is documented.",
+        "source": "https://getgreenshot.org/help/"
+      },
+      {
+        "feature": "Frozen-screen capture",
+        "status": "yes",
+        "note": "Stable versions select on a frozen picture of all monitors. In the 1.4 dev branch, PR #1537 (merged 2026-10-17) adds a 'Freeze the screen while selecting' setting (on by default), and PR #1546 (merged 2026-10-18) adds the L key to switch between frozen and live. Neither is in a stable release.",
+        "source": "https://github.com/greenshot/greenshot/pull/1537"
+      },
+      {
+        "feature": "Annotation editor",
+        "status": "yes",
+        "note": "Rectangle, ellipse, line, arrow, freehand and text. Highlight modes: text, area, grayscale and magnify. Obfuscate modes: pixelize and blur. Crop. Speech bubble and auto-numbered counter tools arrived in 1.2 (Dec 2014). There is no standalone magnifier callout; magnify is a highlight mode.",
+        "source": "https://getgreenshot.org/help/ ; https://getgreenshot.org/2014/12/22/a-little-present-from-us-greenshot-1-2/"
+      },
+      {
+        "feature": "Re-editable annotations after saving",
+        "status": "yes",
+        "note": ".greenshot/.gst files keep editable objects, saved with BinaryFormatter. Open experimental PR #1506 adds a zip+JSON document format.",
+        "source": "https://github.com/greenshot/greenshot/pull/1506"
+      },
+      {
+        "feature": "OCR / copy text",
+        "status": "partial",
+        "note": "Windows OCR through the Windows 10 plugin. Language selection (#250, open since 2020-09-04) and non-English support (#1377, open) are still requested. PR #1454 (merged 2026-10-05) adds an OCR language setting in the 1.4 dev branch, not stable. The FAQ still describes the older MODI-based OCR plugin.",
+        "source": "https://github.com/greenshot/greenshot/pull/1454"
+      },
+      {
+        "feature": "Automatic sensitive info detection/redaction",
+        "status": "unknown",
+        "note": "Only manual obfuscation (pixelize, blur) is documented. No auto-detection found.",
+        "source": "https://getgreenshot.org/help/"
+      },
+      {
+        "feature": "Screen recording MP4",
+        "status": "no",
+        "note": "Issue #203 'Video recording' has been open since 2020-04-30.",
+        "source": "https://github.com/greenshot/greenshot/issues/203"
+      },
+      {
+        "feature": "GIF recording",
+        "status": "no",
+        "note": "No recording of any kind (#203 open).",
+        "source": "https://github.com/greenshot/greenshot/issues/203"
+      },
+      {
+        "feature": "Recording system audio + mic",
+        "status": "no",
+        "note": "No recording of any kind (#203 open).",
+        "source": "https://github.com/greenshot/greenshot/issues/203"
+      },
+      {
+        "feature": "Webcam overlay",
+        "status": "no",
+        "note": "No recording of any kind (#203 open).",
+        "source": "https://github.com/greenshot/greenshot/issues/203"
+      },
+      {
+        "feature": "Click/key visualizer",
+        "status": "no",
+        "note": "No recording of any kind (#203 open).",
+        "source": "https://github.com/greenshot/greenshot/issues/203"
+      },
+      {
+        "feature": "Trim after recording",
+        "status": "no",
+        "note": "No recording of any kind (#203 open).",
+        "source": "https://github.com/greenshot/greenshot/issues/203"
+      },
+      {
+        "feature": "Pin image to screen",
+        "status": "partial",
+        "note": "Not in stable. Issue #711 'screen pinning' is open (since 2025-11-13). PR #1641 (merged 2026-11-02, 1.4 dev only) adds a 'Show in a viewer' destination that opens a capture in a small window of its own. Its stated use case is keeping a capture on top to compare with the screen.",
+        "source": "https://github.com/greenshot/greenshot/pull/1641"
+      },
+      {
+        "feature": "Capture history with text search",
+        "status": "unknown",
+        "note": "Not documented in the help or release notes.",
+        "source": "https://getgreenshot.org/help/"
+      },
+      {
+        "feature": "Cloud upload built in",
+        "status": "yes",
+        "note": "Plugins for Imgur, Box, Dropbox, Flickr, Confluence and Jira. Their TLS validation was broken until 1.3.323 (GHSA-q4w7-9m8v-53fm).",
+        "source": "https://github.com/greenshot/greenshot/releases/tag/v1.3.323"
+      },
+      {
+        "feature": "Works fully offline / no telemetry by default",
+        "status": "partial",
+        "note": "No data is sent without user action except the update check, which is on by default and exposes the IP address to GitHub and Cloudflare. The policy does not mention telemetry.",
+        "source": "https://getgreenshot.org/privacy-policy/"
+      },
+      {
+        "feature": "HDR display correct capture",
+        "status": "partial",
+        "note": "Stable: issue #542 'HDR correction?' is open (since 2024-06-04). The 1.4 dev branch merged HDR work on 2026-11-03 and 2026-11-04 (PR #1675 JPEG XR HDR output, #1688 whole-capture HDR image, #1689 HDR parts joining). Not in a stable release.",
+        "source": "https://github.com/greenshot/greenshot/issues/542"
+      },
+      {
+        "feature": "Per-monitor mixed DPI correctness",
+        "status": "partial",
+        "note": "In the 1.4 dev branch, PR #1628 (merged 2026-10-29) fixes an editor error when the editor opens on a monitor with another DPI, and PR #1451 (merged 2026-11-05) sizes editor icons for the display. This suggests mixed-DPI issues in stable. No explicit support statement.",
+        "source": "https://github.com/greenshot/greenshot/pull/1628"
+      },
+      {
+        "feature": "Command line",
+        "status": "partial",
+        "note": "FAQ: 'Yes, a few are implemented'. Run the executable with a help parameter to list them.",
+        "source": "https://getgreenshot.org/faq/"
+      },
+      {
+        "feature": "Open source",
+        "status": "yes",
+        "note": "GPL-3.0, github.com/greenshot/greenshot, about 5.2k stars (5,243 on 2026-11-07). The Mac App Store build is a separate paid app.",
+        "source": "https://github.com/greenshot/greenshot"
+      }
+    ],
+    "notable_facts": [
+      {
+        "claim": "Maintenance is active. The repo was last pushed 2026-11-07T00:09Z. Non-pre-release 1.3.x builds came out on 2026-01-07 (1.3.311 and 1.3.312), 2026-03-20, 2026-10-08 and 2026-10-19. Four 1.4 pre-release builds came out between 2026-11-04 and 2026-11-06.",
+        "source": "https://api.github.com/repos/greenshot/greenshot/releases"
+      },
+      {
+        "claim": "The 1.3.323 release notes say that while working on Greenshot 1.4, the team selectively backported improvements to stabilize 1.3. Every 1.4 release so far is marked pre-release.",
+        "source": "https://github.com/greenshot/greenshot/releases/tag/v1.3.323"
+      },
+      {
+        "claim": "1.3.328 (2026-10-19) fixed Greenshot sending the user's Windows credentials to any server it requested content from, so a malicious image URL could trigger NTLM authentication (GHSA-gjcr-pccx-w2vg). It also code-signed all shipped executables and DLLs so Windows Smart App Control no longer blocks them (PR #1505).",
+        "source": "https://github.com/greenshot/greenshot/releases/tag/v1.3.328"
+      },
+      {
+        "claim": "1.3.323 (2026-10-08) fixed TLS certificate validation that was disabled process-wide, exposing OAuth tokens and plugin uploads (Imgur, Box, Dropbox, Flickr, Confluence, Jira) to man-in-the-middle attacks. It also fixed a CF_DIBV5 clipboard out-of-bounds read (GHSA-4674-75g5-79mx), an SVG SSRF (GHSA-mmr7-mfv6-wp78), and vulnerable Inno Setup and log4net dependencies.",
+        "source": "https://github.com/greenshot/greenshot/releases/tag/v1.3.323"
+      },
+      {
+        "claim": "The website imprint cites §5 TMG and §55 para. 2 RStV and gives Jens Klingen, Markgrafenstr. 4, 91207 Lauf, Germany, as representative and responsible for content. It names no company, register or VAT ID, and it states that the site's content 'shall be subject to German copyright law'. This concerns the website, not the GPL-licensed software.",
+        "source": "https://getgreenshot.org/impressum/"
+      },
+      {
+        "claim": "The privacy policy names only 'the Greenshot development team' (no legal entity), has no governing-law clause and does not mention GDPR. The website uses Google Analytics (anonymized IPs), Google AdSense, Cloudflare and Google Fonts.",
+        "source": "https://getgreenshot.org/privacy-policy/"
+      },
+      {
+        "claim": "The Mac App Store version (1.2.19, $1.99, seller Thomas Braun) was last updated 2020-06-29, requires macOS 10.12+, and has no privacy label. Reviews say its editor lacks many Windows features.",
+        "source": "https://apps.apple.com/us/app/greenshot/id1103915944?mt=12"
+      },
+      {
+        "claim": "Annotations in .greenshot/.gst files from 1.2 to 1.4 are saved with .NET BinaryFormatter. PR #1506 (open, experimental) adds a zip+JSON document format that can read old files without BinaryFormatter.",
+        "source": "https://github.com/greenshot/greenshot/pull/1506"
+      },
+      {
+        "claim": "Many 1.4 PRs by maintainer Robin Krom (Lakritzator) in Oct-Nov 2026 (for example #1454, #1506, #1537, #1546, #1628, #1641, #1675) carry a 'claude-projects-attribution' HTML comment and a 'Generated with Claude Code' footer in their body. This shows AI-assisted development.",
+        "source": "https://github.com/greenshot/greenshot/pull/1641"
+      },
+      {
+        "claim": "Video recording (#203, since 2020), screen pinning (#711) and scrolling capture (#624) are open requests, and none is in a stable release.",
+        "source": "https://github.com/greenshot/greenshot/issues/203"
+      },
+      {
+        "claim": "CORRECTION: PR #1451 (DPI-sized editor icons) was merged on 2026-11-05, not in October 2026 as the original research said.",
+        "source": "https://github.com/greenshot/greenshot/pull/1451"
+      },
+      {
+        "claim": "CORRECTION: The FAQ entry 'no longer supports Windows versions before Windows 10' is marked obsolete and redirects to the .NET Framework 4.7.2 requirement. Treat .NET 4.7.2+ as the stated requirement, not a Windows 10 minimum.",
+        "source": "https://getgreenshot.org/faq/"
+      },
+      {
+        "claim": "CORRECTION: The speech bubble and counter tools date to Greenshot 1.2 (December 2014), not 1.2.9. The BetaNews source returned 403 and was replaced with the official 1.2 announcement.",
+        "source": "https://getgreenshot.org/2014/12/22/a-little-present-from-us-greenshot-1-2/"
+      },
+      {
+        "claim": "CORRECTION: The original 'Frozen-screen' note implied live selection replaces frozen selection. PR #1537 actually adds an option, 'Freeze the screen while selecting', which is on by default, so frozen selection remains the default.",
+        "source": "https://github.com/greenshot/greenshot/pull/1537"
+      },
+      {
+        "claim": "CORRECTION: The 'BinaryFormatter' fact was scoped only to the 1.4 dev branch. PR #1506 says .greenshot/.gst files from versions 1.2 to 1.4 all use BinaryFormatter.",
+        "source": "https://github.com/greenshot/greenshot/pull/1506"
+      },
+      {
+        "claim": "CORRECTION (minor): 1.3.311 was also a non-pre-release build on 2026-01-07, alongside 1.3.312.",
+        "source": "https://api.github.com/repos/greenshot/greenshot/releases"
+      }
+    ],
+    "tool": "Greenshot"
+  }
+]
