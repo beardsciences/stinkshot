@@ -508,7 +508,7 @@ impl Overlay {
             let act_px = (self.bar_sizes.1.x * ppp, self.bar_sizes.1.y * ppp);
             // Docked: follows the selection. Undocked (grip dragged): stays where it was
             // left, clamped to the monitor it is on.
-            let ((tx, ty), (ax, ay), mon) = match self.bar_origin {
+            let ((tx, ty), (ax, ay), mon) = match self.effective_bar_origin(ppp, sel) {
                 Some(origin) => self.undocked_bars(origin, ppp, sel),
                 None => {
                     let mon = self.monitor_for(sel);

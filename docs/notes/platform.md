@@ -21,7 +21,7 @@ about 5 s here because of the WGC hang described below).
 | `clipboard` | CF_DIBV5 (BITMAPV5HEADER, BI_BITFIELDS, straight alpha, bottom-up) + registered "PNG" + CF_DIB (composited on white), CF_UNICODETEXT, CF_HDROP + "Preferred DropEffect". `OpenClipboard` retried for about 0.5 s. |
 | `ocr` | `Windows.Media.Ocr` behind `OcrEngine` trait. 2x CatmullRom upscale when the longest side is < 1600 px, padding to 48 px minimum, vertical tiling (3000 px, 96 px overlap) with centre-based de-duplication, per-line rects from word boxes mapped back to input pixel space. |
 | `input` | `cursor_pos`, `scroll_at` (SetCursorPos, N x SendInput wheel, restore), `InputHook` (WH_MOUSE_LL / WH_KEYBOARD_LL on a private message-loop thread, key-repeat suppressed), `key_label`. |
-| `system` | Run-key autostart, PrintScreen takeover with remembered previous value, `reveal_in_explorer`, `open_path`, dark mode + accent, single-instance mutex, `WM_COPYDATA` IPC through message-only window `StinkShot.IPC`, `play_capture_sound`. |
+| `system` | Run-key autostart, PrintScreen takeover with remembered previous value, `reveal_in_explorer`, `open_path`, dark mode + accent, single-instance mutex, `WM_COPYDATA` IPC through message-only window `StinkShot.IPC`, `start_session_watcher` (unlock, display change and resume events for the capture re-warm-up), `play_capture_sound`. |
 | `window_util` | `find_own_window`, `set_rect` (move then resize, so DPI changes settle first), topmost, `WDA_EXCLUDEFROMCAPTURE`, Mica + immersive dark + rounded corners + glass frame, `force_foreground`, `WS_EX_TOOLWINDOW`. |
 
 ## Design decisions and findings

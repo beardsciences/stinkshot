@@ -201,7 +201,9 @@ block; the cursor is the move cursor on hover and while dragging, and both bars 
 softer "lifted" shadow while dragging (`bar_frame(pal, lifted)`).
 
 - Docked (default): placed by `selection::layout_bars` and follows the selection as before.
-- Undocked: once dragged, the block keeps its own origin (`Overlay::bar_origin`) and no longer
+- Undocked: once dragged (the pointer moved more than `toolbar::UNDOCK_THRESHOLD_PX`, 3 px;
+  egui also reports a long press without movement as a drag start, and that must not undock
+  silently), the block keeps its own origin (`Overlay::bar_origin`) and no longer
   follows the selection. Each frame `toolbar::undocked_layout` picks the monitor the block is
   on (centre, else largest overlap, else nearest), lays the bars out side by side or stacked
   for that monitor's width, and clamps the block inside it with the usual 8 px margin. It can
@@ -210,8 +212,14 @@ softer "lifted" shadow while dragging (`bar_frame(pal, lifted)`).
   does not drift; the clamped spot is stored when the drag ends.
 - Double-clicking the grip docks it again (and forgets the stored spot).
 - Session memory: `toolbar::remember` keeps the undocked origin in virtual-desktop px in a
-  process-wide static, and `Overlay::new` starts from it, so the next capture (Capture or
-  Annotate) opens with the bar where it was left. Not saved to config, so a restart docks it.
+  process-wide static, and `Overlay::new` starts from it, so the next capture opens with the
+  bar where it was left. Not saved to config, so a restart docks it. A remembered spot is used
+  only while the selection is on the same monitor (`toolbar::remembered_applies`, via
+  `Overlay::effective_bar_origin`), otherwise the bar docks; the editor (Annotate) always
+  opens docked, since a remembered spot would land on the centred image or another monitor.
+- Stacked layout (tool bar + action bar wider than the monitor): docked and undocked use the
+  same block shape, action bar directly under the tool bar at the same x, so starting a grip
+  drag from the docked spot does not make the action bar jump.
 - Color and width popups anchor to the buttons' rects from this frame's tool bar, open on the
   bar's monitor (above when there is no room below) and are now also kept inside the monitor
   horizontally (`toolbar::popup_x`). The presets chip belongs to the size label above the

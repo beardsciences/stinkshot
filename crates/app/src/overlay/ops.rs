@@ -343,24 +343,26 @@ impl Overlay {
         let px = |p: Pos2| (p.x * ppp, p.y * ppp);
         match ev {
             GripEvent::Start(p) => {
-                let start_origin = self.bar_origin.or(self.bar_drawn_at).unwrap_or_default();
-                self.grip_drag = Some(toolbar::GripDrag {
-                    start_pointer: px(p),
-                    start_origin,
-                });
-                self.bar_origin = Some(start_origin);
+                // Start from where the bar is drawn (docked, undocked, or a remembered spot
+                // that is ignored on this monitor). Nothing undocks until the pointer moves:
+                // egui also starts a drag on a long press that never moves.
+                let start_origin = self.bar_drawn_at.or(self.bar_origin).unwrap_or_default();
+                self.grip_drag = Some(toolbar::GripDrag::new(px(p), start_origin));
                 self.popup = None;
             }
             GripEvent::Move(p) => {
-                if let Some(d) = self.grip_drag {
+                if let Some(d) = self.grip_drag.as_mut()
+                    && d.track(px(p), toolbar::UNDOCK_THRESHOLD_PX)
+                {
                     self.bar_origin = Some(d.target(px(p)));
+                    self.bar_from_memory = false;
                 }
             }
             GripEvent::End => {
-                self.grip_drag = None;
+                let moved = self.grip_drag.take().is_some_and(|d| d.moved);
                 // Store the clamped spot, not the raw pointer target, so the next drag
                 // starts from where the bar really is.
-                if let (Some(origin), Some(sel)) = (self.bar_origin, self.sel) {
+                if moved && let (Some(origin), Some(sel)) = (self.bar_origin, self.sel) {
                     let (at, _, _) = self.undocked_bars(origin, ppp, sel);
                     self.bar_origin = Some(at);
                     toolbar::remember(Some(toolbar::to_virtual(at, self.bounds)));
@@ -369,6 +371,7 @@ impl Overlay {
             GripEvent::Redock => {
                 self.grip_drag = None;
                 self.bar_origin = None;
+                self.bar_from_memory = false;
                 toolbar::remember(None);
             }
         }

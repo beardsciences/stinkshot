@@ -219,6 +219,9 @@ pub struct Overlay {
     /// Undocked toolbar origin (top-left of the tool bar, local px, unclamped); None =
     /// docked under the selection. See `toolbar.rs`.
     bar_origin: Option<(f32, f32)>,
+    /// `bar_origin` came from an earlier overlay (not dragged in this one): it applies only
+    /// while the selection is on the same monitor, otherwise the bar docks.
+    bar_from_memory: bool,
     /// Grip drag in progress.
     grip_drag: Option<toolbar::GripDrag>,
     /// Where the tool bar was drawn last frame (local px), the start of a first undock.
@@ -403,6 +406,7 @@ impl Overlay {
             popup: None,
             bar_sizes: (Vec2::new(690.0, 46.0), Vec2::new(280.0, 46.0)),
             bar_origin: toolbar::remembered().map(|v| toolbar::to_local(v, bounds)),
+            bar_from_memory: true,
             grip_drag: None,
             bar_drawn_at: None,
             color_btn: Rect::NOTHING,
@@ -452,6 +456,10 @@ impl Overlay {
                 source,
             } => {
                 o.kind = Kind::Annotate;
+                // The editor centres the image on the cursor's monitor and leaves room for
+                // the docked bars under it; a remembered spot would land on the image or on
+                // another monitor, so the editor always opens docked.
+                o.bar_origin = None;
                 doc.base_width = base.width;
                 doc.base_height = base.height;
                 o.doc = doc;
@@ -547,6 +555,26 @@ impl Overlay {
             .map(|(m, _)| *m)
             .find(|m| m.contains(c))
             .unwrap_or(self.local_bounds())
+    }
+
+    /// The undocked origin to lay the bars out from this frame, or None to dock. A spot
+    /// remembered from an earlier overlay is ignored while the selection is on another
+    /// monitor.
+    fn effective_bar_origin(&self, ppp: f32, sel: PxRect) -> Option<(f32, f32)> {
+        let origin = self.bar_origin?;
+        if !self.bar_from_memory {
+            return Some(origin);
+        }
+        let mons: Vec<PxRect> = self.monitors.iter().map(|(m, _)| *m).collect();
+        toolbar::remembered_applies(
+            origin,
+            (self.bar_sizes.0.x * ppp, self.bar_sizes.0.y * ppp),
+            (self.bar_sizes.1.x * ppp, self.bar_sizes.1.y * ppp),
+            8.0 * ppp,
+            &mons,
+            self.monitor_for(sel),
+        )
+        .then_some(origin)
     }
 
     /// Undocked toolbar placement for `origin`: (tool bar pos, action bar pos, monitor),

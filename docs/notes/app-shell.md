@@ -190,6 +190,14 @@ Fixes:
   without the read-back and conversion of a real capture. A capture that arrives during the
   warm-up waits on the session lock, so it is never slower than before. GPU memory for the
   duplication textures is now held from start-up instead of from the first capture.
+- Re-warm-up: a lock or unlock, UAC prompt, display change or sleep invalidates the session
+  (DXGI access lost), and the next PrtSc would rebuild it cold. `system::start_session_watcher`
+  runs a never-shown top-level tool window (`StinkShot.Session.Window<profile>`; a
+  message-only window does not get the broadcast display and power messages) that reports
+  `WTS_SESSION_UNLOCK` / `WTS_CONSOLE_CONNECT` (via `WTSRegisterSessionNotification`),
+  `WM_DISPLAYCHANGE` and `PBT_APMRESUMEAUTOMATIC`. The `capture-rewarm` thread coalesces a
+  burst, waits 1.5 s for the desktop to settle and calls `warm_up` again. `warm_up` rebuilds
+  a lost session once instead of leaving it for the next capture.
 - `setup_root_window` runs at the end of `ui()`, after the surfaces are shown.
 - `Cargo.toml`: `stinkshot-platform` and `stinkshot-core` build at opt-level 2 in the dev
   profile (like `stinkshot-record`), so dev builds show release-like capture latency.

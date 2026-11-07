@@ -9,12 +9,17 @@ use windows::Win32::Foundation::{
 use windows::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAULT};
 use windows::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::RemoteDesktop::{
+    NOTIFY_FOR_THIS_SESSION, WTSRegisterSessionNotification,
+};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Shell::{SHOpenFolderAndSelectItems, SHParseDisplayName, ShellExecuteW};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowExW, GetMessageW, HWND_MESSAGE,
-    MSG, RegisterClassW, SMTO_ABORTIFHUNG, SW_SHOWNORMAL, SendMessageTimeoutW, TranslateMessage,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_COPYDATA, WNDCLASSW,
+    MSG, PBT_APMRESUMEAUTOMATIC, RegisterClassW, SMTO_ABORTIFHUNG, SW_SHOWNORMAL,
+    SendMessageTimeoutW, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COPYDATA,
+    WM_DISPLAYCHANGE, WM_POWERBROADCAST, WM_WTSSESSION_CHANGE, WNDCLASSW, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_POPUP, WTS_CONSOLE_CONNECT, WTS_SESSION_UNLOCK,
 };
 use windows::core::{PCWSTR, w};
 
@@ -370,6 +375,116 @@ pub fn start_ipc_listener(tx: Sender<Vec<String>>) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("IPC thread did not start: {e}"))?
 }
 
+/// A system event after which the cached capture session is likely invalid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionEvent {
+    /// The session was unlocked or reconnected to the console (left the secure desktop).
+    Unlock,
+    /// A display was added, removed, or changed mode.
+    DisplayChange,
+    /// Resumed from sleep or hibernation.
+    Resume,
+}
+
+/// Map a window message to a session event (pure, for tests).
+fn session_event(msg: u32, wparam: usize) -> Option<SessionEvent> {
+    match msg {
+        WM_WTSSESSION_CHANGE
+            if wparam == WTS_SESSION_UNLOCK as usize || wparam == WTS_CONSOLE_CONNECT as usize =>
+        {
+            Some(SessionEvent::Unlock)
+        }
+        WM_DISPLAYCHANGE => Some(SessionEvent::DisplayChange),
+        WM_POWERBROADCAST if wparam == PBT_APMRESUMEAUTOMATIC as usize => {
+            Some(SessionEvent::Resume)
+        }
+        _ => None,
+    }
+}
+
+thread_local! {
+    static SESSION_TX: RefCell<Option<Sender<SessionEvent>>> = const { RefCell::new(None) };
+}
+
+unsafe extern "system" fn session_wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if let Some(ev) = session_event(msg, wparam.0) {
+        SESSION_TX.with(|t| {
+            if let Some(tx) = t.borrow().as_ref() {
+                let _ = tx.send(ev);
+            }
+        });
+    }
+    // SAFETY: default processing (WM_POWERBROADCAST gets TRUE from it).
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+/// Watch for unlock, display changes and resume on a hidden window on its own thread, and
+/// send each to `tx`. A message-only window would not get the broadcast display and power
+/// messages, so this is a never-shown top-level tool window. Failure is logged by the caller
+/// and only costs the re-warm-up.
+pub fn start_session_watcher(tx: Sender<SessionEvent>) -> anyhow::Result<()> {
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<anyhow::Result<()>>();
+    std::thread::Builder::new()
+        .name("stinkshot-session".into())
+        .spawn(move || {
+            SESSION_TX.with(|t| *t.borrow_mut() = Some(tx));
+            let class = wide(&format!(
+                "StinkShot.Session.Window{}",
+                stinkshot_core::config::profile_suffix()
+            ));
+            // SAFETY: standard window class registration and message loop on this thread.
+            unsafe {
+                let hinst: HINSTANCE = GetModuleHandleW(None).map(Into::into).unwrap_or_default();
+                let wc = WNDCLASSW {
+                    lpfnWndProc: Some(session_wndproc),
+                    hInstance: hinst,
+                    lpszClassName: PCWSTR(class.as_ptr()),
+                    ..Default::default()
+                };
+                RegisterClassW(&wc);
+                let hwnd = match CreateWindowExW(
+                    WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                    PCWSTR(class.as_ptr()),
+                    PCWSTR::null(),
+                    WS_POPUP,
+                    0,
+                    0,
+                    0,
+                    0,
+                    None,
+                    None,
+                    Some(hinst),
+                    None,
+                ) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(anyhow::anyhow!("create session window: {e}")));
+                        return;
+                    }
+                };
+                if let Err(e) = WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION) {
+                    // Display and power events still arrive.
+                    log::debug!("session watcher: no lock/unlock notifications: {e}");
+                }
+                let _ = ready_tx.send(Ok(()));
+                let mut msg = MSG::default();
+                while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("spawn session watcher thread: {e}"))?;
+    ready_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .map_err(|e| anyhow::anyhow!("session watcher did not start: {e}"))?
+}
+
 /// Short beep-free shutter sound via PlaySound on a system sound alias, async.
 pub fn play_capture_sound() {
     // SND_NODEFAULT: stay silent rather than falling back to the default beep.
@@ -395,5 +510,31 @@ mod tests {
         let a = vec!["region".to_string(), "--delay".to_string(), "3".to_string()];
         assert_eq!(decode_args(&encode_args(&a)), a);
         assert!(decode_args(&encode_args(&[])).is_empty());
+    }
+
+    #[test]
+    fn session_events_from_messages() {
+        let unlock = WTS_SESSION_UNLOCK as usize;
+        assert_eq!(
+            session_event(WM_WTSSESSION_CHANGE, unlock),
+            Some(SessionEvent::Unlock)
+        );
+        assert_eq!(
+            session_event(WM_WTSSESSION_CHANGE, WTS_CONSOLE_CONNECT as usize),
+            Some(SessionEvent::Unlock)
+        );
+        // Lock (7) is not a reason to re-warm: the secure desktop is still up.
+        assert_eq!(session_event(WM_WTSSESSION_CHANGE, 7), None);
+        assert_eq!(
+            session_event(WM_DISPLAYCHANGE, 0),
+            Some(SessionEvent::DisplayChange)
+        );
+        assert_eq!(
+            session_event(WM_POWERBROADCAST, PBT_APMRESUMEAUTOMATIC as usize),
+            Some(SessionEvent::Resume)
+        );
+        // PBT_APMSUSPEND (4).
+        assert_eq!(session_event(WM_POWERBROADCAST, 4), None);
+        assert_eq!(session_event(WM_COPYDATA, 0), None);
     }
 }

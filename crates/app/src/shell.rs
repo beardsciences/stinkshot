@@ -145,6 +145,7 @@ pub fn run() -> anyhow::Result<()> {
             capture::warm_up();
             timing::point(format_args!("capture session warmed up"));
         });
+    start_capture_rewarm();
     let welcome = initial.is_none() && !forward_args.is_empty();
     match run_app(initial, welcome, guard, ipc_rx) {
         Ok(()) => Ok(()),
@@ -155,6 +156,32 @@ pub fn run() -> anyhow::Result<()> {
             Err(e)
         }
     }
+}
+
+/// Warm the capture session up again after events that invalidate it (unlock, display change,
+/// resume). Without this the first PrtSc after any of them pays the cold session build
+/// (about 0.8 s) that the start-up warm-up removed. Bursts (a display change fires several
+/// messages, resume is followed by unlock) are coalesced, and the warm-up waits a moment so
+/// the desktop has settled.
+fn start_capture_rewarm() {
+    const SETTLE: Duration = Duration::from_millis(1500);
+    let _ = std::thread::Builder::new()
+        .name("capture-rewarm".into())
+        .spawn(move || {
+            // Created here so start-up does not wait for the watcher window.
+            let (tx, rx) = channel::<system::SessionEvent>();
+            if let Err(e) = system::start_session_watcher(tx) {
+                log::warn!("capture re-warm-up unavailable: {e:#}");
+                return;
+            }
+            while let Ok(first) = rx.recv() {
+                std::thread::sleep(SETTLE);
+                // Anything that arrived meanwhile is covered by this warm-up.
+                while rx.try_recv().is_ok() {}
+                log::debug!("capture re-warm-up after {first:?}");
+                capture::warm_up();
+            }
+        });
 }
 
 /// Start the IPC listener (message-only window on its own thread) and a bridge that wakes the

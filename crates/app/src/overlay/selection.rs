@@ -382,15 +382,13 @@ pub fn layout_bars(
         x = bx1 - block_w;
     }
     x = x.max(bx0);
+    // Stacked: the action bar sits directly under the tool bar (same x), the same block
+    // shape `toolbar::block_layout` uses once the bar is undocked, so a grip drag starting
+    // from the docked spot does not make the action bar jump.
     if side_by_side {
         ((x, y), (x + tool.0 + gap, y))
     } else {
-        let mut ax = sel.x as f32;
-        if ax + action.0 > bx1 {
-            ax = bx1 - action.0;
-        }
-        ax = ax.max(bx0);
-        ((x, y), (ax, y + tool.1 + gap))
+        ((x, y), (x, y + tool.1 + gap))
     }
 }
 
@@ -545,5 +543,22 @@ mod tests {
             8.0,
         );
         assert!(ay > ty);
+    }
+
+    #[test]
+    fn stacked_bars_share_x_like_the_undocked_block() {
+        // Selection near the right edge of a monitor too narrow for side by side: the two
+        // bars used to be clamped separately and start at different x.
+        let narrow = PxRect::new(0, 0, 600, 800);
+        let tool = (500.0, 44.0);
+        let act = (250.0, 44.0);
+        let sel = PxRect::new(450, 100, 100, 100);
+        let ((tx, ty), (ax, ay)) = layout_bars(sel, narrow, tool, act, 8.0, 8.0);
+        assert_eq!(tx, 600.0 - 8.0 - 500.0);
+        assert_eq!(ax, tx);
+        assert_eq!(ay, ty + 44.0 + 8.0);
+        // Same offset as the undocked block on that monitor.
+        let (off, _) = super::super::toolbar::block_layout(tool, act, 8.0, 600.0 - 16.0);
+        assert_eq!((ax - tx, ay - ty), off);
     }
 }

@@ -3,12 +3,15 @@
 //!
 //! - Docked (default): `selection::layout_bars` places the bars around the selection and
 //!   they follow it.
-//! - Undocked: the user dragged the grip. The block keeps its own origin (top-left of the
-//!   tool bar) and no longer follows the selection. It is clamped to the monitor it is on
-//!   (it can be dragged to another monitor, never off-screen). Double-clicking the grip docks
-//!   it again.
+//! - Undocked: the user dragged the grip (moved it past `UNDOCK_THRESHOLD_PX`; a press that
+//!   does not move leaves it docked). The block keeps its own origin (top-left of the tool
+//!   bar) and no longer follows the selection. It is clamped to the monitor it is on (it can
+//!   be dragged to another monitor, never off-screen). Double-clicking the grip docks it
+//!   again.
 //! - The undocked origin is remembered in virtual-desktop px for the rest of the session, so
-//!   the next capture opens with the bar where it was left (not across restarts).
+//!   the next capture opens with the bar where it was left (not across restarts). A later
+//!   overlay uses it only while the selection is on the same monitor (else the bar docks), and
+//!   the editor (Annotate) always opens docked.
 //!
 //! All values are physical px; overlay-local unless the name says virtual.
 
@@ -122,14 +125,54 @@ pub fn undocked_layout(
     (o, (o.0 + off.0, o.1 + off.1), mon)
 }
 
-/// A grip drag in progress: where the pointer and the block origin were when it started.
+/// Whether a spot remembered from an earlier overlay should be used for a selection on
+/// `sel_mon`: only when the block would land on that same monitor. Otherwise the bar docks
+/// (a spot on another monitor would leave the tools a screen away from the selection).
+pub fn remembered_applies(
+    origin: (f32, f32),
+    tool: (f32, f32),
+    action: (f32, f32),
+    gap: f32,
+    monitors: &[PxRect],
+    sel_mon: PxRect,
+) -> bool {
+    let (_, rough) = block_layout(tool, action, gap, sel_mon.w as f32 - 2.0 * gap);
+    monitor_for_block(monitors, origin, rough) == Some(sel_mon)
+}
+
+/// Pointer travel (physical px) before a grip press counts as a drag that undocks the bar.
+/// egui also reports a long press without movement as a drag start.
+pub const UNDOCK_THRESHOLD_PX: f32 = 3.0;
+
+/// A grip drag in progress: where the pointer and the block origin were when it started, and
+/// whether the pointer has moved far enough to undock the bar.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GripDrag {
     pub start_pointer: (f32, f32),
     pub start_origin: (f32, f32),
+    pub moved: bool,
 }
 
 impl GripDrag {
+    pub fn new(start_pointer: (f32, f32), start_origin: (f32, f32)) -> Self {
+        Self {
+            start_pointer,
+            start_origin,
+            moved: false,
+        }
+    }
+
+    /// Mark the drag as moved once the pointer is more than `threshold` px from its start.
+    /// Returns whether it has moved (now or earlier).
+    pub fn track(&mut self, pointer: (f32, f32), threshold: f32) -> bool {
+        if !self.moved {
+            let dx = pointer.0 - self.start_pointer.0;
+            let dy = pointer.1 - self.start_pointer.1;
+            self.moved = dx * dx + dy * dy > threshold * threshold;
+        }
+        self.moved
+    }
+
     /// Unclamped origin for the current pointer (clamping happens at layout, so dragging
     /// past an edge and back does not drift).
     pub fn target(&self, pointer: (f32, f32)) -> (f32, f32) {
@@ -259,12 +302,51 @@ mod tests {
 
     #[test]
     fn grip_drag_target_is_unclamped_delta() {
-        let d = GripDrag {
-            start_pointer: (100.0, 100.0),
-            start_origin: (40.0, 900.0),
-        };
+        let d = GripDrag::new((100.0, 100.0), (40.0, 900.0));
         assert_eq!(d.target((100.0, 100.0)), (40.0, 900.0));
         assert_eq!(d.target((-500.0, 130.0)), (-560.0, 930.0));
+    }
+
+    #[test]
+    fn grip_undocks_only_after_real_movement() {
+        let mut d = GripDrag::new((100.0, 100.0), (40.0, 900.0));
+        // A long press without movement, or jitter within the threshold.
+        assert!(!d.track((100.0, 100.0), UNDOCK_THRESHOLD_PX));
+        assert!(!d.track((102.0, 101.0), UNDOCK_THRESHOLD_PX));
+        assert!(d.track((104.0, 100.0), UNDOCK_THRESHOLD_PX));
+        // Stays moved even when the pointer comes back.
+        assert!(d.track((100.0, 100.0), UNDOCK_THRESHOLD_PX));
+    }
+
+    #[test]
+    fn remembered_spot_only_on_the_selection_monitor() {
+        let mons = [LEFT, RIGHT];
+        let tool = (700.0, 46.0);
+        let act = (280.0, 46.0);
+        assert!(remembered_applies(
+            (100.0, 900.0),
+            tool,
+            act,
+            8.0,
+            &mons,
+            LEFT
+        ));
+        assert!(!remembered_applies(
+            (100.0, 900.0),
+            tool,
+            act,
+            8.0,
+            &mons,
+            RIGHT
+        ));
+        assert!(remembered_applies(
+            (2200.0, 500.0),
+            tool,
+            act,
+            8.0,
+            &mons,
+            RIGHT
+        ));
     }
 
     #[test]
