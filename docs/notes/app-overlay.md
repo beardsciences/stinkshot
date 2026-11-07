@@ -27,8 +27,10 @@ Tools (design toolbar order, all of ARCHITECTURE.md's shortcuts): Select V, Arro
 Rect R, Ellipse E, Pen P, Highlighter H, Text T, Step N, Blur B, Pixelate X, Redact K,
 Magnifier M, Callout O, Spotlight S. 1-8 palette colors, `[`/`]` stroke width (or size of the
 selected shape), Del deletes, Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z), Enter / Ctrl+C copy, Ctrl+S save
-as, Ctrl+P pin, Ctrl+T copy text, C copies the hex under the cursor, Esc steps back (abort drag
--> close popup -> cancel pending magnifier -> deselect tool/shape -> cancel overlay).
+as, Ctrl+P pin, Ctrl+T copy text, Ctrl+R Find Sensitive Info (shield button first in the action
+bar; see smart-redact.md), C copies the hex under the cursor, Esc steps back (abort drag
+-> close shortcut sheet -> close the Find Sensitive Info panel -> close popup -> cancel pending
+magnifier -> deselect tool/shape -> cancel overlay).
 
 Shapes are selectable, movable, deletable, recolorable (palette popup or 1-8), resizable with
 per-type handles: arrows/lines (two endpoints), rect-like (8 handles with flip, Shift = square),

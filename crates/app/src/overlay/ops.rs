@@ -426,6 +426,8 @@ impl Overlay {
                     self.popup = if self.popup == Some(p) { None } else { Some(p) };
                 }
                 UiAction::Grip(ev) => self.grip(ctx, ev),
+                UiAction::FindSensitive => self.toggle_smart_redact(ctx, shared),
+                UiAction::Smart(a) => self.apply_smart_action(shared, a),
             }
         }
     }

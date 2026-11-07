@@ -28,6 +28,7 @@ impl Overlay {
         }
 
         self.poll_render(ctx);
+        self.poll_smart_redact(shared);
         if self.finishing.is_some() {
             self.poll_finish(ctx, shared);
         } else {
@@ -218,6 +219,7 @@ impl Overlay {
                 }
             }
             self.paint_drag_preview(&clip, m, inp);
+            self.paint_smart_findings(&clip, m, accent);
 
             if self.edit.is_none()
                 && let Some(s) = self.selected.and_then(|id| self.doc.get(id))
@@ -316,7 +318,9 @@ impl Overlay {
         if self.help_open {
             return vec![("F1", "Close Shortcuts"), ("Esc", "Close Shortcuts")];
         }
-        let esc = if self.annotating()
+        let esc = if self.smart_active() {
+            ("Esc", "Close Panel")
+        } else if self.annotating()
             && self.sel.is_some()
             && (self.selected.is_some() || self.tool != Tool::Select)
         {
@@ -529,6 +533,7 @@ impl Overlay {
                 Pos2::new(ax * k, ay * k),
                 pal,
                 shared.ocr.is_some(),
+                self.smart_active(),
                 lifted,
                 actions,
             );
@@ -538,6 +543,35 @@ impl Overlay {
 
             // Popups open on the bar's monitor, wherever the bar is.
             let screen = rect_pt(mon, k);
+
+            // Find Sensitive Info panel: under the action bar, right edges aligned (above
+            // it when there is no room below), kept on the bar's monitor.
+            if let Some(view) = self.smart_view() {
+                if matches!(view, smart_redact::PanelView::Empty) {
+                    ctx.request_repaint_after(Duration::from_millis(250));
+                }
+                let h = smart_redact::panel_height(&view);
+                let w = 330.0;
+                let x = act_rect
+                    .right()
+                    .clamp(screen.left() + w + 8.0, screen.right() - 8.0);
+                let (y, pivot) = if act_rect.bottom() + 8.0 + h <= screen.bottom() {
+                    (act_rect.bottom() + 8.0, egui::Align2::RIGHT_TOP)
+                } else {
+                    (act_rect.top() - 8.0, egui::Align2::RIGHT_BOTTOM)
+                };
+                let mut smart_actions = Vec::new();
+                smart_redact::panel(
+                    ctx,
+                    Pos2::new(x, y),
+                    pivot,
+                    &view,
+                    pal,
+                    accent,
+                    &mut smart_actions,
+                );
+                actions.extend(smart_actions.into_iter().map(UiAction::Smart));
+            }
             match self.popup {
                 Some(Popup::Color) => ui::color_popup(
                     ctx,

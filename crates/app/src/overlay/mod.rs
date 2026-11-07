@@ -33,6 +33,7 @@ mod paint;
 mod render;
 mod selection;
 mod shapes;
+mod smart_redact;
 mod toolbar;
 mod ui;
 mod undo;
@@ -153,6 +154,7 @@ struct Keys {
     save: bool,
     pin: bool,
     text: bool,
+    smart: bool,
     undo: bool,
     redo: bool,
     delete: bool,
@@ -254,6 +256,8 @@ pub struct Overlay {
     notice: Option<Notice>,
     /// The F1 / ? shortcut cheat sheet is showing.
     help_open: bool,
+    /// Find Sensitive Info scan or review panel (see `smart_redact.rs`).
+    smart: Option<smart_redact::SmartRedact>,
     /// Last C (copy color) result, shown in the loupe plate for a moment.
     hex_flash: Option<HexFlash>,
     /// Opened by a tray icon click (see `OverlayRequest::from_tray_click`).
@@ -432,6 +436,7 @@ impl Overlay {
                 until: None,
             }),
             help_open: false,
+            smart: None,
             hex_flash: None,
             from_tray_click,
             tray_double_pending: false,
@@ -754,6 +759,7 @@ impl Overlay {
             k.save = keys::SAVE.pressed(i);
             k.pin = keys::PIN.pressed(i);
             k.text = keys::COPY_TEXT.pressed(i);
+            k.smart = keys::FIND_SENSITIVE.pressed(i);
             k.undo = keys::UNDO.pressed(i) && !i.modifiers.shift;
             k.redo = keys::REDO.pressed(i)
                 || (cmd && i.modifiers.shift && i.key_pressed(keys::UNDO.key));
@@ -857,6 +863,9 @@ impl Overlay {
                 self.finish(ctx, shared, FinishAction::CopyText);
                 return;
             }
+            if k.smart {
+                self.toggle_smart_redact(ctx, shared);
+            }
             if k.undo {
                 self.do_undo();
             }
@@ -934,6 +943,9 @@ impl Overlay {
         }
         if self.help_open {
             self.help_open = false;
+            return;
+        }
+        if self.smart.take().is_some() {
             return;
         }
         if self.popup.is_some() {

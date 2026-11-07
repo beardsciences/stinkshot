@@ -33,6 +33,10 @@ pub enum UiAction {
     TogglePopup(Popup),
     /// The toolbar grip (see `toolbar.rs`). Positions are egui points.
     Grip(GripEvent),
+    /// Find Sensitive Info button: start a scan or close the panel.
+    FindSensitive,
+    /// Inside the Find Sensitive Info panel.
+    Smart(super::smart_redact::SmartAction),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -256,13 +260,15 @@ pub fn tool_bar(
     }
 }
 
-/// Action bar: OCR, Pin, Save, Cancel, then the accent Copy button. `ocr` = an OCR language
-/// is installed (otherwise Copy Text is disabled and says why).
+/// Action bar: Find Sensitive Info, OCR, Pin, Save, Cancel, then the accent Copy button.
+/// `ocr` = an OCR language is installed (otherwise Find Sensitive Info and Copy Text are
+/// disabled and say why); `smart_open` = the Find Sensitive Info panel is showing.
 pub fn action_bar(
     ctx: &Context,
     pos: Pos2,
     pal: &Palette,
     ocr: bool,
+    smart_open: bool,
     lifted: bool,
     out: &mut Vec<UiAction>,
 ) -> Rect {
@@ -273,6 +279,15 @@ pub fn action_bar(
             bar_frame(pal, lifted).show(ui, |ui| {
                 ui.spacing_mut().item_spacing = Vec2::new(2.0, 0.0);
                 ui.horizontal(|ui| {
+                    let smart_tip = super::smart_redact::button_tip(ocr);
+                    let r = ui
+                        .add_enabled_ui(ocr, |ui| {
+                            theme::widgets::icon_button(ui, Icon::Shield, &smart_tip, smart_open)
+                        })
+                        .inner;
+                    if r.on_disabled_hover_text(&smart_tip).clicked() {
+                        out.push(UiAction::FindSensitive);
+                    }
                     let ocr_tip = if ocr {
                         "Copy Text (Ctrl+T)"
                     } else {

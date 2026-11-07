@@ -70,6 +70,8 @@ impl Chord {
 pub const SAVE: Chord = Chord::ctrl(Key::S, "Ctrl+S");
 pub const PIN: Chord = Chord::ctrl(Key::P, "Ctrl+P");
 pub const COPY_TEXT: Chord = Chord::ctrl(Key::T, "Ctrl+T");
+/// Find Sensitive Info (Smart Redact): R for redact.
+pub const FIND_SENSITIVE: Chord = Chord::ctrl(Key::R, "Ctrl+R");
 pub const UNDO: Chord = Chord::ctrl(Key::Z, "Ctrl+Z");
 pub const REDO: Chord = Chord::ctrl(Key::Y, "Ctrl+Y");
 pub const COPY_COLOR: Chord = Chord::plain(Key::C, "C");
@@ -134,6 +136,7 @@ pub fn sheet(select_only: bool) -> Sheet {
         ("Del or Backspace".to_string(), "Delete the Selected Shape"),
         ("Arrows".to_string(), "Move the Selected Shape"),
         ("Double-Click".to_string(), "Edit Text"),
+        (FIND_SENSITIVE.label.to_string(), "Find Sensitive Info"),
         ("Esc".to_string(), "Deselect, Then Cancel"),
     ];
     let finish = vec![
@@ -185,7 +188,16 @@ mod tests {
 
     #[test]
     fn chord_labels_match_their_keys() {
-        for c in [SAVE, PIN, COPY_TEXT, UNDO, REDO, COPY_COLOR, HELP] {
+        for c in [
+            SAVE,
+            PIN,
+            COPY_TEXT,
+            FIND_SENSITIVE,
+            UNDO,
+            REDO,
+            COPY_COLOR,
+            HELP,
+        ] {
             let expect = if c.ctrl {
                 format!("Ctrl+{}", c.key.name())
             } else {
@@ -226,6 +238,11 @@ mod tests {
                 .iter()
                 .any(|(k, _)| k == SAVE.label || k == PIN.label)
         );
+        assert!(
+            !s.iter()
+                .flat_map(|(_, r)| r.iter())
+                .any(|(k, _)| k == FIND_SENSITIVE.label)
+        );
     }
 
     #[test]
@@ -246,6 +263,7 @@ mod tests {
             SAVE.label,
             PIN.label,
             COPY_TEXT.label,
+            FIND_SENSITIVE.label,
             COPY_COLOR.label,
             HELP.label,
             HELP_CHAR,

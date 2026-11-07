@@ -85,6 +85,8 @@ pub struct Editor {
     pub blur_radius: f32,
     pub pixelate_block: u32,
     pub palette: Vec<String>,
+    /// Last style picked in Find Sensitive Info: "box", "blur" or "pixelate".
+    pub smart_redact_style: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -198,6 +200,7 @@ impl Default for Editor {
             .iter()
             .map(|s| s.to_string())
             .collect(),
+            smart_redact_style: "box".into(),
         }
     }
 }
