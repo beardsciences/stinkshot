@@ -189,26 +189,29 @@ pub fn action_bar(ctx: &Context, pos: Pos2, pal: &Palette, out: &mut Vec<UiActio
             bar_frame(pal).show(ui, |ui| {
                 ui.spacing_mut().item_spacing = Vec2::new(2.0, 0.0);
                 ui.horizontal(|ui| {
-                    if theme::widgets::icon_button(ui, Icon::Ocr, "Copy Text (OCR)  Ctrl+T", false)
+                    if theme::widgets::icon_button(ui, Icon::Ocr, "Copy Text (Ctrl+T)", false)
                         .clicked()
                     {
                         out.push(UiAction::Finish(FinishAction::CopyText));
                     }
-                    if theme::widgets::icon_button(ui, Icon::Pin, "Pin to Screen  Ctrl+P", false)
+                    if theme::widgets::icon_button(ui, Icon::Pin, "Pin to Screen (Ctrl+P)", false)
                         .clicked()
                     {
                         out.push(UiAction::Finish(FinishAction::Pin));
                     }
-                    if theme::widgets::icon_button(ui, Icon::Save, "Save As  Ctrl+S", false)
+                    if theme::widgets::icon_button(ui, Icon::Save, "Save As (Ctrl+S)", false)
                         .clicked()
                     {
                         out.push(UiAction::Finish(FinishAction::SaveAs));
                     }
-                    if theme::widgets::icon_button(ui, Icon::Close, "Cancel  Esc", false).clicked()
+                    if theme::widgets::icon_button(ui, Icon::Close, "Cancel (Esc)", false).clicked()
                     {
                         out.push(UiAction::Cancel);
                     }
-                    if theme::widgets::accent_button(ui, "Copy  Enter").clicked() {
+                    if theme::widgets::accent_button(ui, "Copy")
+                        .on_hover_text("Copy to Clipboard (Enter)")
+                        .clicked()
+                    {
                         out.push(UiAction::Finish(FinishAction::Copy));
                     }
                 });
