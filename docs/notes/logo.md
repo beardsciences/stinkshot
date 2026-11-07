@@ -14,7 +14,7 @@ and dark backgrounds.
 
 | Concept | Sheet | Idea |
 |---|---|---|
-| A, Puff | `logo/concept-a-puff.png` | Free-standing glossy green cloud, two motion puffs trailing left, soft contact shadow. |
+| A, Puff | `logo/concept-a-puff.png` | Free-standing glossy green cloud letting off gas: flattened puffs along its base to the lower left, two wavy stink lines rising behind it, soft contact shadow. |
 | B, Tile | `logo/concept-b-tile.png` | The same puff on a dark rounded app tile with viewfinder corner brackets. |
 | C, Lens | `logo/concept-c-lens.png` | The puff with a glossy camera lens set into its face. |
 
@@ -25,7 +25,7 @@ and dark backgrounds.
   a smudge, and a dark square sits heavy on a dark taskbar. C's lens turns into a single dark
   dot at 16 px that reads as an eye (a one-eyed creature, not a camera).
 - The joke is the cloud. The brief keeps humor to the name and icon; a stink cloud says it
-  without a camera metaphor, and the motion puffs read as "stink" while staying tidy.
+  without a camera metaphor, and the gas puffs plus stink lines make it a fart cloud.
 - It animates well. A bare silhouette squashes and hops cleanly; a tile would need the cloud
   to move inside a fixed frame.
 
@@ -51,15 +51,24 @@ Palette comes from the accent: for the default `#7fd36a`, shadow is exactly `#3f
 light is about `#a6e596`. A custom accent recolors the tray icon (as before); the exe and
 window icons always use the default.
 
-Levels of detail (`Detail`): 16-24 px use a fatter four-lobe silhouette with no motion puffs
-or shadow; 32-48 px add one motion puff; 64 px and up get both puffs and the shadow.
+Levels of detail (`Detail`): 16-24 px use a fatter four-lobe silhouette with no gas, stink
+lines or shadow; 32-48 px add one gas puff and two thicker stink lines; 64 px and up get two
+gas puffs, finer stink lines and the shadow.
+
+Gas and stink lines (revised): the first version trailed two separate round puffs that got
+smaller as they moved down and left, which is the comic thought-bubble glyph, not gas. Now
+the puffs are flattened ellipsoids (rx > ry) sitting on the cloud's base line, overlapping
+its lower left and each other, drawn behind the cloud as one soft-max surface so they merge
+like its lobes. Two short tube-shaded wavy stink lines rise in the free space above the left
+lobe, thicker at the bottom. Together they read as gas coming out, not a bubble chain.
 Supersampling is 8x8 up to 32 px, 5x5 to 64, 3x3 above.
 
 ## Dynamic behavior
 
 - **Capture animation**: `Tray::flash_capture()` plays `icon_gen::ANIM`, 7 poses x 60 ms
-  (420 ms): squash, hop with a stretch, land, settle. Motion puffs rise and fade where they
-  exist (32 px and up). `Tray::poll` advances frames (it already runs every frame) and
+  (420 ms): squash, hop with a stretch, land, settle. Where they exist (32 px and up) the gas
+  billows (grows, lifts slightly, barely moves sideways so it does not clip the left edge)
+  and the stink lines rise and wiggle, both fading out by the last frame. `Tray::poll` advances frames (it already runs every frame) and
   schedules the next repaint with `wake_after`. Each frame renders one tray-size bitmap
   on the UI thread (at most 32 x 32 px x 64 samples).
 - **Recording badge**: `Tray::set_recording(bool)`, idempotent, adds a red dot with a white
@@ -67,7 +76,9 @@ Supersampling is 8x8 up to 32 px, 5x5 to 64, 3x3 above.
 - **Windows**: every viewport gets `with_icon(app_icon::window_icon())` (64 px, one shared
   `Arc` so egui never re-applies it). After the HWND is found, `app_icon::apply_native` sends
   `WM_SETICON` small and big with the exe's resource icon at the window's DPI sizes, so the
-  title bar and taskbar use the hand-tuned 16/20/24/32/48 frames. The root viewport also gets
+  title bar and taskbar use the hand-tuned 16/20/24/32/48 frames. `drive()` keeps the HWND
+  and that DPI and calls `app_icon::refresh_native` every frame, which re-sends the icons
+  when `GetDpiForWindow` changes (a window dragged to a monitor with another scale). The root viewport also gets
   the icon: eframe stamps the root icon onto the first window that becomes active, and without
   one it used the egui logo (that is what History showed before this change).
 - **Exe icon**: `.ico` with 16, 20, 24, 32, 48, 64, 128, 256 (BMP frames, 374 KB).
@@ -96,7 +107,8 @@ Supersampling is 8x8 up to 32 px, 5x5 to 64, 3x3 above.
 ## Shared file edits
 
 - `crates/app/src/shell.rs` (small, additive): `drive()` adds `.with_icon(...)` to each
-  viewport builder and calls `app_icon::apply_native(hwnd)` once the HWND is found;
+  viewport builder, calls `app_icon::apply_native(hwnd)` once the HWND is found and
+  `app_icon::refresh_native` each frame after that (new `HwndState::icon` field);
   `root_viewport()` adds `.with_icon(...)`; `capture_saved()` and `exported()` call
   `tray.flash_capture()`; `poll_inputs()` calls `tray.set_recording(matches!(self.rec,
   Rec::Active { .. }))`.

@@ -62,8 +62,9 @@ fn resource_icon(px: i32) -> Option<isize> {
     Some(h)
 }
 
-/// Give a window the exe's icon at its DPI. Best effort: on failure egui's icon stays.
-pub fn apply_native(hwnd: stinkshot_platform::Hwnd) {
+/// Give a window the exe's icon at its DPI and return that DPI (pass it to `refresh_native`
+/// later). Best effort: on failure egui's icon stays.
+pub fn apply_native(hwnd: stinkshot_platform::Hwnd) -> u32 {
     let hwnd = HWND(hwnd as *mut _);
     // SAFETY: plain queries and messages to a window we own.
     unsafe {
@@ -82,5 +83,18 @@ pub fn apply_native(hwnd: stinkshot_platform::Hwnd) {
                 );
             }
         }
+        dpi
+    }
+}
+
+/// Re-apply the native icon when the window has moved to a monitor with another DPI since
+/// `last_dpi` was recorded (e.g. History dragged from a 150% to a 100% monitor), so Windows
+/// does not scale the old frames. Cheap enough to call every frame: one DPI query, and the
+/// handles are cached by size.
+pub fn refresh_native(hwnd: stinkshot_platform::Hwnd, last_dpi: &mut u32) {
+    // SAFETY: plain query on a window we own.
+    let dpi = unsafe { GetDpiForWindow(HWND(hwnd as *mut _)) }.max(96);
+    if dpi != *last_dpi {
+        *last_dpi = apply_native(hwnd);
     }
 }

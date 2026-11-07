@@ -220,6 +220,8 @@ fn root_viewport() -> egui::ViewportBuilder {
 struct HwndState {
     created: bool,
     tries: u32,
+    /// The window and the DPI its native icon was picked for (re-applied on DPI change).
+    icon: Option<(stinkshot_platform::Hwnd, u32)>,
 }
 
 struct Slot<T> {
@@ -256,12 +258,15 @@ fn drive(
         .with_title(title.clone())
         .with_icon(crate::app_icon::window_icon());
     let status = ctx.show_viewport_immediate(id, builder, |ctx, _class| surf.show(ctx, shared));
+    if let Some((hwnd, dpi)) = &mut st.icon {
+        crate::app_icon::refresh_native(*hwnd, dpi);
+    }
     if !st.created && st.tries < 90 {
         st.tries += 1;
         match window_util::find_own_window(&title) {
             Some(hwnd) => {
                 st.created = true;
-                crate::app_icon::apply_native(hwnd);
+                st.icon = Some((hwnd, crate::app_icon::apply_native(hwnd)));
                 surf.on_created(hwnd, shared);
                 if focus {
                     window_util::force_foreground(hwnd);

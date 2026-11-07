@@ -1,5 +1,6 @@
 //! Procedural application logo: a glossy 3D green "puff" (a little cloud built from
-//! overlapping spheres) with two motion puffs trailing to the left. See docs/notes/logo.md.
+//! overlapping spheres) letting off gas: flattened puffs squeezed out along its base to the
+//! lower left and wavy stink lines rising behind it. See docs/notes/logo.md.
 //!
 //! Pure std so `build.rs` can include it (for the exe .ico), the tray can redraw it at
 //! runtime (16/20/24/32 px depending on DPI, plus a short bounce animation and a recording
@@ -23,8 +24,8 @@ pub struct Pose {
     pub scale_y: f32,
     /// Upward hop, as a fraction of the icon size.
     pub lift: f32,
-    /// How far the motion puffs have drifted left (fraction of the icon size); they fade
-    /// as they drift.
+    /// How far the gas puffs have drifted left along the base and the stink lines have
+    /// risen (fraction of the icon size); both fade as they go.
     pub drift: f32,
     /// Red recording dot in the lower right.
     pub recording: bool,
@@ -109,9 +110,9 @@ const fn base(x: f32, y: f32, rx: f32, ry: f32, rz: f32) -> Ball {
 /// Level of detail: tray sizes get a bigger, simpler silhouette with no small parts.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Detail {
-    /// 16-24 px: fat silhouette, no motion puffs, no shadow, outline.
+    /// 16-24 px: fat silhouette, no gas puffs or stink lines, no shadow, outline.
     Tiny,
-    /// 32-48 px: cloud plus one motion puff.
+    /// 32-48 px: cloud plus one gas puff and two stink lines.
     Small,
     /// 64 px and up: everything.
     Full,
@@ -144,14 +145,37 @@ const CLOUD_FULL: [Ball; 4] = [
     ball(0.81, 0.56, 0.15, 0.45),
 ];
 
-struct Puff {
-    b: Ball,
-    alpha: f32,
+/// A flattened ellipsoid of gas (rx > ry) squeezed out along the cloud's base. All puffs of
+/// a layout form one soft-max surface, so they merge with each other like the cloud's lobes
+/// and tuck behind the cloud instead of floating as separate bubbles.
+const fn puff(x: f32, y: f32, rx: f32, ry: f32) -> Ball {
+    Ball {
+        x,
+        y,
+        rx,
+        ry,
+        rz: ry,
+        gloss: 0.5,
+    }
+}
+
+/// A cartoon stink line: a short wavy stroke rising behind the cloud, thicker at the
+/// bottom. `x(y) = x0 + amp * sin(2 pi (y - y0) / wave)` for y in `[y0, y1]` (y0 on top).
+#[derive(Clone, Copy)]
+struct StinkLine {
+    x0: f32,
+    y0: f32,
+    y1: f32,
+    amp: f32,
+    wave: f32,
+    /// Half width at the bottom end.
+    w: f32,
 }
 
 struct Layout {
     cloud: &'static [Ball],
-    puffs: Vec<Puff>,
+    puffs: &'static [Ball],
+    lines: &'static [StinkLine],
     shadow: bool,
     /// Anchor of the squash/stretch (base of the cloud).
     anchor: (f32, f32),
@@ -164,11 +188,58 @@ struct Layout {
     spec: f32,
 }
 
+// Gas sits on the cloud's base line and overlaps its lower left, so it reads as coming out
+// of the cloud rather than as a thought-bubble chain.
+/// Upper bound on puffs per layout (they are posed into a stack array per sample).
+const MAX_PUFFS: usize = 2;
+const PUFFS_SMALL: [Ball; 1] = [puff(0.195, 0.735, 0.13, 0.07)];
+const PUFFS_FULL: [Ball; 2] = [
+    puff(0.255, 0.728, 0.115, 0.064),
+    puff(0.115, 0.752, 0.09, 0.048),
+];
+const LINES_SMALL: [StinkLine; 2] = [
+    StinkLine {
+        x0: 0.275,
+        y0: 0.13,
+        y1: 0.36,
+        amp: 0.03,
+        wave: 0.26,
+        w: 0.04,
+    },
+    StinkLine {
+        x0: 0.14,
+        y0: 0.27,
+        y1: 0.49,
+        amp: 0.03,
+        wave: 0.26,
+        w: 0.04,
+    },
+];
+const LINES_FULL: [StinkLine; 2] = [
+    StinkLine {
+        x0: 0.29,
+        y0: 0.12,
+        y1: 0.355,
+        amp: 0.03,
+        wave: 0.21,
+        w: 0.026,
+    },
+    StinkLine {
+        x0: 0.165,
+        y0: 0.24,
+        y1: 0.47,
+        amp: 0.03,
+        wave: 0.21,
+        w: 0.026,
+    },
+];
+
 fn layout(d: Detail) -> Layout {
     match d {
         Detail::Tiny => Layout {
             cloud: &CLOUD_TINY,
-            puffs: Vec::new(),
+            puffs: &[],
+            lines: &[],
             shadow: false,
             anchor: (0.52, 0.86),
             outline_px: 1.0,
@@ -178,10 +249,8 @@ fn layout(d: Detail) -> Layout {
         },
         Detail::Small => Layout {
             cloud: &CLOUD_SMALL,
-            puffs: vec![Puff {
-                b: ball(0.115, 0.715, 0.075, 0.5),
-                alpha: 0.95,
-            }],
+            puffs: &PUFFS_SMALL,
+            lines: &LINES_SMALL,
             shadow: false,
             anchor: (0.585, 0.81),
             outline_px: 1.0,
@@ -191,16 +260,8 @@ fn layout(d: Detail) -> Layout {
         },
         Detail::Full => Layout {
             cloud: &CLOUD_FULL,
-            puffs: vec![
-                Puff {
-                    b: ball(0.16, 0.675, 0.072, 0.5),
-                    alpha: 0.95,
-                },
-                Puff {
-                    b: ball(0.06, 0.74, 0.04, 0.5),
-                    alpha: 0.75,
-                },
-            ],
+            puffs: &PUFFS_FULL,
+            lines: &LINES_FULL,
             shadow: true,
             anchor: (0.59, 0.785),
             outline_px: 0.0,
@@ -308,31 +369,39 @@ fn sample(
         }
     }
 
-    for p in &lay.puffs {
-        // Puffs rise up and to the left, grow a little and fade as they dissipate.
-        let fade = (1.0 - pose.drift * 7.0).clamp(0.0, 1.0);
-        if fade <= 0.0 {
-            continue;
+    // Gas and stink lines dissipate during the capture animation.
+    let fade = (1.0 - pose.drift * 5.5).clamp(0.0, 1.0);
+    if fade > 0.0 {
+        // Stink lines rise and wiggle behind the cloud.
+        for l in lay.lines {
+            stink_line(
+                &mut acc,
+                px,
+                py + pose.drift * 0.8,
+                l,
+                pose.drift,
+                pal,
+                fade,
+            );
         }
-        let grow = 1.0 + pose.drift * 1.5;
-        let b = Ball {
-            x: p.b.x - pose.drift * 0.35,
-            y: p.b.y - pose.drift,
-            rx: p.b.rx * grow,
-            ry: p.b.ry * grow,
-            rz: p.b.rz * grow,
-            ..p.b
-        };
-        blob(
-            &mut acc,
-            px,
-            py,
-            std::slice::from_ref(&b),
-            lay,
-            pal,
-            p.alpha * fade,
-            outline_w,
-        );
+        // Gas billows out of the base and lifts a little, spreading as it goes (it already
+        // reaches the left edge, so it barely moves sideways).
+        if !lay.puffs.is_empty() {
+            let grow = 1.0 + pose.drift * 1.8;
+            let mut gas = [ball(0.0, 0.0, 1.0, 0.0); MAX_PUFFS];
+            for (g, p) in gas.iter_mut().zip(lay.puffs) {
+                *g = Ball {
+                    x: p.x - pose.drift * 0.1,
+                    y: p.y - pose.drift * 0.2,
+                    rx: p.rx * grow,
+                    ry: p.ry * grow,
+                    rz: p.rz * grow,
+                    ..*p
+                };
+            }
+            let gas = &gas[..lay.puffs.len().min(MAX_PUFFS)];
+            blob(&mut acc, px, py, gas, lay, pal, 0.97 * fade, outline_w);
+        }
     }
 
     // Main cloud: squash/stretch about its base, hop upward.
@@ -375,6 +444,39 @@ fn blob(
             }
         }
     }
+}
+
+/// A glossy tube-shaded wavy stroke with round ends.
+fn stink_line(
+    acc: &mut [f32; 4],
+    px: f32,
+    py: f32,
+    l: &StinkLine,
+    phase: f32,
+    pal: &Palette,
+    alpha: f32,
+) {
+    let tau = std::f32::consts::TAU;
+    let yc = py.clamp(l.y0, l.y1);
+    let t = (yc - l.y0) / (l.y1 - l.y0);
+    // Thicker at the bottom, where it leaves the cloud.
+    let w = l.w * (0.6 + 0.4 * t);
+    let arg = tau * (yc - l.y0) / l.wave + phase * 30.0;
+    let xc = l.x0 + l.amp * arg.sin();
+    let slope = l.amp * tau / l.wave * arg.cos();
+    // Distance to the curve: horizontal offset corrected for the slope, plus the cap.
+    let dx = (px - xc) / (1.0 + slope * slope).sqrt();
+    let dy = py - yc;
+    let d = (dx * dx + dy * dy).sqrt();
+    if d >= w {
+        return;
+    }
+    // Tube shading: a lit left side, darker toward the right edge.
+    let u = (dx / w).clamp(-1.0, 1.0);
+    let lit = (0.5 - 0.5 * u).powf(0.8);
+    let mut c = mix(pal.shadow, pal.base, lit);
+    c = mix(c, pal.light, 0.5 * smoothstep(0.55, 1.0, lit));
+    over(acc, c, alpha * 0.95);
 }
 
 struct Surf {
@@ -613,6 +715,38 @@ mod tests {
         assert_eq!(top[3], 255);
         assert_eq!(under[3], 255);
         assert!(luma(top) > luma(under) + 60, "{top:?} vs {under:?}");
+    }
+
+    #[test]
+    fn gas_sits_on_the_base_and_stink_lines_rise_behind() {
+        for size in [48u32, 256] {
+            let n = size as usize;
+            let img = render_rgba(size, ACCENT);
+            let at = |fx: f32, fy: f32| {
+                px(
+                    &img,
+                    n,
+                    (fx * size as f32) as usize,
+                    (fy * size as f32) as usize,
+                )
+            };
+            // Gas touches the cloud along the base line: a solid run from the puff into the
+            // cloud body with no transparent gap (a thought-bubble chain would have gaps).
+            let y = 0.735;
+            let gap = (20..=45).any(|i| at(i as f32 / 100.0, y)[3] < 128);
+            assert!(!gap, "{size}: gap between gas and cloud");
+            // Nothing floats above the gas on the left except the stink lines, which have
+            // solid pixels in the upper left and are green.
+            let row = (5..36)
+                .map(|i| at(i as f32 / 100.0, 0.3))
+                .filter(|p| p[3] > 200)
+                .collect::<Vec<_>>();
+            assert!(!row.is_empty(), "{size}: no stink line");
+            assert!(row.iter().all(|p| p[1] > p[0] && p[1] > p[2]), "{size}");
+        }
+        // Tray sizes stay clean.
+        let tiny = render_rgba(16, ACCENT);
+        assert_eq!(px(&tiny, 16, 1, 4)[3], 0);
     }
 
     #[test]

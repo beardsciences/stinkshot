@@ -78,7 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 // ------------------------------------------------------------------- concepts
 
-/// A: free-standing glossy puff with trailing motion puffs (the shipped logo).
+/// A: free-standing glossy puff letting off gas and stink lines (the shipped logo).
 fn concept_a(size: u32) -> Img {
     (size, render_rgba(size, ACCENT))
 }
