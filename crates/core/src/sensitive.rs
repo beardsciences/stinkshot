@@ -56,41 +56,89 @@ pub struct Finding {
 
 const MASK: char = '\u{2022}';
 
+/// A gap wider than this many word heights splits an OCR line into separate segments
+/// (Windows OCR often merges table columns into one line).
+const COLUMN_GAP: f32 = 1.5;
+
 /// Findings for OCR lines (each a list of words in reading order), top to bottom.
+///
+/// Each line is cut into segments at wide gaps and detection runs per segment, so a match
+/// never joins words from different table columns. A password label and its value often sit
+/// in different columns of a form, so passwords are also looked for across the whole line.
 pub fn find_in_lines(lines: &[Vec<TextWord>]) -> Vec<Finding> {
     let mut out = Vec::new();
     for words in lines {
-        // Join with single spaces, remembering each word's byte span.
-        let mut line = String::new();
-        let mut spans: Vec<Range<usize>> = Vec::with_capacity(words.len());
-        for w in words {
-            let t = w.text.trim();
-            if t.is_empty() {
-                spans.push(line.len()..line.len());
-                continue;
-            }
-            if !line.is_empty() {
-                line.push(' ');
-            }
-            let start = line.len();
-            line.push_str(t);
-            spans.push(start..line.len());
+        let mut found: Vec<Finding> = Vec::new();
+        for seg in segments(words) {
+            found.extend(find_in_words(seg, |_| true));
         }
-        for (kind, range) in find_in_text(&line) {
-            let rect = words
-                .iter()
-                .zip(&spans)
-                .filter(|(_, s)| !s.is_empty() && s.start < range.end && range.start < s.end)
-                .map(|(w, _)| w.rect)
-                .filter(|r| r.w > 0 && r.h > 0)
-                .reduce(union);
-            if let Some(rect) = rect {
-                out.push(Finding {
-                    kind,
-                    preview: mask(kind, &line[range]),
-                    rect,
-                });
+        for f in find_in_words(words, |k| k == SensitiveKind::Password) {
+            if !found.iter().any(|g| g.rect.intersect(&f.rect).is_some()) {
+                found.push(f);
             }
+        }
+        found.sort_by_key(|f| (f.rect.x, f.rect.y));
+        out.extend(found);
+    }
+    out
+}
+
+/// `words` cut wherever the horizontal gap between neighbours exceeds [`COLUMN_GAP`] times
+/// the taller word's height.
+fn segments(words: &[TextWord]) -> Vec<&[TextWord]> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    for i in 1..words.len() {
+        let (a, b) = (&words[i - 1].rect, &words[i].rect);
+        let gap = b.x - (a.x + a.w);
+        let h = a.h.max(b.h).max(1) as f32;
+        if gap as f32 > COLUMN_GAP * h {
+            out.push(&words[start..i]);
+            start = i;
+        }
+    }
+    if start < words.len() {
+        out.push(&words[start..]);
+    }
+    out
+}
+
+/// Detection over one run of words joined with single spaces; each match maps back to the
+/// union of the words it overlaps.
+fn find_in_words(words: &[TextWord], keep: impl Fn(SensitiveKind) -> bool) -> Vec<Finding> {
+    let mut line = String::new();
+    let mut spans: Vec<Range<usize>> = Vec::with_capacity(words.len());
+    for w in words {
+        let t = w.text.trim();
+        if t.is_empty() {
+            spans.push(line.len()..line.len());
+            continue;
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        let start = line.len();
+        line.push_str(t);
+        spans.push(start..line.len());
+    }
+    let mut out = Vec::new();
+    for (kind, range) in find_in_text(&line) {
+        if !keep(kind) {
+            continue;
+        }
+        let rect = words
+            .iter()
+            .zip(&spans)
+            .filter(|(_, s)| !s.is_empty() && s.start < range.end && range.start < s.end)
+            .map(|(w, _)| w.rect)
+            .filter(|r| r.w > 0 && r.h > 0)
+            .reduce(union);
+        if let Some(rect) = rect {
+            out.push(Finding {
+                kind,
+                preview: mask(kind, &line[range]),
+                rect,
+            });
         }
     }
     out
@@ -119,29 +167,27 @@ pub fn find_in_text(s: &str) -> Vec<(SensitiveKind, Range<usize>)> {
         found.push((kind, r));
     };
     let toks = tokens(s);
-    for t in &toks {
-        if is_prefixed_secret(&s[t.clone()]) {
-            claim(SensitiveKind::Secret, t.clone());
+    // Pieces of URLs, mailto links and key=value pairs, tried after their whole token.
+    let pieces: Vec<Range<usize>> = toks.iter().flat_map(|t| pieces(s, t.clone())).collect();
+    let mut each = |test: fn(&str) -> bool, kind: SensitiveKind, rs: &[Range<usize>]| {
+        for r in rs {
+            if test(&s[r.clone()]) {
+                claim(kind, r.clone());
+            }
         }
-    }
-    for t in &toks {
-        if is_email(&s[t.clone()]) {
-            claim(SensitiveKind::Email, t.clone());
-        }
-    }
+    };
+    each(is_prefixed_secret, SensitiveKind::Secret, &toks);
+    each(is_prefixed_secret, SensitiveKind::Secret, &pieces);
+    each(is_email, SensitiveKind::Email, &toks);
+    each(is_email, SensitiveKind::Email, &pieces);
     for (kind, r) in numbers(s) {
-        claim(kind, r);
+        each(|_| true, kind, &[r]);
     }
-    for t in &toks {
-        if is_ipv4(&s[t.clone()]) {
-            claim(SensitiveKind::IpAddress, t.clone());
-        }
-    }
-    for t in &toks {
-        if is_generic_secret(&s[t.clone()]) {
-            claim(SensitiveKind::Secret, t.clone());
-        }
-    }
+    each(is_ipv4, SensitiveKind::IpAddress, &toks);
+    each(is_ipv6, SensitiveKind::IpAddress, &toks);
+    each(is_ipv4, SensitiveKind::IpAddress, &pieces);
+    each(is_generic_secret, SensitiveKind::Secret, &toks);
+    each(is_generic_secret, SensitiveKind::Secret, &pieces);
     for r in password_values(s, &toks) {
         claim(SensitiveKind::Password, r);
     }
@@ -176,6 +222,27 @@ fn tokens(s: &str) -> Vec<Range<usize>> {
     out
 }
 
+/// The parts of token `t` between URL and assignment delimiters (`https://host:1/p?key=v`,
+/// `mailto:a@b.c`, `DB_PASSWORD="x"`), as byte ranges into `s`. Empty when `t` has no
+/// delimiter (the whole token is tried already).
+fn pieces(s: &str, t: Range<usize>) -> Vec<Range<usize>> {
+    const DELIMS: &[char] = &[':', '/', '?', '&', '=', '#', '"', '\'', '`', ',', ';'];
+    let text = &s[t.clone()];
+    if !text.contains(DELIMS) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut at = t.start;
+    for part in text.split(DELIMS) {
+        let trimmed = part.trim_end_matches(['.', '!']);
+        if !trimmed.is_empty() {
+            out.push(at..at + trimmed.len());
+        }
+        at += part.len() + 1;
+    }
+    out
+}
+
 fn is_email(t: &str) -> bool {
     let Some((local, domain)) = t.split_once('@') else {
         return false;
@@ -200,6 +267,12 @@ fn is_email(t: &str) -> bool {
 }
 
 fn is_ipv4(t: &str) -> bool {
+    // Optional /prefix (CIDR).
+    let t = match t.split_once('/') {
+        Some((h, p)) if p.len() <= 2 && p.parse::<u8>().is_ok_and(|v| v <= 32) => h,
+        Some(_) => return false,
+        None => t,
+    };
     // Optional :port.
     let host = match t.rsplit_once(':') {
         Some((h, p)) if !p.is_empty() && p.len() <= 5 && p.bytes().all(|b| b.is_ascii_digit()) => h,
@@ -213,6 +286,50 @@ fn is_ipv4(t: &str) -> bool {
                 && p.bytes().all(|b| b.is_ascii_digit())
                 && p.parse::<u16>().is_ok_and(|v| v <= 255)
         })
+}
+
+/// IPv6: eight hex groups, or a "::" form with at least three groups, optional /prefix.
+/// Times (12:30:45), MAC addresses and `std::vector` do not qualify.
+fn is_ipv6(t: &str) -> bool {
+    let t = match t.split_once('/') {
+        Some((h, p)) if p.parse::<u8>().is_ok_and(|v| v <= 128) => h,
+        Some(_) => return false,
+        None => t,
+    };
+    if t.matches("::").count() > 1 || t.contains(":::") {
+        return false;
+    }
+    let groups: Vec<&str> = t.split(':').collect();
+    let filled: Vec<&&str> = groups.iter().filter(|g| !g.is_empty()).collect();
+    let hex_ok = filled
+        .iter()
+        .all(|g| g.len() <= 4 && g.bytes().all(|b| b.is_ascii_hexdigit()));
+    let shape_ok = if t.contains("::") {
+        filled.len() >= 3 && groups.len() <= 9
+    } else {
+        groups.len() == 8 && filled.len() == 8
+    };
+    hex_ok && shape_ok
+}
+
+/// Words joined by `-`, `_`, `/` or `.` ("company-onboarding-checklist-v2", a URL path,
+/// "sk-learn-compatible"): at least half the parts are plain words of three or more letters.
+fn slug_like(t: &str) -> bool {
+    let parts: Vec<&str> = t
+        .split(['-', '_', '/', '.'])
+        .filter(|p| !p.is_empty())
+        .collect();
+    if parts.len() < 2 {
+        return false;
+    }
+    let wordy = |p: &&&str| {
+        p.len() >= 3
+            && p.bytes().all(|b| b.is_ascii_alphabetic())
+            && (p.bytes().all(|b| b.is_ascii_lowercase())
+                || p.bytes().all(|b| b.is_ascii_uppercase())
+                || p.bytes().skip(1).all(|b| b.is_ascii_lowercase()))
+    };
+    parts.iter().filter(wordy).count() * 2 >= parts.len()
 }
 
 /// Well-known key and token formats.
@@ -242,11 +359,19 @@ fn is_prefixed_secret(t: &str) -> bool {
         s.chars()
             .all(|c| c.is_ascii_alphanumeric() || "-_".contains(c))
     };
-    if PREFIXES
-        .iter()
-        .any(|p| t.starts_with(p) && t.len() >= p.len() + 12)
-        && key_chars(t)
-    {
+    let prefixed = PREFIXES.iter().any(|p| {
+        let Some(body) = t.strip_prefix(p) else {
+            return false;
+        };
+        // A bare "sk-" key is long (OpenAI: 48); "sk-proj-" / "sk-ant-" have their own shapes.
+        let min = if *p == "sk-" && !body.starts_with("proj-") && !body.starts_with("ant-") {
+            20
+        } else {
+            12
+        };
+        body.len() >= min && !slug_like(body)
+    });
+    if prefixed && key_chars(t) {
         return true;
     }
     // JSON Web Token: three base64url parts, the first a JSON header.
@@ -254,7 +379,8 @@ fn is_prefixed_secret(t: &str) -> bool {
     parts.len() == 3 && t.starts_with("eyJ") && parts.iter().all(|p| p.len() >= 8 && key_chars(p))
 }
 
-/// Long random-looking tokens (hex digests excluded only when short).
+/// Long random-looking tokens. Hex digests and UUIDs (git SHAs, SHA-256, IDs), slugs and
+/// URL paths are not keys; a single-case token needs a higher entropy than a mixed-case one.
 fn is_generic_secret(t: &str) -> bool {
     if t.len() < 32 || t.len() > 256 {
         return false;
@@ -265,9 +391,15 @@ fn is_generic_secret(t: &str) -> bool {
     {
         return false;
     }
+    if t.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') || slug_like(t) {
+        return false;
+    }
     let digits = t.bytes().filter(u8::is_ascii_digit).count();
     let letters = t.bytes().filter(u8::is_ascii_alphabetic).count();
-    digits >= 2 && letters >= 8 && entropy(t) >= 3.5
+    let mixed_case =
+        t.bytes().any(|b| b.is_ascii_uppercase()) && t.bytes().any(|b| b.is_ascii_lowercase());
+    let e = entropy(t);
+    digits >= 2 && letters >= 8 && e >= 3.5 && (mixed_case || e >= 4.2)
 }
 
 /// Shannon entropy in bits per character.
@@ -287,16 +419,61 @@ fn entropy(t: &str) -> f32 {
         .sum()
 }
 
-/// Values after a "password:"-style label ("Password: hunter2", "pwd=abc").
-fn password_values(s: &str, toks: &[Range<usize>]) -> Vec<Range<usize>> {
-    const KEYS: &[&str] = &[
-        "password", "passwd", "pwd", "passcode", "pin", "secret", "token", "apikey", "api_key",
-        "api-key",
+/// True for a password-style label: "Password", "pwd", "DB_PASSWORD", "client_secret",
+/// "csrf-token", "apiKey", "AWS_SECRET_ACCESS_KEY".
+fn password_key(t: &str) -> bool {
+    // Whole-label only: short or ambiguous on their own.
+    const EXACT: &[&str] = &["pwd", "pin", "pass"];
+    // Label endings, compared with separators removed and case folded.
+    const ENDS: &[&str] = &[
+        "password",
+        "passwd",
+        "passcode",
+        "secret",
+        "token",
+        "apikey",
+        "secretkey",
+        "accesskey",
+        "privatekey",
+        "authkey",
+        "licensekey",
+        "signingkey",
+        "masterkey",
+        "encryptionkey",
     ];
-    let key_of = |t: &str| {
-        let k = t.trim_end_matches([':', '=']).to_ascii_lowercase();
-        KEYS.contains(&k.as_str())
-    };
+    let k = t
+        .trim_end_matches([':', '='])
+        .trim_matches(['"', '\''])
+        .to_ascii_lowercase();
+    let compact: String = k.chars().filter(|c| !"_-. ".contains(*c)).collect();
+    !compact.is_empty()
+        && (EXACT.contains(&compact.as_str())
+            || ENDS.iter().any(|e| compact.ends_with(e))
+            || k.ends_with("_pass")
+            || k.ends_with("-pass"))
+}
+
+/// The first word of a two-word label whose second word is "Key" ("API Key:", "Secret Key:").
+fn key_qualifier(t: &str) -> bool {
+    const Q: &[&str] = &[
+        "api",
+        "secret",
+        "access",
+        "private",
+        "auth",
+        "license",
+        "signing",
+        "master",
+        "encryption",
+        "client",
+    ];
+    Q.contains(&t.to_ascii_lowercase().as_str())
+}
+
+/// Values after a "password:"-style label ("Password: hunter2", "pwd=abc",
+/// "DB_PASSWORD=x", "API Key: x").
+fn password_values(s: &str, toks: &[Range<usize>]) -> Vec<Range<usize>> {
+    let key_of = password_key;
     let mut out = Vec::new();
     for (i, t) in toks.iter().enumerate() {
         let text = &s[t.clone()];
@@ -310,7 +487,9 @@ fn password_values(s: &str, toks: &[Range<usize>]) -> Vec<Range<usize>> {
         }
         // "Password: abc": the label ends with ':' or '=' in the raw text (tokens drop it).
         let raw_end = s[t.end..].chars().next();
-        let labelled = key_of(text) && matches!(raw_end, Some(':') | Some('='));
+        let two_word =
+            text.eq_ignore_ascii_case("key") && i > 0 && key_qualifier(&s[toks[i - 1].clone()]);
+        let labelled = (key_of(text) || two_word) && matches!(raw_end, Some(':') | Some('='));
         if labelled && let Some(next) = toks.get(i + 1) {
             let v = &s[next.clone()];
             if v.chars().count() >= 3 && !v.chars().all(|c| MASK == c || c == '*') {
@@ -388,7 +567,7 @@ fn numbers(s: &str) -> Vec<(SensitiveKind, Range<usize>)> {
                 if taken.iter().any(|t| t.start < r.end && r.start < t.end) {
                     continue;
                 }
-                if let Some(kind) = classify_digits(&s[r.clone()]) {
+                if let Some(kind) = classify_digits(&s[r.clone()], len == n) {
                     taken.push(r.clone());
                     out.push((kind, r));
                 }
@@ -398,7 +577,8 @@ fn numbers(s: &str) -> Vec<(SensitiveKind, Range<usize>)> {
     out
 }
 
-fn classify_digits(run: &str) -> Option<SensitiveKind> {
+/// `whole` is false for a shorter window of a longer run of numbers.
+fn classify_digits(run: &str, whole: bool) -> Option<SensitiveKind> {
     if !run.starts_with(|c: char| c.is_ascii_digit() || c == '+' || c == '(')
         || !run.ends_with(|c: char| c.is_ascii_digit())
     {
@@ -420,10 +600,31 @@ fn classify_digits(run: &str) -> Option<SensitiveKind> {
         return Some(SensitiveKind::Card);
     }
     let plus = run.starts_with('+');
-    if (10..=15).contains(&n) && (has_sep || plus) && phone_shaped(run) {
-        return Some(SensitiveKind::Phone);
+    if !(10..=15).contains(&n) || !(has_sep || plus) {
+        return None;
     }
-    None
+    let groups = digit_groups(run);
+    let shaped = if plus {
+        // International: any grouping ("+44 20 7946 0958"); card numbers never start with '+'.
+        groups.iter().all(|g| g.len() <= 5) || groups.len() == 1
+    } else if !run.contains(['(', ')', '-', '.']) {
+        // Only spaces: a row of table numbers looks the same, so take the whole run and only
+        // a national pattern (555 123 4567, 1 555 123 4567, 020 7946 0958, 07911 123456).
+        let lens: Vec<usize> = groups.iter().map(|g| g.len()).collect();
+        whole
+            && (lens == [3, 3, 4]
+                || lens == [1, 3, 3, 4]
+                || (run.starts_with('0') && (lens == [3, 4, 4] || lens == [5, 6])))
+    } else {
+        phone_shaped(&groups)
+    };
+    shaped.then_some(SensitiveKind::Phone)
+}
+
+fn digit_groups(run: &str) -> Vec<&str> {
+    run.split(|c: char| !c.is_ascii_digit())
+        .filter(|g| !g.is_empty())
+        .collect()
 }
 
 /// "123-45-6789" with valid area, group and serial numbers.
@@ -451,14 +652,9 @@ fn card_shaped(run: &str) -> bool {
 
 /// Phone numbers: digit groups of 1-4 digits (the subscriber group up to 4), not one long
 /// block with a stray separator, and not a date such as 2026-11-07.
-fn phone_shaped(run: &str) -> bool {
-    let groups: Vec<&str> = run
-        .split(|c: char| !c.is_ascii_digit())
-        .filter(|g| !g.is_empty())
-        .collect();
-    if groups.len() == 1 {
-        // "+15551234567"
-        return run.starts_with('+');
+fn phone_shaped(groups: &[&str]) -> bool {
+    if groups.len() < 2 {
+        return false;
     }
     // Several four-digit groups read as a card or account number, not a phone.
     groups.iter().all(|g| g.len() <= 5)
@@ -669,6 +865,123 @@ mod tests {
         assert_eq!(f[0].rect, PxRect::new(50, 10, 190, 12));
         assert_eq!(f[0].preview, "\u{2022}\u{2022}\u{2022}\u{2022} 4242");
         assert!(!f[0].preview.contains("4242 4242"));
+    }
+
+    #[test]
+    fn hashes_slugs_paths_and_words_are_not_keys() {
+        for s in [
+            "724ff24004693e972eea160a7b843874ecd169f4",
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "/api/v2/users/12345/profile/settings/notifications",
+            "company-onboarding-checklist-2026-q4-final-v2",
+            "sk-learn-compatible-transformer",
+            "sk-learn",
+        ] {
+            assert!(kinds(s).is_empty(), "{s}: {:?}", kinds(s));
+        }
+        // Real key shapes still match.
+        let openai = "sk-proj-Ab3dE5fG7hI9jK1lM3nO5pQ7rS9tU1vW";
+        assert_eq!(kinds(openai), [(SensitiveKind::Secret, openai)]);
+        let bare = "sk-Ab3dE5fG7hI9jK1lM3nO5pQ7rS9tU1vW3xY5zA7";
+        assert_eq!(kinds(bare), [(SensitiveKind::Secret, bare)]);
+    }
+
+    #[test]
+    fn secrets_inside_urls_and_assignments() {
+        assert_eq!(
+            kinds("http://192.168.12.201:8032/web/index.html"),
+            [(SensitiveKind::IpAddress, "192.168.12.201")]
+        );
+        assert_eq!(
+            kinds("mailto:jane@example.com"),
+            [(SensitiveKind::Email, "jane@example.com")]
+        );
+        let key = "AIzaSyA1b2C3d4E5f6G7h8I9j0KlMnOpQrStUvW";
+        let url = format!("https://maps.googleapis.com/maps/api/js?key={key}&v=3");
+        assert_eq!(kinds(&url), [(SensitiveKind::Secret, key)]);
+        assert_eq!(
+            kinds("DB_PASSWORD=hunter22"),
+            [(SensitiveKind::Password, "hunter22")]
+        );
+        assert_eq!(
+            kinds("client_secret=Xy7pQ2rLm9"),
+            [(SensitiveKind::Password, "Xy7pQ2rLm9")]
+        );
+        assert_eq!(
+            kinds("API Key: Xy7pQ2rLm9ab"),
+            [(SensitiveKind::Password, "Xy7pQ2rLm9ab")]
+        );
+        assert_eq!(
+            kinds("Access Token: abc123def"),
+            [(SensitiveKind::Password, "abc123def")]
+        );
+        assert_eq!(
+            kinds("net 10.0.0.0/24"),
+            [(SensitiveKind::IpAddress, "10.0.0.0/24")]
+        );
+        assert_eq!(
+            kinds("addr fe80::1ff:fe23:4567:890a"),
+            [(SensitiveKind::IpAddress, "fe80::1ff:fe23:4567:890a")]
+        );
+        // Ordinary keys and things shaped a bit like an address.
+        for s in [
+            "sort_key=name",
+            "Key: Escape",
+            "monkey: banana",
+            "std::vector::iterator",
+            "12:30:45",
+            "aa:bb:cc:dd:ee:ff",
+            "https://example.com/docs/getting-started",
+        ] {
+            assert!(kinds(s).is_empty(), "{s}: {:?}", kinds(s));
+        }
+    }
+
+    #[test]
+    fn international_phones_and_table_rows() {
+        assert_eq!(
+            kinds("Call +44 20 7946 0958"),
+            [(SensitiveKind::Phone, "+44 20 7946 0958")]
+        );
+        assert_eq!(
+            kinds("+61 2 9876 5432"),
+            [(SensitiveKind::Phone, "+61 2 9876 5432")]
+        );
+        assert_eq!(
+            kinds("Tel 555 123 4567"),
+            [(SensitiveKind::Phone, "555 123 4567")]
+        );
+        for s in [
+            "Qty 120 350 480 1200",
+            "CPU 12 45 230 1024",
+            "120 350 4800 1200",
+        ] {
+            assert!(kinds(s).is_empty(), "{s}: {:?}", kinds(s));
+        }
+    }
+
+    #[test]
+    fn matches_never_join_table_columns() {
+        let w = |t: &str, x: i32| TextWord {
+            text: t.into(),
+            rect: PxRect::new(x, 10, 30, 12),
+        };
+        // Three columns far apart: "555" | "123" | "4567" must not become one phone.
+        let row = vec![vec![w("555", 0), w("123", 200), w("4567", 400)]];
+        assert!(find_in_lines(&row).is_empty());
+        // The same words set close together are one number.
+        let close = vec![vec![w("555", 0), w("123", 36), w("4567", 72)]];
+        let f = find_in_lines(&close);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].rect, PxRect::new(0, 10, 102, 12));
+        // A password label and its value in separate form columns still pair up.
+        let form = vec![vec![w("Password:", 0), w("hunter22", 300)]];
+        let f = find_in_lines(&form);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].kind, SensitiveKind::Password);
+        assert_eq!(f[0].rect, PxRect::new(300, 10, 30, 12));
     }
 
     #[test]
