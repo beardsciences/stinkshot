@@ -303,14 +303,18 @@ impl Ctx {
                     None => break,
                 }
             }
+            // Each element is clipped to its (clipped) parent: children of a scrolled list or
+            // a clipped panel report rects that run past their parent, where something else
+            // is drawn.
+            let clipped = clip_to_ancestors(&chain.iter().map(|c| c.0).collect::<Vec<_>>());
             // Innermost first; when a parent has the same rect, the innermost label wins.
-            for (r, node) in chain.iter().rev() {
-                if let Some(c) = r.intersect(&window_rect)
+            for (c, (_, node)) in clipped.iter().zip(chain.iter()).rev() {
+                if let Some(c) = c
                     && c.w >= MIN_EDGE
                     && c.h >= MIN_EDGE
-                    && rects.last() != Some(&c)
+                    && rects.last() != Some(c)
                 {
-                    rects.push(c);
+                    rects.push(*c);
                     labels.push(tree.nodes[*node].label.clone());
                 }
             }
@@ -328,6 +332,24 @@ impl Ctx {
             labels,
         }
     }
+}
+
+/// Clip each rect of an outermost-first element chain to the clipped rect of its parent.
+/// `None` once a level no longer overlaps its parent (and for everything inside it).
+fn clip_to_ancestors(chain: &[PxRect]) -> Vec<Option<PxRect>> {
+    let mut acc: Option<PxRect> = None;
+    chain
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            acc = if i == 0 {
+                Some(*r)
+            } else {
+                acc.and_then(|a| r.intersect(&a))
+            };
+            acc
+        })
+        .collect()
 }
 
 fn worker(shared: SharedPair, ready: std::sync::mpsc::Sender<anyhow::Result<()>>) {
@@ -377,6 +399,23 @@ fn worker(shared: SharedPair, ready: std::sync::mpsc::Sender<anyhow::Result<()>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chain_is_clipped_to_each_ancestor() {
+        let window = PxRect::new(0, 0, 800, 600);
+        // A list viewport and an item scrolled half out of it.
+        let list = PxRect::new(100, 100, 300, 200);
+        let item = PxRect::new(100, 250, 300, 100);
+        let inner = PxRect::new(120, 260, 50, 80);
+        let c = clip_to_ancestors(&[window, list, item, inner]);
+        assert_eq!(c[0], Some(window));
+        assert_eq!(c[1], Some(list));
+        assert_eq!(c[2], Some(PxRect::new(100, 250, 300, 50)));
+        assert_eq!(c[3], Some(PxRect::new(120, 260, 50, 40)));
+        // A level outside its parent ends the chain.
+        let c = clip_to_ancestors(&[window, PxRect::new(900, 0, 10, 10), list]);
+        assert_eq!(c, vec![Some(window), None, None]);
+    }
 
     #[test]
     fn control_type_names() {

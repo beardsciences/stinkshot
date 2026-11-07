@@ -1,8 +1,61 @@
 //! Pure helpers for hover/snapping and small formatting jobs.
 
 use stinkshot_core::{PxPoint, PxRect};
+use stinkshot_platform::Hwnd;
+use stinkshot_platform::occlusion::{self, Layer};
+use stinkshot_platform::windows_enum::WinInfo;
 
 use crate::state::RegionPurpose;
+
+/// The window that is actually visible under the cursor in the frozen screen.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HoverTarget {
+    /// Full frame of the topmost window at the point.
+    pub frame: PxRect,
+    /// The part of that frame around the point no window above covers.
+    pub visible: Option<PxRect>,
+    /// Window to ask UI Automation about; None for this process's own windows.
+    pub uia: Option<Hwnd>,
+    /// Frames of the windows above it (they may cover parts of its elements).
+    pub occluders: Vec<PxRect>,
+}
+
+/// Topmost window at `p` over the full Z-ordered stack, with its occluders.
+pub fn hover_target(layers: &[Layer], p: PxPoint) -> Option<HoverTarget> {
+    let i = occlusion::top_layer_at(layers, p)?;
+    let l = layers[i];
+    let occluders = occlusion::occluders_above(layers, i);
+    Some(HoverTarget {
+        frame: l.rect,
+        visible: occlusion::visible_rect_around(l.rect, p, &occluders),
+        uia: (!l.own).then_some(l.hwnd),
+        occluders,
+    })
+}
+
+/// Occlusion stack from a target-window snapshot (fallback when no full stack was taken).
+pub fn layers_from_windows(windows: &[WinInfo]) -> Vec<Layer> {
+    windows
+        .iter()
+        .map(|w| Layer {
+            hwnd: w.hwnd,
+            rect: w.rect,
+            own: false,
+        })
+        .collect()
+}
+
+/// Whether a UIA result belongs to the window under the cursor: its outermost rect (the
+/// window frame) must essentially match `frame`.
+pub fn result_matches_window(result_top: Option<&PxRect>, frame: PxRect) -> bool {
+    let Some(top) = result_top else {
+        return false;
+    };
+    let grown = PxRect::new(frame.x - 3, frame.y - 3, frame.w + 6, frame.h + 6);
+    grown
+        .intersect(top)
+        .is_some_and(|i| i.area() * 10 >= top.area() * 9)
+}
 
 /// Choose the rectangle to highlight under the cursor.
 ///
@@ -147,6 +200,55 @@ mod tests {
                 Some((rects[*idx], level))
             );
         }
+    }
+
+    fn layer(hwnd: Hwnd, r: PxRect, own: bool) -> Layer {
+        Layer { hwnd, rect: r, own }
+    }
+
+    #[test]
+    fn hover_targets_the_topmost_window_and_clips_it() {
+        // An untitled popup menu (1) over a browser (2); our History window (3) elsewhere.
+        let layers = [
+            layer(1, PxRect::new(100, 100, 200, 300), false),
+            layer(3, PxRect::new(1000, 0, 400, 400), true),
+            layer(2, PxRect::new(0, 0, 1920, 1080), false),
+        ];
+        // Over the popup: the popup itself, not the browser behind it.
+        let t = hover_target(&layers, PxPoint { x: 150, y: 150 }).unwrap();
+        assert_eq!(t.uia, Some(1));
+        assert_eq!(t.visible, Some(PxRect::new(100, 100, 200, 300)));
+        // Over our own window: a window-level target, no UIA.
+        let t = hover_target(&layers, PxPoint { x: 1100, y: 100 }).unwrap();
+        assert_eq!(t.uia, None);
+        assert_eq!(t.frame, PxRect::new(1000, 0, 400, 400));
+        // Over the browser left of the popup: browser, clipped so it never covers the popup.
+        let p = PxPoint { x: 50, y: 500 };
+        let t = hover_target(&layers, p).unwrap();
+        assert_eq!(t.uia, Some(2));
+        let v = t.visible.unwrap();
+        assert!(v.contains(p));
+        for o in &t.occluders {
+            assert!(v.intersect(o).is_none());
+        }
+        assert!(hover_target(&layers, PxPoint { x: 5000, y: 5000 }).is_none());
+    }
+
+    #[test]
+    fn stale_results_from_another_window_are_rejected() {
+        let frame = PxRect::new(1920, 0, 1920, 2100);
+        assert!(result_matches_window(Some(&frame), frame));
+        // DWM frame vs UIA rect off by a pixel or two still matches.
+        assert!(result_matches_window(
+            Some(&PxRect::new(1919, 0, 1922, 2100)),
+            frame
+        ));
+        // The browser behind it (twice as wide) does not.
+        assert!(!result_matches_window(
+            Some(&PxRect::new(0, 0, 3840, 2100)),
+            frame
+        ));
+        assert!(!result_matches_window(None, frame));
     }
 
     #[test]

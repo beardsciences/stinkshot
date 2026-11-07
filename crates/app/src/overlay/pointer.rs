@@ -141,34 +141,34 @@ impl Overlay {
             x: local.0 + self.bounds.x,
             y: local.1 + self.bounds.y,
         };
-        let win = windows_enum::window_at(&self.windows, abs).cloned();
+        // Only what is visible at the point: the topmost window over the full Z-ordered
+        // stack (untitled popups and our own capturable windows included), with element
+        // rects clipped to the part of it no other window covers.
+        let target = hover::hover_target(&self.layers, abs);
         let (mon_local, _) = self.monitor_at(local);
         let mon_abs = hover::local_to_virtual(mon_local, self.bounds);
 
         let mut rects: Vec<PxRect> = Vec::new();
         let mut labels: Vec<stinkshot_platform::uia::ElementLabel> = Vec::new();
-        if let (Some(s), true) = (&self.snapper, shared.config.capture.snap_to_elements) {
+        let uia = target.as_ref().and_then(|t| t.uia);
+        if let (Some(s), true, Some(t)) = (
+            &self.snapper,
+            shared.config.capture.snap_to_elements,
+            target.as_ref().filter(|t| t.uia.is_some()),
+        ) {
             if self.snap_req != Some(abs) {
-                if let Some(w) = &win {
-                    s.request(w.hwnd, abs);
+                if let Some(h) = uia {
+                    s.request(h, abs);
                 }
                 self.snap_req = Some(abs);
             }
             if let Some(res) = s.latest() {
                 // Ignore results that belong to another window than the one under the cursor.
-                let in_window = match (&win, res.rects.last()) {
-                    (Some(w), Some(top)) => {
-                        let grown =
-                            PxRect::new(w.rect.x - 3, w.rect.y - 3, w.rect.w + 6, w.rect.h + 6);
-                        grown
-                            .intersect(top)
-                            .is_some_and(|i| i.area() * 10 >= top.area() * 9)
+                if hover::result_matches_window(res.rects.last(), t.frame) {
+                    for (i, r) in occlusion::clip_chain(&res.rects, abs, &t.occluders) {
+                        rects.push(r);
+                        labels.push(res.labels.get(i).cloned().unwrap_or_default());
                     }
-                    _ => false,
-                };
-                if in_window {
-                    rects = res.rects.clone();
-                    labels = res.labels.clone();
                 }
                 if res.point != abs {
                     ctx.request_repaint_after(Duration::from_millis(16));
@@ -193,7 +193,7 @@ impl Overlay {
             &rects,
             self.snap_level,
             abs,
-            win.map(|w| w.rect),
+            target.as_ref().and_then(|t| t.visible),
             Some(mon_abs),
         );
         self.hover = picked.and_then(|(r, lvl)| {

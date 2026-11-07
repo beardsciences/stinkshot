@@ -10,15 +10,17 @@ use windows::Win32::System::Threading::{
     QueryFullProcessImageNameW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect,
-    GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
-    IsWindowVisible, IsZoomed, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TRANSPARENT,
+    EnumWindows, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow, GetLayeredWindowAttributes,
+    GetWindowDisplayAffinity, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
+    GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
+    LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, WDA_NONE, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
 };
 use windows::core::{BOOL, PWSTR};
 
 use crate::Hwnd;
 use crate::monitors::rect_from_win;
+use crate::occlusion::Layer;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct WinInfo {
@@ -147,6 +149,96 @@ fn build(hwnd: HWND, cache: &mut HashMap<u32, String>) -> Option<WinInfo> {
     })
 }
 
+/// Click-through or invisible-overlay extended styles: such windows neither show up as
+/// targets nor cover anything for hit testing.
+fn is_overlay_style(ex: u32) -> bool {
+    let layered = ex & WS_EX_LAYERED.0 != 0;
+    // Click-through layered windows (game/GPU overlays, menu shadows, fading tooltips).
+    let click_through = ex & WS_EX_TRANSPARENT.0 != 0 && layered;
+    // Non-activating layered tool windows are GPU/game overlays (e.g. the NVIDIA overlay is a
+    // full-screen CEF widget with exactly these styles).
+    let overlay = ex & WS_EX_NOACTIVATE.0 != 0 && ex & WS_EX_TOOLWINDOW.0 != 0 && layered;
+    click_through || overlay
+}
+
+fn ex_style(hwnd: HWND) -> u32 {
+    // SAFETY: trivial style query.
+    unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 }
+}
+
+/// A layered window set fully transparent with `SetLayeredWindowAttributes(LWA_ALPHA, 0)`.
+fn is_fully_transparent(hwnd: HWND, ex: u32) -> bool {
+    if ex & WS_EX_LAYERED.0 == 0 {
+        return false;
+    }
+    let mut alpha = 255u8;
+    let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
+    // SAFETY: out pointers are live locals; fails for UpdateLayeredWindow windows (ignored).
+    let ok = unsafe { GetLayeredWindowAttributes(hwnd, None, Some(&mut alpha), Some(&mut flags)) };
+    ok.is_ok() && flags.0 & LWA_ALPHA.0 != 0 && alpha == 0
+}
+
+/// Every visible top-level window that covers something on screen, in Z-order (topmost
+/// first), for occlusion tests: unlike `visible_windows`, untitled windows (menus, popups,
+/// tool windows, Electron surfaces) are included, and so are this process's own windows
+/// that appear in screenshots (History, Settings; marked `own`). Skipped: hidden,
+/// minimized and cloaked windows, the desktop (Progman/WorkerW), click-through and GPU
+/// overlay windows, fully transparent layered windows, and own windows excluded from
+/// capture (overlay, toasts, HUDs, pins), which are not in a frozen screen image.
+pub fn layers() -> Vec<Layer> {
+    let mut handles: Vec<HWND> = Vec::new();
+    // SAFETY: the callback only touches the Vec for the duration of the call.
+    if let Err(e) = unsafe {
+        EnumWindows(
+            Some(enum_proc),
+            LPARAM(&mut handles as *mut Vec<HWND> as isize),
+        )
+    } {
+        log::warn!("EnumWindows failed: {e}");
+        return Vec::new();
+    }
+    // SAFETY: trivial query.
+    let own_pid = unsafe { GetCurrentProcessId() };
+    let mut out = Vec::new();
+    for hwnd in handles {
+        // SAFETY: trivial queries on handles returned by EnumWindows.
+        if !unsafe { IsWindowVisible(hwnd) }.as_bool() || unsafe { IsIconic(hwnd) }.as_bool() {
+            continue;
+        }
+        if is_cloaked(hwnd) {
+            continue;
+        }
+        let own = window_pid(hwnd) == own_pid;
+        if own {
+            // Never read an own window's title here (can block); affinity is a plain query.
+            let mut aff = 0u32;
+            // SAFETY: out pointer is a live local.
+            let ok = unsafe { GetWindowDisplayAffinity(hwnd, &mut aff) }.is_ok();
+            if !ok || aff != WDA_NONE.0 {
+                continue;
+            }
+        } else if matches!(class_name(hwnd).as_str(), "Progman" | "WorkerW") {
+            continue;
+        }
+        let ex = ex_style(hwnd);
+        if is_overlay_style(ex) || is_fully_transparent(hwnd, ex) {
+            continue;
+        }
+        let Some(rect) = frame_rect(hwnd) else {
+            continue;
+        };
+        if rect.w <= 0 || rect.h <= 0 {
+            continue;
+        }
+        out.push(Layer {
+            hwnd: hwnd.0 as isize,
+            rect,
+            own,
+        });
+    }
+    out
+}
+
 unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     // SAFETY: lparam is the address of the Vec in `visible_windows`.
     let out = unsafe { &mut *(lparam.0 as *mut Vec<HWND>) };
@@ -206,15 +298,8 @@ pub fn visible_windows() -> Vec<WinInfo> {
             if info.title.is_empty() {
                 continue;
             }
-            // Click-through layered windows (game/GPU overlays) are not real targets either.
-            // SAFETY: trivial style query.
-            let ex = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
-            let layered = ex & WS_EX_LAYERED.0 != 0;
-            let click_through = ex & WS_EX_TRANSPARENT.0 != 0 && layered;
-            // Non-activating layered tool windows are GPU/game overlays (e.g. the NVIDIA overlay
-            // is a full-screen CEF widget with exactly these styles).
-            let overlay = ex & WS_EX_NOACTIVATE.0 != 0 && ex & WS_EX_TOOLWINDOW.0 != 0 && layered;
-            if click_through || overlay {
+            // Click-through layered windows and GPU/game overlays are not real targets either.
+            if is_overlay_style(ex_style(hwnd)) {
                 continue;
             }
         }
@@ -282,6 +367,33 @@ mod tests {
             Some(2)
         );
         assert!(window_at(&ws, PxPoint { x: 600, y: 600 }).is_none());
+    }
+
+    /// Prints the live window stack for diagnosing snapping (needs a desktop session):
+    /// `cargo test -p stinkshot-platform dump_layers -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn dump_layers() {
+        let targets = visible_windows();
+        for l in layers() {
+            let h = to_hwnd(l.hwnd);
+            let title = if l.own {
+                "<own>".to_string()
+            } else {
+                window_title(h)
+            };
+            let target = targets.iter().any(|t| t.hwnd == l.hwnd);
+            println!(
+                "{:>10x} {:<5} {:<6} ex={:08x} {:?} {:?} {:?}",
+                l.hwnd,
+                if target { "TGT" } else { "" },
+                if l.own { "own" } else { "" },
+                ex_style(h),
+                l.rect,
+                class_name(h),
+                title
+            );
+        }
     }
 
     #[test]

@@ -12,6 +12,7 @@ pub mod clipboard;
 pub mod dpi;
 pub mod input;
 pub mod monitors;
+pub mod occlusion;
 pub mod ocr;
 pub mod system;
 pub mod uia;

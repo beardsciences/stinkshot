@@ -161,6 +161,10 @@ pub struct OverlayRequest {
     pub frozen: Frozen,
     /// Z-ordered window snapshot taken before the overlay appeared.
     pub windows: Vec<WinInfo>,
+    /// Every visible top-level window in Z-order (untitled and own capturable ones too),
+    /// for occlusion-aware snapping. Empty for Annotate mode; the overlay then falls back
+    /// to `windows`.
+    pub layers: Vec<stinkshot_platform::occlusion::Layer>,
     pub last_region: Option<PxRect>,
     /// Short inline hint for the hint bar until a selection exists (e.g. "No Region
     /// Remembered Yet"), instead of a toast over the frozen screen.

@@ -856,10 +856,17 @@ impl Shell {
         frozen: Frozen,
         windows: Vec<stinkshot_platform::windows_enum::WinInfo>,
     ) {
+        // Occlusion stack for hover snapping, taken right after the freeze (same frame).
+        let layers = if matches!(mode, OverlayMode::Annotate { .. }) {
+            Vec::new()
+        } else {
+            windows_enum::layers()
+        };
         let req = OverlayRequest {
             mode,
             frozen,
             windows,
+            layers,
             last_region: self.shared.config.capture.last_region,
             notice: self.next_overlay_notice.take(),
             from_tray_click: std::mem::take(&mut self.next_overlay_tray),

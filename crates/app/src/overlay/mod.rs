@@ -45,6 +45,7 @@ use stinkshot_core::annotate::{Doc, Shape, ShapeId, ShapeKind, Style};
 use stinkshot_core::config::{parse_hex_color, to_hex_color};
 use stinkshot_core::fonts::Fonts;
 use stinkshot_core::{PtF, PxPoint, PxRect, RectF, Rgba};
+use stinkshot_platform::occlusion::{self, Layer};
 use stinkshot_platform::uia::ElementSnapper;
 use stinkshot_platform::windows_enum::{self, WinInfo};
 use stinkshot_platform::{Hwnd, clipboard, monitors, window_util};
@@ -170,6 +171,8 @@ pub struct Overlay {
     frozen_image: Rgba,
     cursor_local: (i32, i32),
     windows: Vec<WinInfo>,
+    /// Z-ordered occlusion stack (topmost first), see `OverlayRequest::layers`.
+    layers: Vec<Layer>,
     last_region: Option<PxRect>,
     fonts: Arc<Fonts>,
     /// Monitor rects in overlay-local px with their DPI scale.
@@ -320,6 +323,7 @@ impl Overlay {
             mode,
             frozen,
             windows,
+            layers,
             last_region,
             notice,
             from_tray_click,
@@ -350,6 +354,11 @@ impl Overlay {
             bounds,
             frozen_image: frozen.image,
             cursor_local,
+            layers: if layers.is_empty() {
+                hover::layers_from_windows(&windows)
+            } else {
+                layers
+            },
             windows,
             last_region,
             fonts: shared.fonts.clone(),
@@ -604,7 +613,14 @@ impl Overlay {
             x: v.x + v.w / 2,
             y: v.y + v.h / 2,
         };
-        windows_enum::window_at(&self.windows, c)
+        // What is visible at the centre: our own History/Settings window is not a source,
+        // an untitled popup reports the window it belongs over.
+        let top = occlusion::top_layer_at(&self.layers, c).map(|i| self.layers[i]);
+        if top.is_some_and(|l| l.own) {
+            return SourceInfo::default();
+        }
+        top.and_then(|l| self.windows.iter().find(|w| w.hwnd == l.hwnd))
+            .or_else(|| windows_enum::window_at(&self.windows, c))
             .map(|w| SourceInfo {
                 app: w.process.clone(),
                 window_title: w.title.clone(),
