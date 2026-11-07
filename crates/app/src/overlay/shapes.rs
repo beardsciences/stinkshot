@@ -1020,7 +1020,13 @@ pub fn doc_without(doc: &Doc, skip: &[ShapeId]) -> Doc {
 
 /// Translate every shape (selection origin changed while annotations exist).
 pub fn translate_all(doc: &mut Doc, dx: f32, dy: f32) {
-    for s in &mut doc.shapes {
+    translate_shapes(&mut doc.shapes, dx, dy);
+}
+
+/// Move shapes with the whole picture (the region or crop origin moved): the magnifier's
+/// source spot moves too. Used for the document, its history and the shape clipboard.
+pub fn translate_shapes(shapes: &mut [Shape], dx: f32, dy: f32) {
+    for s in shapes {
         translate(&mut s.kind, dx, dy);
         if let ShapeKind::Magnifier { source, .. } = &mut s.kind {
             // The whole picture moves, so the magnified spot moves with it.
@@ -1904,6 +1910,13 @@ mod tests {
         assert!(matches!(
             d.shapes[0].kind,
             ShapeKind::Magnifier { source, dest, .. } if source.x == 5.0 && dest.y == 53.0
+        ));
+        // The shape clipboard (a plain list) moves the same way.
+        let mut clip = d.shapes.clone();
+        translate_shapes(&mut clip, 5.0, -3.0);
+        assert!(matches!(
+            clip[0].kind,
+            ShapeKind::Magnifier { source, dest, .. } if source.x == 10.0 && dest.y == 50.0
         ));
     }
 }

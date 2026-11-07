@@ -190,6 +190,73 @@ impl Caret {
     }
 }
 
+/// The text as shown while an IME composes: the preedit replaces the selection (as the
+/// commit will). Returns the shown text and the preedit's byte range in it.
+pub fn with_preedit(t: &str, c: Caret, pre: &str) -> (String, Range<usize>) {
+    let r = c.range();
+    let mut s = String::with_capacity(t.len() + pre.len());
+    s.push_str(&t[..r.start]);
+    s.push_str(pre);
+    s.push_str(&t[r.end..]);
+    (s, r.start..r.start + pre.len())
+}
+
+/// What kind of change an edit step was, for undo grouping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Change {
+    /// Typed characters: a run of them undoes in one step.
+    Typed,
+    /// Anything else (delete, paste, cut, new line): one step each.
+    Other,
+}
+
+/// Undo / redo while typing on the image (Ctrl+Z / Ctrl+Y), separate from the editor's
+/// document history, which records the whole edit as one step when typing ends.
+#[derive(Clone, Debug, Default)]
+pub struct TextHistory {
+    undo: Vec<(String, Caret)>,
+    redo: Vec<(String, Caret)>,
+    /// The last recorded step was typing, so more typing joins it.
+    typing: bool,
+}
+
+impl TextHistory {
+    const MAX: usize = 200;
+
+    /// Record the state before a change (call only when the text did change).
+    pub fn record(&mut self, before: &str, caret: Caret, kind: Change) {
+        let join = kind == Change::Typed && self.typing;
+        self.typing = kind == Change::Typed;
+        self.redo.clear();
+        if join {
+            return;
+        }
+        if self.undo.len() >= Self::MAX {
+            self.undo.remove(0);
+        }
+        self.undo.push((before.to_string(), caret));
+    }
+
+    /// The caret moved on its own: the next typing starts a new step.
+    pub fn break_run(&mut self) {
+        self.typing = false;
+    }
+
+    pub fn undo(&mut self, cur: &str, caret: Caret) -> Option<(String, Caret)> {
+        let prev = self.undo.pop()?;
+        self.redo.push((cur.to_string(), caret));
+        self.typing = false;
+        Some(prev)
+    }
+
+    pub fn redo(&mut self, cur: &str, caret: Caret) -> Option<(String, Caret)> {
+        let next = self.redo.pop()?;
+        self.undo.push((cur.to_string(), caret));
+        self.typing = false;
+        Some(next)
+    }
+}
+
 /// Which laid-out line holds offset `i`: the last line whose range starts at or before it
 /// (a wrap break's space belongs to the line before it).
 pub fn line_of(lines: &[Range<usize>], i: usize) -> usize {
@@ -287,6 +354,50 @@ mod tests {
         assert_eq!(&t[word_at(t, 15)], ", ");
         assert_eq!(word_at("", 0), 0..0);
         assert_eq!(&"ab\ncd"[word_at("ab\ncd", 4)], "cd");
+    }
+
+    #[test]
+    fn typing_undoes_as_one_run_and_deletes_one_by_one() {
+        let mut h = TextHistory::default();
+        let mut t = String::new();
+        let mut c = Caret::at(0);
+        for ch in ["a", "b", "c"] {
+            h.record(&t, c, Change::Typed);
+            c.insert(&mut t, ch);
+        }
+        h.break_run();
+        h.record(&t, c, Change::Typed);
+        c.insert(&mut t, "d");
+        h.record(&t, c, Change::Other);
+        c.backspace(&mut t, true);
+        assert_eq!(t, "");
+        let (t1, c1) = h.undo(&t, c).unwrap();
+        assert_eq!((t1.as_str(), c1), ("abcd", Caret::at(4)));
+        let (t2, c2) = h.undo(&t1, c1).unwrap();
+        assert_eq!((t2.as_str(), c2), ("abc", Caret::at(3)));
+        let (t3, c3) = h.undo(&t2, c2).unwrap();
+        assert_eq!(t3, "");
+        assert!(h.undo(&t3, c3).is_none());
+        let (r1, rc1) = h.redo(&t3, c3).unwrap();
+        assert_eq!(r1, "abc");
+        let (r2, _) = h.redo(&r1, rc1).unwrap();
+        assert_eq!(r2, "abcd");
+        // A new change drops the redo steps.
+        h.record(&r2, Caret::at(4), Change::Other);
+        assert!(h.redo("x", Caret::at(0)).is_none());
+    }
+
+    #[test]
+    fn preedit_shows_in_place_of_the_selection() {
+        let c = Caret {
+            cursor: 6,
+            anchor: 3,
+        };
+        let (s, r) = with_preedit("abcdefg", c, "\u{65e5}\u{672c}");
+        assert_eq!(s, "abc\u{65e5}\u{672c}g");
+        assert_eq!(&s[r], "\u{65e5}\u{672c}");
+        let (s, r) = with_preedit("ab", Caret::at(2), "");
+        assert_eq!((s.as_str(), r), ("ab", 2..2));
     }
 
     #[test]

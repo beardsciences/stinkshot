@@ -345,6 +345,8 @@ impl Overlay {
             blink_from: Instant::now(),
             patch: None,
             selecting: false,
+            history: Default::default(),
+            preedit: String::new(),
         });
     }
 
@@ -353,7 +355,12 @@ impl Overlay {
         let Some(mut e) = self.edit.take() else {
             return;
         };
-        self.settled_text = e.patch.take();
+        // An unfinished IME composition is dropped (the shape showed it, the buffer did not).
+        self.settled_text = if e.preedit.is_empty() {
+            e.patch.take()
+        } else {
+            None
+        };
         let empty = e.buffer.trim().is_empty();
         if self.doc.get(e.id).is_some() {
             if empty {
@@ -387,6 +394,10 @@ impl Overlay {
     /// Byte offset in the text being typed nearest to image point `p`.
     pub(super) fn caret_at(&self, p: PtF) -> Option<usize> {
         let e = self.edit.as_ref()?;
+        if !e.preedit.is_empty() {
+            // The shape shows the IME composition, which is not in the buffer.
+            return None;
+        }
         let shape = self.doc.get(e.id)?;
         let (size, bold, lines) = stinkshot_core::annotate::text_layout(&self.fonts, &shape.kind)?;
         let first = lines.first()?;
@@ -652,6 +663,8 @@ impl Overlay {
                 UiAction::Shape(o) => self.apply_shape_opt(o),
                 UiAction::ZoomFit => self.set_view(View::IDENTITY),
                 UiAction::Ratio(r) => {
+                    // The size chip ends typing (a resize may move the region origin).
+                    self.commit_text();
                     self.aspect = r;
                     if let (Some(rr), Some(sel)) = (r, self.sel)
                         && self.sel_editable()
@@ -661,6 +674,8 @@ impl Overlay {
                     }
                 }
                 UiAction::OpenExact => {
+                    // The Exact field takes the keyboard: typing on the image ends.
+                    self.commit_text();
                     if let Some(sel) = self.sel {
                         self.exact_text = format!("{} x {}", sel.w, sel.h);
                     }
@@ -668,6 +683,7 @@ impl Overlay {
                     self.exact_just_opened = true;
                 }
                 UiAction::ExactSize(w, h) => {
+                    self.commit_text();
                     if let Some(sel) = self.sel {
                         let new = selection::apply_exact_size(sel, w, h, self.sel_bounds());
                         self.set_sel(new);

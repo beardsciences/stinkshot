@@ -113,10 +113,17 @@ pub fn sheet(select_only: bool) -> Sheet {
     let select = vec![
         ("Drag".to_string(), "Select a Region"),
         ("Click".to_string(), "Window or Element"),
-        ("Wheel".to_string(), "Parent or Child Element"),
+        (
+            "Wheel".to_string(),
+            "Parent or Child Element, Scroll When Zoomed",
+        ),
+        ("Shift+Wheel".to_string(), "Scroll Sideways When Zoomed"),
         ("Enter".to_string(), "Select the Highlight"),
         ("Shift+Drag".to_string(), "Square or Preset Ratio"),
-        ("Space+Drag".to_string(), "Move the Selection"),
+        (
+            "Space+Drag".to_string(),
+            "Pan (Editor or Zoomed), Otherwise Move the Selection",
+        ),
         ("Arrows".to_string(), "Nudge 1 px, Shift 10 px"),
         ("Ctrl+Arrows".to_string(), "Resize the Selection"),
         (
@@ -144,11 +151,14 @@ pub fn sheet(select_only: bool) -> Sheet {
         ("1-8".to_string(), "Palette Color"),
         (EYEDROPPER.label.to_string(), "Pick Color from Image"),
         ("[  ]".to_string(), "Thinner or Thicker"),
-        (UNDO.label.to_string(), "Undo"),
-        (REDO.label.to_string(), "Redo"),
+        (UNDO.label.to_string(), "Undo (Typing Too)"),
+        (REDO.label.to_string(), "Redo (Typing Too)"),
         (format!("Ctrl+Shift+{}", UNDO.key.name()), "Redo"),
         ("Shift+Drag".to_string(), "Straight Line, Square or Circle"),
-        ("Alt+Drag".to_string(), "Move Without Snapping"),
+        (
+            "Alt+Drag".to_string(),
+            "Draw, Move or Resize Without Snapping",
+        ),
         ("Del or Backspace".to_string(), "Delete the Selected Shapes"),
         ("Double-Click".to_string(), "Edit Text"),
         (BOLD.label.to_string(), "Bold Text"),
@@ -170,7 +180,6 @@ pub fn sheet(select_only: bool) -> Sheet {
         ("Ctrl+=  Ctrl+-".to_string(), "Zoom In or Out"),
         (ZOOM_FIT.label.to_string(), "Fit"),
         (ZOOM_ACTUAL.label.to_string(), "Actual Size (100%)"),
-        ("Space+Drag".to_string(), "Pan When Zoomed"),
         ("Middle-Drag".to_string(), "Pan"),
     ];
     let finish = vec![
@@ -333,6 +342,8 @@ mod tests {
             "Middle-Drag",
             "Shift+Click",
             "Alt+Drag",
+            "Shift+Wheel",
+            "Space+Drag",
         ] {
             assert!(has(k), "{k} missing from the cheat sheet");
         }
@@ -341,6 +352,28 @@ mod tests {
                 .iter()
                 .any(|(k, v)| k == "Shift+Drag" && v.contains("Square"))
         );
+    }
+
+    #[test]
+    fn view_and_snapping_rows_match_the_behaviour() {
+        let s = sheet(false);
+        let rows: Vec<&(String, &str)> = s.iter().flat_map(|(_, r)| r.iter()).collect();
+        let what = |k: &str| -> Vec<&str> {
+            rows.iter()
+                .filter(|(key, _)| key == k)
+                .map(|(_, v)| *v)
+                .collect()
+        };
+        // One Space+Drag row: it pans in the editor or when zoomed.
+        let space = what("Space+Drag");
+        assert_eq!(space.len(), 1, "{space:?}");
+        assert!(space[0].contains("Pan") && space[0].contains("Move the Selection"));
+        assert!(what("Wheel")[0].contains("Scroll When Zoomed"));
+        let alt = what("Alt+Drag");
+        assert!(alt[0].contains("Draw") && alt[0].contains("Resize"));
+        // Undo and redo work while typing on the image too.
+        assert!(what(UNDO.label)[0].contains("Typing"));
+        assert!(what(REDO.label)[0].contains("Typing"));
     }
 
     #[test]

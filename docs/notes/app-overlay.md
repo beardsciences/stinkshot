@@ -291,6 +291,22 @@ selects, double click selects a word. Caret positions come from `annotate::text_
 same layout the renderer draws, so callout wrapping lines up too. After Esc the rendered patch
 stays until the cached render includes the text, so nothing flashes.
 
+Review fixes (Nov 7 2026):
+
+- IME: while typing, the overlay sets `PlatformOutput.ime` every frame (caret rect from
+  `caret_pos` through `img_to_pt`; `Overlay::ime_output`), because egui-winit only enables
+  the OS IME when an `IMEOutput` is present. `Event::Ime(Commit)` is typed like
+  `Event::Text`; `Preedit` is kept in `EditState::preedit` and shown in place of the
+  selection, underlined (`textedit::with_preedit`), never in the buffer. While composing,
+  keys, clipboard events, Esc and Ctrl+Enter go to the IME; finishing drops an unfinished
+  composition. Caveat: the render fonts (Segoe UI Variable / Segoe UI / Arial) have no CJK
+  glyphs, so composed CJK text renders as missing-glyph boxes until a fallback font exists.
+- Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z undo the typing itself (`textedit::TextHistory`: a run of
+  typed characters is one step, a caret move ends the run, delete / paste / cut / Enter are
+  one step each). The editor's history still records the whole edit as one step at the end.
+- The size chip (ratio presets, Exact) ends typing first, and while the Exact field is open
+  `text_keys` does not run, so keys typed there no longer land in the text shape.
+
 A context bar floats above the text (below when there is no room): A− / size / A+ (steps
 through 10..128 px), **B** (bold, also Ctrl+B) and **Background Pill**. With the pill on, the
 pill takes the color and the text gets black or white ink by luminance (`shapes::contrast_ink`,
@@ -327,13 +343,18 @@ halo instead of a black shadow (core). Bold, pill and size are sticky for the ne
 
 - The "Annotations Keep This Region" lock is gone. With the Select tool the region's handles
   work at any time; shapes keep their place on the picture (the doc and the undo history are
-  re-based when the region's origin moves; magnifier sources move with them now). A new region
+  re-based when the region's origin moves; magnifier sources move with them now). The re-base
+  (`Overlay::rebase`) also covers the shape clipboard (Ctrl+C copies paste back onto the
+  same spot of the picture) and the pre-edit document of text being typed. A new region
   can be dragged outside the old one even with shapes; shapes outside it are kept but clipped.
 - Capture mode: expanding pulls more pixels from the frozen screen (the base is re-cropped).
 - Annotate mode (window capture, History Edit): the whole picture stays visible, the part
   outside the crop dimmed like the screen; the selection handles crop inward
   (`Overlay::crop`, image px; `set_sel` converts canvas px to a crop inside the image, so it
   can never grow past the picture). Finishing outputs the cropped base and the re-based doc.
+  Arrow keys change the crop itself in whole image px (`set_crop`; Ctrl+arrows resize), so a
+  nudge is 1 (Shift: 10) image px and moving never changes the crop size. Moving the region
+  by drag does not exist in the editor (Space+drag pans there).
 - Find Sensitive Info findings are dropped whenever the base changes (unchanged behaviour,
   now also on an editor crop).
 

@@ -1,7 +1,9 @@
 //! Per-frame driver: input -> state, render cache upkeep, canvas painting and chrome, and
 //! typing straight onto the image (live rendered text with a caret and selection).
 
-use egui::{Id, Modifiers};
+use egui::{Id, ImeEvent, Modifiers};
+
+use super::textedit::Change;
 use stinkshot_core::annotate;
 
 use super::paint::{
@@ -52,7 +54,10 @@ impl Overlay {
             let keys = Self::read_keys(ctx);
             // Typing owns the keyboard; Esc that ends typing must not also deselect.
             let was_editing = self.edit.is_some();
-            self.text_keys(ctx);
+            // The Exact size field owns the keyboard while it is open.
+            if !self.exact_open {
+                self.text_keys(ctx);
+            }
             if !was_editing {
                 self.handle_keys(ctx, shared, &keys, &inp);
             }
@@ -71,6 +76,7 @@ impl Overlay {
             self.read_input(ctx, ppp)
         };
         self.update_text_patch(ctx);
+        self.ime_output(ctx, ppp);
         self.paint_canvas(ctx, shared, &inp, ppp);
         let mut actions = Vec::new();
         self.paint_ui(ctx, shared, &inp, ppp, &mut actions);
@@ -220,15 +226,18 @@ impl Overlay {
         }
     }
 
-    /// Keyboard while typing on the image: characters, caret movement and selection,
-    /// clipboard, Enter for a new line, Esc or Ctrl+Enter to finish, Ctrl+B for bold.
+    /// Keyboard while typing on the image: characters (IME compositions too), caret movement
+    /// and selection, clipboard, Ctrl+Z / Ctrl+Y for the typing itself, Enter for a new line,
+    /// Esc or Ctrl+Enter to finish, Ctrl+B for bold.
     fn text_keys(&mut self, ctx: &Context) {
-        if self.edit.is_none() {
+        let Some(composing) = self.edit.as_ref().map(|e| !e.preedit.is_empty()) else {
             return;
-        }
+        };
         let (done, events) = ctx.input_mut(|i| {
-            let done = i.consume_key(Modifiers::NONE, Key::Escape)
-                || i.consume_key(Modifiers::COMMAND, Key::Enter);
+            // While an IME composes, Esc and Enter belong to it.
+            let done = !composing
+                && (i.consume_key(Modifiers::NONE, Key::Escape)
+                    || i.consume_key(Modifiers::COMMAND, Key::Enter));
             (done, i.events.clone())
         });
         if done {
@@ -241,18 +250,25 @@ impl Overlay {
         let mut line_edge: Option<(bool, bool)> = None;
         if let Some(e) = self.edit.as_mut() {
             for ev in events {
+                let before = (e.buffer.clone(), e.caret, e.preedit.clone());
+                let mut kind = Change::Other;
                 match ev {
-                    Event::Text(t) => {
+                    Event::Text(t) | Event::Ime(ImeEvent::Commit(t)) => {
                         let t: String = t.chars().filter(|c| !c.is_control()).collect();
+                        e.preedit.clear();
                         if !t.is_empty() {
                             e.caret.insert(&mut e.buffer, &t);
-                            changed = true;
                         }
+                        kind = Change::Typed;
                     }
+                    Event::Ime(ImeEvent::Preedit { text, .. }) => {
+                        e.preedit = text.chars().filter(|c| !c.is_control()).collect();
+                    }
+                    // Keys and clipboard go to the IME while it composes.
+                    _ if !e.preedit.is_empty() => {}
                     Event::Paste(t) => {
                         let t = t.replace("\r\n", "\n");
                         e.caret.insert(&mut e.buffer, &t);
-                        changed = true;
                     }
                     Event::Copy | Event::Cut => {
                         let sel = e.caret.selected(&e.buffer).to_string();
@@ -262,7 +278,6 @@ impl Overlay {
                             }
                             if matches!(ev, Event::Cut) {
                                 e.caret.insert(&mut e.buffer, "");
-                                changed = true;
                             }
                         }
                     }
@@ -274,19 +289,23 @@ impl Overlay {
                     } => {
                         let word = modifiers.command;
                         let ext = modifiers.shift;
+                        let undo = |e: &mut EditState, redo: bool| {
+                            let step = if redo {
+                                e.history.redo(&e.buffer, e.caret)
+                            } else {
+                                e.history.undo(&e.buffer, e.caret)
+                            };
+                            if let Some((t, c)) = step {
+                                e.buffer = t;
+                                e.caret = c;
+                            }
+                        };
                         match key {
                             Key::Enter if !modifiers.command => {
                                 e.caret.insert(&mut e.buffer, "\n");
-                                changed = true;
                             }
-                            Key::Backspace => {
-                                e.caret.backspace(&mut e.buffer, word);
-                                changed = true;
-                            }
-                            Key::Delete => {
-                                e.caret.delete(&mut e.buffer, word);
-                                changed = true;
-                            }
+                            Key::Backspace => e.caret.backspace(&mut e.buffer, word),
+                            Key::Delete => e.caret.delete(&mut e.buffer, word),
                             Key::ArrowLeft => e.caret.left(&e.buffer, word, ext),
                             Key::ArrowRight => e.caret.right(&e.buffer, word, ext),
                             Key::ArrowUp => vertical = Some(-1),
@@ -295,39 +314,112 @@ impl Overlay {
                             Key::End => line_edge = Some((true, ext)),
                             Key::A if modifiers.command => e.caret.select_all(&e.buffer),
                             Key::B if modifiers.command => bold = true,
+                            Key::Z if modifiers.command => undo(e, modifiers.shift),
+                            Key::Y if modifiers.command => undo(e, true),
                             _ => {}
                         }
                         if modifiers.shift && !matches!(key, Key::Enter) {
                             vertical = vertical.map(|v| v * 2);
                         }
+                        if matches!(key, Key::Z | Key::Y) && modifiers.command {
+                            // History steps are not recorded as new changes.
+                            changed |= e.buffer != before.0;
+                            continue;
+                        }
                     }
                     _ => {}
                 }
+                if e.buffer != before.0 {
+                    e.history.record(&before.0, before.1, kind);
+                    changed = true;
+                } else if e.caret != before.1 {
+                    e.history.break_run();
+                }
+                changed |= e.preedit != before.2;
             }
             e.caret.clamp(&e.buffer);
             e.blink_from = Instant::now();
             if changed {
-                let (id, text) = (e.id, e.buffer.clone());
-                if let Some(s) = self.doc.get_mut(id) {
+                // The shape shows the buffer, with any IME composition in place of the
+                // selection; the buffer alone is what a commit keeps.
+                let text = if e.preedit.is_empty() {
+                    e.buffer.clone()
+                } else {
+                    textedit::with_preedit(&e.buffer, e.caret, &e.preedit).0
+                };
+                if let Some(s) = self.doc.get_mut(e.id) {
                     shapes::set_text(&mut s.kind, &text);
                 }
             }
         }
-        if let Some(v) = vertical {
-            self.caret_vertical(v.signum(), v.abs() > 1);
-        }
-        if let Some((end, ext)) = line_edge {
-            self.caret_line_edge(end, ext);
+        let composing = self.edit.as_ref().is_some_and(|e| !e.preedit.is_empty());
+        if !composing {
+            if let Some(v) = vertical {
+                self.caret_vertical(v.signum(), v.abs() > 1);
+            }
+            if let Some((end, ext)) = line_edge {
+                self.caret_line_edge(end, ext);
+            }
         }
         if bold {
             self.toggle_bold();
         }
     }
 
-    /// Caret (x, line top, line height) in image px for byte offset `i`.
+    /// Tell the OS where the caret is so an IME can compose (Chinese, Japanese, Korean and
+    /// more): without an `IMEOutput` egui-winit keeps the IME disabled.
+    fn ime_output(&self, ctx: &Context, ppp: f32) {
+        if self.edit.is_none() || self.exact_open {
+            return;
+        }
+        let Some(m) = self.img_to_pt(ppp) else { return };
+        let Some((cx, top, lh)) = self.shown_caret().and_then(|i| self.caret_pos(i)) else {
+            return;
+        };
+        let cursor_rect = Rect::from_min_max(m.p(PtF::new(cx, top)), m.p(PtF::new(cx, top + lh)))
+            .expand2(Vec2::new(1.0, 0.0));
+        let rect = self
+            .edit
+            .as_ref()
+            .and_then(|e| e.patch.as_ref())
+            .filter(|p| p.tex.is_some())
+            .map(|p| {
+                m.r(RectF::new(
+                    p.rect.x as f32,
+                    p.rect.y as f32,
+                    p.rect.w as f32,
+                    p.rect.h as f32,
+                ))
+            })
+            .unwrap_or(cursor_rect)
+            .union(cursor_rect);
+        ctx.output_mut(|o| {
+            o.ime = Some(egui::output::IMEOutput {
+                purpose: egui::IMEPurpose::Normal,
+                rect,
+                cursor_rect,
+                should_interrupt_composition: false,
+            });
+        });
+    }
+
+    /// Byte offset in the shape's shown text where the caret is drawn: after the IME
+    /// composition while one is in progress.
+    fn shown_caret(&self) -> Option<usize> {
+        let e = self.edit.as_ref()?;
+        Some(if e.preedit.is_empty() {
+            e.caret.cursor
+        } else {
+            e.caret.range().start + e.preedit.len()
+        })
+    }
+
+    /// Caret (x, line top, line height) in image px for byte offset `i` of the shape's
+    /// shown text (the buffer, plus any IME composition).
     fn caret_pos(&self, i: usize) -> Option<(f32, f32, f32)> {
         let e = self.edit.as_ref()?;
         let shape = self.doc.get(e.id)?;
+        let text = shapes::text_of(&shape.kind)?;
         let (size, bold, lines) = annotate::text_layout(&self.fonts, &shape.kind)?;
         let ranges: Vec<std::ops::Range<usize>> = lines.iter().map(|l| l.range.clone()).collect();
         let li = textedit::line_of(&ranges, i);
@@ -336,7 +428,7 @@ impl Overlay {
         let x = line.origin.x
             + self
                 .fonts
-                .line_width(&e.buffer[line.range.start..end], size, bold);
+                .line_width(text.get(line.range.start..end)?, size, bold);
         Some((x, line.origin.y, size * stinkshot_core::fonts::LINE_HEIGHT))
     }
 
@@ -390,8 +482,16 @@ impl Overlay {
             return;
         };
         let lh = size * stinkshot_core::fonts::LINE_HEIGHT;
-        // Selection: one band per line.
-        let sel = e.caret.range();
+        let text = shapes::text_of(&shape.kind).unwrap_or("");
+        // Selection: one band per line. While an IME composes, its text replaces the
+        // selection and is underlined instead.
+        let composing = !e.preedit.is_empty();
+        let sel = if composing {
+            let a = e.caret.range().start;
+            a..a + e.preedit.len()
+        } else {
+            e.caret.range()
+        };
         if !sel.is_empty() {
             for l in &lines {
                 let a = sel.start.max(l.range.start);
@@ -401,14 +501,20 @@ impl Overlay {
                 if a > b || (a == b && !crosses) {
                     continue;
                 }
-                let x0 = l.origin.x
-                    + self
-                        .fonts
-                        .line_width(&e.buffer[l.range.start..a], size, bold);
-                let mut x1 = l.origin.x
-                    + self
-                        .fonts
-                        .line_width(&e.buffer[l.range.start..b], size, bold);
+                let (Some(ta), Some(tb)) = (text.get(l.range.start..a), text.get(l.range.start..b))
+                else {
+                    continue;
+                };
+                let x0 = l.origin.x + self.fonts.line_width(ta, size, bold);
+                let mut x1 = l.origin.x + self.fonts.line_width(tb, size, bold);
+                if composing {
+                    let y = l.origin.y + lh * 0.95;
+                    painter.line_segment(
+                        [m.p(PtF::new(x0, y)), m.p(PtF::new(x1, y))],
+                        egui::Stroke::new(2.0, accent),
+                    );
+                    continue;
+                }
                 if crosses {
                     x1 += size * 0.3;
                 }
@@ -430,7 +536,7 @@ impl Overlay {
             Duration::from_millis(p - ((since - CARET_SOLID).as_millis() as u64 % p))
         };
         ctx.request_repaint_after(wait);
-        if on && let Some((x, top, lh)) = self.caret_pos(e.caret.cursor) {
+        if on && let Some((x, top, lh)) = self.shown_caret().and_then(|i| self.caret_pos(i)) {
             let ink = match &shape.kind {
                 ShapeKind::Callout { .. } => {
                     let t = hover::contrast_text(shape.style.fill.unwrap_or(shape.style.color));

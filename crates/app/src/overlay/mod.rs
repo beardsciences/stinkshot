@@ -114,6 +114,10 @@ struct EditState {
     patch: Option<TextPatch>,
     /// Pointer is dragging a text selection.
     selecting: bool,
+    /// Ctrl+Z / Ctrl+Y while typing.
+    history: textedit::TextHistory,
+    /// IME composition in progress (shown in place of the selection, not yet in `buffer`).
+    preedit: String,
 }
 
 /// What the pointer is over, for handle hover highlights and cursors.
@@ -914,28 +918,13 @@ impl Overlay {
             let y0 = to_img(new.y, self.img_origin.1).clamp(0, h - 1);
             let x1 = to_img(new.right(), self.img_origin.0).clamp(x0 + 1, w);
             let y1 = to_img(new.bottom(), self.img_origin.1).clamp(y0 + 1, h);
-            let crop = PxRect::new(x0, y0, x1 - x0, y1 - y0);
-            if crop != self.crop {
-                let (dx, dy) = ((self.crop.x - crop.x) as f32, (self.crop.y - crop.y) as f32);
-                if dx != 0.0 || dy != 0.0 {
-                    shapes::translate_all(&mut self.doc, dx, dy);
-                    self.undo.map_docs(|d| shapes::translate_all(d, dx, dy));
-                }
-                self.crop = crop;
-                self.base = None;
-                self.clear_render_cache();
-            }
-            self.sel = Some(self.sel_from_crop());
-            self.sync_doc_size();
+            self.set_crop(PxRect::new(x0, y0, x1 - x0, y1 - y0));
             return;
         }
         if let Some(o) = old
             && (o.x, o.y) != (new.x, new.y)
-            && !self.doc.shapes.is_empty()
         {
-            let (dx, dy) = ((o.x - new.x) as f32, (o.y - new.y) as f32);
-            shapes::translate_all(&mut self.doc, dx, dy);
-            self.undo.map_docs(|d| shapes::translate_all(d, dx, dy));
+            self.rebase((o.x - new.x) as f32, (o.y - new.y) as f32);
         }
         self.doc.base_width = new.w.max(1) as u32;
         self.doc.base_height = new.h.max(1) as u32;
@@ -944,6 +933,46 @@ impl Overlay {
             self.clear_render_cache();
         }
         self.sel = Some(new);
+    }
+
+    /// Annotate mode: set the crop (image px, inside the image) and place the selection on
+    /// it. Annotations keep their place on the picture.
+    fn set_crop(&mut self, crop: PxRect) {
+        if let Some(o) = self.orig.as_ref() {
+            debug_assert!(crop.x >= 0 && crop.y >= 0);
+            debug_assert!(crop.right() <= o.width as i32 && crop.bottom() <= o.height as i32);
+        }
+        if crop != self.crop {
+            let (dx, dy) = ((self.crop.x - crop.x) as f32, (self.crop.y - crop.y) as f32);
+            if dx != 0.0 || dy != 0.0 {
+                self.rebase(dx, dy);
+            }
+            self.crop = crop;
+            self.base = None;
+            self.clear_render_cache();
+        }
+        self.sel = Some(self.sel_from_crop());
+        self.sync_doc_size();
+    }
+
+    /// The region or crop origin moved by (-dx, -dy): move every shape by (dx, dy) so it
+    /// keeps its place on the picture, in the document, its history, the text being typed
+    /// (its pre-edit document) and the shape clipboard.
+    fn rebase(&mut self, dx: f32, dy: f32) {
+        shapes::translate_all(&mut self.doc, dx, dy);
+        self.undo.map_docs(|d| shapes::translate_all(d, dx, dy));
+        if let Some(e) = self.edit.as_mut() {
+            shapes::translate_all(&mut e.pre, dx, dy);
+            e.patch = None;
+        }
+        shapes::translate_shapes(&mut self.clipboard, dx, dy);
+    }
+
+    /// Annotate mode: the whole image as a crop bounds rect (image px).
+    fn image_bounds(&self) -> Option<PxRect> {
+        self.orig
+            .as_ref()
+            .map(|o| PxRect::new(0, 0, o.width as i32, o.height as i32))
     }
 
     fn clear_render_cache(&mut self) {
@@ -1329,20 +1358,24 @@ impl Overlay {
                 }
                 self.undo.push(&pre);
             } else if self.sel_editable() {
-                let sel = self.sel.unwrap_or_default();
-                let bounds = self.sel_bounds();
-                let s = if matches!(self.kind, Kind::Annotate) {
-                    // Crop edges move by whole image px.
-                    (step as f32 * self.scale).round().max(1.0) as i32
-                } else {
-                    step
+                let s = step;
+                let nudge = |r: PxRect, b: PxRect| {
+                    if k.ctrl {
+                        selection::grow_rect(r, dx * s, dy * s, b)
+                    } else {
+                        selection::move_rect(r, dx * s, dy * s, b)
+                    }
                 };
-                let new = if k.ctrl {
-                    selection::grow_rect(sel, dx * s, dy * s, bounds)
+                if matches!(self.kind, Kind::Annotate)
+                    && let Some(img) = self.image_bounds()
+                {
+                    // The crop moves by whole image px (a move keeps its size).
+                    self.set_crop(nudge(self.crop, img));
                 } else {
-                    selection::move_rect(sel, dx * s, dy * s, bounds)
-                };
-                self.set_sel(new);
+                    let sel = self.sel.unwrap_or_default();
+                    let new = nudge(sel, self.sel_bounds());
+                    self.set_sel(new);
+                }
             }
         } else if k.arrows != (0, 0) && self.sel.is_none() {
             // Arrows with nothing selected confirm the hover highlight, so keyboard-only
