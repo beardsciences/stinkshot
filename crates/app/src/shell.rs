@@ -69,6 +69,8 @@ use crate::{logger, sysutil, wake};
 
 const ROOT_TITLE: &str = "StinkShot.Root";
 const MAX_TOASTS: usize = 6;
+/// How long Quit waits for recordings, exports and saves in flight before closing anyway.
+const QUIT_GRACE: Duration = Duration::from_secs(30);
 
 // ---------------------------------------------------------------------------- entry
 
@@ -320,6 +322,9 @@ struct Shell {
 
     /// Snapshot behind an OCR region selection (so the text comes from what the user saw).
     freeze_cache: Option<Frozen>,
+    /// A finished capture waiting for the overlay slot to free up (opened by
+    /// `open_queued_annotate`, never dropped).
+    queued_annotate: Option<OverlayMode>,
     window_capture_pending: bool,
     rec: Rec,
     exporting: bool,
@@ -335,6 +340,8 @@ struct Shell {
     root_setup_tries: u32,
     needs_repaint: bool,
     quitting: bool,
+    /// Set by `quit()`; the window closes when in-flight jobs finish or this passes.
+    quit_deadline: Option<Instant>,
     _guard: InstanceGuard,
 }
 
@@ -467,6 +474,7 @@ impl Shell {
             toasts: Vec::new(),
             pins: Vec::new(),
             freeze_cache: None,
+            queued_annotate: None,
             window_capture_pending: false,
             rec: Rec::Idle,
             exporting: false,
@@ -481,6 +489,7 @@ impl Shell {
             root_setup_tries: 0,
             needs_repaint: false,
             quitting: false,
+            quit_deadline: None,
             _guard: guard,
         };
 
@@ -608,7 +617,7 @@ impl Shell {
             Command::OcrRegion => {
                 if self.shared.ocr.is_none() {
                     self.notify(
-                        "No OCR language installed",
+                        "No OCR Language Installed",
                         "Add a language in Windows Settings > Time & language > Language & region.",
                         true,
                     );
@@ -623,7 +632,6 @@ impl Shell {
             Command::OpenSettings => self.open_settings(),
             Command::EditItem(id) => workers::edit_item(&self.env(), id),
             Command::PinItem(id) => workers::pin_item(&self.env(), id),
-            Command::PinImage { image, title } => self.add_pin(image, title, None, None),
             Command::CaptureDone(out) => self.capture_done(out),
             Command::RegionChosen {
                 purpose,
@@ -650,7 +658,6 @@ impl Shell {
                 end,
                 as_gif,
                 as_mp4,
-                ..
             } => self.trim_done(start, end, as_gif, as_mp4),
             Command::ScrollStop => {
                 if let Some(s) = &self.scroll {
@@ -664,14 +671,12 @@ impl Shell {
             }
             Command::CopyItemImage(id) => workers::copy_item_image(&self.env(), id),
             Command::CopyItemText(id) => workers::copy_item_text(&self.env(), id),
-            Command::RevealItem(id) => {
-                self.with_item(id, |meta| system::reveal_in_explorer(&meta.path))
-            }
-            Command::OpenItem(id) => self.with_item(id, |meta| system::open_path(&meta.path)),
+            Command::RevealItem(id) => workers::reveal_item(&self.env(), id),
+            Command::OpenItem(id) => workers::open_item(&self.env(), id),
             Command::DeleteItem(id) => workers::delete_item(&self.env(), id),
             Command::StarItem(id, starred) => {
                 if let Err(e) = self.shared.history.set_starred(id, starred) {
-                    self.notify("Could not update star", format!("{e:#}"), true);
+                    self.notify("Could Not Update Star", format!("{e:#}"), true);
                 }
                 self.invalidate_history();
             }
@@ -683,27 +688,10 @@ impl Shell {
             Command::OpenUrl(url) => {
                 if !(url.starts_with("https://") || url.starts_with("http://")) {
                     log::warn!("refusing to open non-web URL");
-                } else if let Err(e) = system::open_path(std::path::Path::new(&url)) {
-                    self.notify("Could not open the page", format!("{e:#}"), true);
+                } else {
+                    workers::open_url(&self.env(), url);
                 }
             }
-            Command::SetHotkeysSuspended(s) => self.hotkeys.set_suspended(s),
-        }
-    }
-
-    fn with_item(
-        &mut self,
-        id: ItemId,
-        f: impl FnOnce(&stinkshot_history::ItemMeta) -> anyhow::Result<()>,
-    ) {
-        match self.shared.history.get(id) {
-            Ok(Some(meta)) => {
-                if let Err(e) = f(&meta) {
-                    self.notify("Action failed", format!("{e:#}"), true);
-                }
-            }
-            Ok(None) => self.notify("Item not found", "It may have been deleted.", true),
-            Err(e) => self.notify("History error", format!("{e:#}"), true),
         }
     }
 
@@ -715,12 +703,15 @@ impl Shell {
     }
 
     fn capture_blocked(&mut self) -> bool {
+        if self.quitting {
+            return true;
+        }
         if self.overlay.is_some() || self.window_capture_pending || self.scroll.is_some() {
             return true;
         }
         if self.busy_with_recording() {
             self.notify(
-                "Recording in progress",
+                "Recording in Progress",
                 "Stop or finish the recording before taking a capture.",
                 false,
             );
@@ -729,13 +720,39 @@ impl Shell {
         false
     }
 
+    /// Why the editor cannot open right now, if it cannot.
+    fn annotate_block_reason(&self) -> Option<&'static str> {
+        if self.overlay.is_some() {
+            Some("Finish or cancel the capture that is already open first.")
+        } else if self.scroll.is_some() || self.window_capture_pending {
+            Some("Finish the current capture first.")
+        } else if self.busy_with_recording() {
+            Some("Stop the recording before editing a capture.")
+        } else {
+            None
+        }
+    }
+
+    /// Opens a capture that finished while the overlay slot was taken.
+    fn open_queued_annotate(&mut self) {
+        if self.queued_annotate.is_none() || self.annotate_block_reason().is_some() {
+            return;
+        }
+        let Some(mode) = self.queued_annotate.take() else {
+            return;
+        };
+        if let Some((frozen, windows)) = self.freeze() {
+            self.open_overlay(mode, frozen, windows);
+        }
+    }
+
     fn freeze(&mut self) -> Option<(Frozen, Vec<stinkshot_platform::windows_enum::WinInfo>)> {
         let windows = windows_enum::visible_windows();
         match capture::freeze_all(self.shared.config.capture.include_cursor) {
             Ok(f) => Some((f, windows)),
             Err(e) => {
                 log::error!("freeze_all failed: {e:#}");
-                self.notify("Could not capture the screen", format!("{e:#}"), true);
+                self.notify("Could Not Capture the Screen", format!("{e:#}"), true);
                 None
             }
         }
@@ -775,7 +792,7 @@ impl Shell {
         }
         let Some(win) = capture_ops::target_window() else {
             self.notify(
-                "No window to capture",
+                "No Window to Capture",
                 "There is no foreground window.",
                 true,
             );
@@ -792,17 +809,17 @@ impl Shell {
         if self.capture_blocked() {
             return;
         }
-        let source = windows_enum::foreground()
-            .map(|w| capture_ops::source_of(&w))
-            .unwrap_or_default();
         let Some((frozen, windows)) = self.freeze() else {
             return;
         };
+        let source = capture_ops::target_from(&windows)
+            .map(|w| capture_ops::source_of(&w))
+            .unwrap_or_default();
         let mon = capture_ops::monitor_rect_at(frozen.cursor, frozen.bounds);
         let base = capture_ops::crop_frozen(&frozen, mon);
         if base.width == 0 || base.height == 0 {
             self.notify(
-                "Could not capture the screen",
+                "Could Not Capture the Screen",
                 "The monitor is outside the captured area.",
                 true,
             );
@@ -828,7 +845,7 @@ impl Shell {
         }
         let Some(rect) = self.shared.config.capture.last_region else {
             self.notify(
-                "No previous region",
+                "No Previous Region",
                 "Select a region first; it will be remembered.",
                 false,
             );
@@ -840,7 +857,7 @@ impl Shell {
         };
         let img = capture_ops::crop_frozen(&frozen, rect);
         if img.width == 0 || img.height == 0 {
-            self.notify("Last region is off screen", "Select a new region.", false);
+            self.notify("Last Region Is Off Screen", "Select a new region.", false);
             self.open_overlay(OverlayMode::Capture, frozen, windows);
             return;
         }
@@ -897,8 +914,11 @@ impl Shell {
         if let Rec::Active { .. } = &self.rec
             && let Rec::Active { rec, .. } = std::mem::replace(&mut self.rec, Rec::Idle)
         {
-            // Finish the file so a recording in progress is not lost; the temp file stays.
+            // Finish the file so a recording in progress is not lost. The window closes
+            // only once this (and every other tracked job) is done, see `finish_quit`.
+            let in_flight = workers::InFlight::begin();
             std::thread::spawn(move || {
+                let _in_flight = in_flight;
                 if let Err(e) = rec.stop() {
                     log::warn!("stop on quit failed: {e:#}");
                 }
@@ -909,7 +929,26 @@ impl Shell {
         }
         self.hotkeys.shutdown();
         self.tray = None;
-        self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        self.quit_deadline = Some(Instant::now() + QUIT_GRACE);
+        self.ctx.request_repaint();
+    }
+
+    /// Closes the app once recordings, exports and saves in flight have finished (or the
+    /// grace period ran out), so the process does not exit under them.
+    fn finish_quit(&mut self) {
+        let Some(deadline) = self.quit_deadline else {
+            return;
+        };
+        let busy = workers::jobs_in_flight();
+        if busy == 0 || Instant::now() >= deadline {
+            if busy > 0 {
+                log::warn!("quitting with {busy} job(s) still running");
+            }
+            self.quit_deadline = None;
+            self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else {
+            self.ctx.request_repaint_after(Duration::from_millis(100));
+        }
     }
 
     // ------------------------------------------------------- region follow-ups
@@ -922,13 +961,13 @@ impl Shell {
                     Some(f) => {
                         let img = capture_ops::crop_frozen(&f, rect);
                         if img.width == 0 || img.height == 0 {
-                            self.notify("No text found", "The selection was empty.", false);
+                            self.notify("No Text Found", "The selection was empty.", false);
                         } else {
                             workers::ocr_image(&self.env(), img);
                         }
                     }
                     None => self.notify(
-                        "Could not read the selection",
+                        "Could Not Read the Selection",
                         "The screen snapshot was lost; try again.",
                         true,
                     ),
@@ -937,7 +976,7 @@ impl Shell {
             RegionPurpose::Scrolling => {
                 if rect.w < 16 || rect.h < 16 {
                     self.notify(
-                        "Selection too small",
+                        "Selection Too Small",
                         "Select a larger area to scroll-capture.",
                         false,
                     );
@@ -954,7 +993,7 @@ impl Shell {
             RegionPurpose::RecordMp4 | RegionPurpose::RecordGif => {
                 if rect.w < 16 || rect.h < 16 {
                     self.notify(
-                        "Selection too small",
+                        "Selection Too Small",
                         "Select a larger area to record.",
                         false,
                     );
@@ -995,7 +1034,7 @@ impl Shell {
             Rec::Countdown(_) => self.record_cancel(),
             Rec::Active { .. } => self.record_stop(),
             _ => self.notify(
-                "Recording in progress",
+                "Recording in Progress",
                 "Finish the current recording first.",
                 false,
             ),
@@ -1007,7 +1046,7 @@ impl Shell {
         let output = match workers::temp_recording_path(&self.shared.history) {
             Ok(p) => p,
             Err(e) => {
-                self.notify("Could not start recording", format!("{e:#}"), true);
+                self.notify("Could Not Start Recording", format!("{e:#}"), true);
                 self.rec = Rec::Idle;
                 return;
             }
@@ -1160,7 +1199,7 @@ impl Shell {
         if let Some(err) = stop_with_error {
             log::error!("recorder reported an error: {err}");
             self.notify(
-                "Recording problem",
+                "Recording Problem",
                 format!("{err}\nStopping and keeping what was recorded."),
                 true,
             );
@@ -1205,20 +1244,25 @@ impl Shell {
                 match result {
                     Ok((base, source)) => {
                         let doc = Doc::new(base.width, base.height);
-                        self.open_overlay(
-                            OverlayMode::Annotate {
-                                base,
-                                doc,
-                                mode: "window",
-                                editing: None,
-                                source,
-                            },
-                            frozen,
-                            windows,
-                        );
+                        let mode = OverlayMode::Annotate {
+                            base,
+                            doc,
+                            mode: "window",
+                            editing: None,
+                            source,
+                        };
+                        if self.overlay.is_some() || self.busy_with_recording() {
+                            self.queued_annotate = Some(mode);
+                        } else {
+                            self.open_overlay(mode, frozen, windows);
+                        }
                     }
-                    Err(e) => self.notify("Window capture failed", e, true),
+                    Err(e) => self.notify("Window Capture Failed", e, true),
                 }
+            }
+            WorkerMsg::WindowCaptureFailed(e) => {
+                self.window_capture_pending = false;
+                self.notify("Window Capture Failed", e, true);
             }
             WorkerMsg::OpenAnnotate {
                 base,
@@ -1227,7 +1271,10 @@ impl Shell {
                 editing,
                 source,
             } => {
-                if self.overlay.is_some() {
+                // An Edit click must not freeze the screen under a scroll capture or a
+                // recording, nor replace an open overlay. Say so instead of dropping it.
+                if let Some(reason) = self.annotate_block_reason() {
+                    self.notify("Can't Edit Yet", reason, false);
                     return;
                 }
                 if let Some((frozen, windows)) = self.freeze() {
@@ -1273,27 +1320,26 @@ impl Shell {
                     Ok(img) => {
                         if partial {
                             self.notify(
-                                "Scrolling capture stopped early",
+                                "Scrolling Capture Stopped Early",
                                 "The page could not be matched any further; kept what was captured.",
                                 false,
                             );
                         }
                         let doc = Doc::new(img.width, img.height);
-                        if let Some((frozen, windows)) = self.freeze() {
-                            self.open_overlay(
-                                OverlayMode::Annotate {
-                                    base: img,
-                                    doc,
-                                    mode: "scrolling",
-                                    editing: None,
-                                    source,
-                                },
-                                frozen,
-                                windows,
-                            );
+                        let mode = OverlayMode::Annotate {
+                            base: img,
+                            doc,
+                            mode: "scrolling",
+                            editing: None,
+                            source,
+                        };
+                        if self.overlay.is_some() || self.busy_with_recording() {
+                            self.queued_annotate = Some(mode);
+                        } else if let Some((frozen, windows)) = self.freeze() {
+                            self.open_overlay(mode, frozen, windows);
                         }
                     }
-                    Err(e) => self.notify("Scrolling capture failed", e, true),
+                    Err(e) => self.notify("Scrolling Capture Failed", e, true),
                 }
             }
             WorkerMsg::RecorderStarted(result) => self.recorder_started(result),
@@ -1317,7 +1363,7 @@ impl Shell {
                         };
                         self.touch();
                     }
-                    (_, Err(e)) => self.notify("Could not finish the recording", e, true),
+                    (_, Err(e)) => self.notify("Could Not Finish the Recording", e, true),
                     (other, Ok(_)) => self.rec = other,
                 }
             }
@@ -1361,7 +1407,7 @@ impl Shell {
             Err(e) => {
                 log::error!("recorder start failed: {e}");
                 if !cancel {
-                    self.notify("Could not start recording", e, true);
+                    self.notify("Could Not Start Recording", e, true);
                 }
             }
         }
@@ -1373,7 +1419,7 @@ impl Shell {
         self.rec = Rec::Idle;
         self.touch();
         if let Some(err) = &x.error {
-            self.notify("Export problem", err.clone(), true);
+            self.notify("Export Problem", err.clone(), true);
         }
         let Some((id, path, kind)) = x.items.first().cloned() else {
             return;
@@ -1438,13 +1484,13 @@ impl Shell {
                         .unwrap_or_default()
                 )
             } else if s.editing {
-                "Capture updated".to_string()
+                "Capture Updated".to_string()
             } else if s.action == FinishAction::Pin {
-                "Pinned to screen".to_string()
+                "Pinned to Screen".to_string()
             } else if s.copied_image {
-                "Copied to clipboard".to_string()
+                "Copied to Clipboard".to_string()
             } else {
-                "Saved to history".to_string()
+                "Saved to History".to_string()
             };
             (
                 title,
@@ -1466,7 +1512,7 @@ impl Shell {
         if !self.shared.config.privacy.check_for_updates {
             if force {
                 self.notify(
-                    "Update checks are off",
+                    "Update Checks Are Off",
                     "Turn them on in Settings > Privacy. They are the only network feature.",
                     false,
                 );
@@ -1529,7 +1575,7 @@ impl Shell {
         let new = self.shared.config.clone();
         if let Err(e) = new.save() {
             log::error!("saving config failed: {e:#}");
-            self.notify("Could not save settings", format!("{e:#}"), true);
+            self.notify("Could Not Save Settings", format!("{e:#}"), true);
         }
         let old = std::mem::replace(&mut self.applied, new.clone());
 
@@ -1563,7 +1609,7 @@ impl Shell {
                 }
                 Err(e) => {
                     log::error!("cannot open history folder {}: {e:#}", dir.display());
-                    self.notify("Could not open that history folder", format!("{e:#}"), true);
+                    self.notify("Could Not Open That History Folder", format!("{e:#}"), true);
                     self.shared.config.history.folder = old.history.folder.clone();
                     self.applied.history.folder = old.history.folder.clone();
                     self.shared.config_dirty = true;
@@ -1696,6 +1742,18 @@ impl Shell {
         }
     }
 
+    /// While a Settings hotkey field waits for a key press, global hotkeys must be released
+    /// (also covers the window closing mid-capture).
+    fn sync_hotkey_capture(&mut self) {
+        let capturing = self
+            .settings
+            .as_ref()
+            .is_some_and(|s| s.s.is_capturing_hotkey());
+        if capturing != self.hotkeys.is_suspended() {
+            self.hotkeys.set_suspended(capturing);
+        }
+    }
+
     fn drain_outbox(&mut self) {
         if !self.shared.outbox.is_empty() {
             let drained: Vec<Command> = self.shared.outbox.drain(..).collect();
@@ -1722,6 +1780,9 @@ impl eframe::App for Shell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.show_all(&ctx);
+        self.sync_hotkey_capture();
+        self.open_queued_annotate();
+        self.finish_quit();
         self.drain_outbox();
         self.process_pending();
         self.tick_recording();

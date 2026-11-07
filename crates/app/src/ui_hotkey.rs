@@ -4,7 +4,6 @@
 //! checked against the real `global_hotkey` parser in the tests.
 //!
 //! Mounted from `settings_ui.rs` with `#[path]`.
-#![allow(dead_code)]
 
 use egui::{Event, Key, Modifiers};
 

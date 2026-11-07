@@ -8,7 +8,6 @@
 //! serves requests newest-first (so a fast scroll does not wait behind stale rows), decodes
 //! the cached thumbnail PNG and hands back a `ColorImage`; the UI thread uploads at most a few
 //! per frame into an LRU texture cache keyed by (id, file size) so re-edited items refresh.
-#![allow(dead_code)]
 
 use std::collections::HashSet;
 use std::ops::Range;
@@ -74,11 +73,11 @@ impl DateFilter {
 
     pub fn label(self) -> &'static str {
         match self {
-            DateFilter::Any => "Any time",
+            DateFilter::Any => "Any Time",
             DateFilter::Today => "Today",
-            DateFilter::Week => "Last 7 days",
-            DateFilter::Month => "Last 30 days",
-            DateFilter::Year => "Last year",
+            DateFilter::Week => "Last 7 Days",
+            DateFilter::Month => "Last 30 Days",
+            DateFilter::Year => "Last Year",
         }
     }
 
@@ -305,14 +304,14 @@ impl Act {
     pub fn label(self, m: &ItemMeta) -> &'static str {
         match self {
             Act::Edit => "Edit",
-            Act::Pin => "Pin to screen",
-            Act::CopyImage => "Copy image",
-            Act::CopyText => "Copy text",
+            Act::Pin => "Pin to Screen",
+            Act::CopyImage => "Copy Image",
+            Act::CopyText => "Copy Text",
             Act::Open => "Open",
-            Act::Reveal => "Show in folder",
+            Act::Reveal => "Show in Folder",
             Act::ToggleStar => {
                 if m.starred {
-                    "Remove star"
+                    "Remove Star"
                 } else {
                     "Star"
                 }
@@ -510,6 +509,9 @@ pub struct HistoryWindow {
     requested: HashSet<ThumbKey>,
     failed: HashSet<ThumbKey>,
     worker: Option<ThumbWorker>,
+    /// The history `worker` reads from; a different one in `Shared` means the folder was
+    /// changed in Settings and everything keyed by item id is stale.
+    worker_history: Option<Arc<History>>,
     scroll_to: Option<ItemId>,
     focus_search: bool,
     was_focused: bool,
@@ -539,6 +541,7 @@ impl HistoryWindow {
             requested: HashSet::new(),
             failed: HashSet::new(),
             worker: None,
+            worker_history: None,
             scroll_to: None,
             focus_search: false,
             was_focused: true,
@@ -755,8 +758,22 @@ impl Surface for HistoryWindow {
 
     fn show(&mut self, ctx: &egui::Context, shared: &mut Shared) -> SurfaceStatus {
         let now_i = Instant::now();
+        if self
+            .worker_history
+            .as_ref()
+            .is_some_and(|h| !Arc::ptr_eq(h, &shared.history))
+        {
+            // Item ids, thumbnails and textures all belong to the old index.
+            self.worker = None;
+            self.worker_history = None;
+            self.textures = Lru::new(TEX_CACHE);
+            self.requested.clear();
+            self.failed.clear();
+            self.dirty = true;
+        }
         if self.worker.is_none() {
             self.worker = ThumbWorker::start(Arc::clone(&shared.history), ctx.clone());
+            self.worker_history = Some(Arc::clone(&shared.history));
         }
         self.pump_thumbs(ctx);
 
@@ -1494,7 +1511,7 @@ impl Surface for HistoryWindow {
                                         );
                                         if sresp
                                             .on_hover_text(if m.starred {
-                                                "Remove star"
+                                                "Remove Star"
                                             } else {
                                                 "Star"
                                             })

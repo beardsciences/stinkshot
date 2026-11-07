@@ -13,7 +13,6 @@
 //!
 //! Countdown, RecordFrame and ScrollHud-free areas rely on transparent windows: the shell's
 //! `App::clear_color` must be fully transparent for these viewports.
-#![allow(dead_code)]
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
@@ -133,7 +132,6 @@ const COUNTDOWN_WIN: f32 = 220.0;
 const COUNTDOWN_R: f32 = 80.0;
 
 pub struct Countdown {
-    region: PxRect,
     seconds: u32,
     start: Instant,
     rect: PxRect,
@@ -152,7 +150,6 @@ impl Countdown {
             area.work,
         );
         Self {
-            region,
             seconds,
             start: Instant::now(),
             rect,
@@ -258,7 +255,6 @@ impl Surface for Countdown {
 const FRAME_MARGIN: f32 = 4.0;
 
 pub struct RecordFrame {
-    region: PxRect,
     scale: f32,
     rect: PxRect,
 }
@@ -273,11 +269,7 @@ impl RecordFrame {
             region.w + 2 * m,
             region.h + 2 * m,
         );
-        Self {
-            region,
-            scale,
-            rect,
-        }
+        Self { scale, rect }
     }
 }
 
@@ -351,7 +343,6 @@ const HUD_BTN: f32 = 34.0;
 const HUD_GAP: f32 = 4.0;
 
 pub struct RecordHud {
-    region: PxRect,
     summary: String,
     toggles: HudToggles,
     changed: bool,
@@ -367,7 +358,6 @@ impl RecordHud {
         let size = (uc::px(HUD_W, area.scale), uc::px(HUD_H, area.scale));
         let rect = uc::hud_rect(region, size, area.work, uc::px(10.0, area.scale));
         Self {
-            region,
             summary,
             toggles,
             changed: false,
@@ -771,7 +761,6 @@ impl TrimWindow {
 
     fn save(&mut self, shared: &mut Shared, gif: bool) {
         shared.outbox.push(Command::TrimDone {
-            source: self.source.clone(),
             start: secs(self.start),
             end: secs(self.end),
             as_gif: gif,
@@ -1313,7 +1302,6 @@ const SCROLL_W: f32 = 300.0;
 const SCROLL_H: f32 = 98.0;
 
 pub struct ScrollHud {
-    region: PxRect,
     frames: usize,
     width: u32,
     height: u32,
@@ -1328,7 +1316,6 @@ impl ScrollHud {
         let size = (uc::px(SCROLL_W, area.scale), uc::px(SCROLL_H, area.scale));
         let rect = uc::hud_rect(region, size, area.work, uc::px(10.0, area.scale));
         Self {
-            region,
             frames: 0,
             width: 0,
             height: 0,
@@ -1565,7 +1552,6 @@ mod tests {
             overlays: true,
         };
         let mut hud = RecordHud {
-            region: PxRect::new(0, 0, 10, 10),
             summary: String::new(),
             toggles: t,
             changed: false,

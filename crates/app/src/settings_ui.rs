@@ -8,7 +8,6 @@
 //! change made while the pointer is held (slider drags, colour pickers) is flushed when the
 //! pointer is released, so the shell saves once per gesture instead of once per frame. Text
 //! fields commit on Enter or focus loss.
-#![allow(dead_code)]
 
 #[path = "ui_hotkey.rs"]
 pub mod ui_hotkey;
@@ -85,12 +84,12 @@ const HOTKEY_FIELDS: [HotkeyField; 8] = [
 impl HotkeyField {
     fn label(self) -> &'static str {
         match self {
-            HotkeyField::Region => "Region capture",
-            HotkeyField::Window => "Window capture",
-            HotkeyField::Fullscreen => "Full screen",
-            HotkeyField::Scrolling => "Scrolling capture",
-            HotkeyField::Ocr => "Copy text (OCR)",
-            HotkeyField::RepeatLast => "Repeat last region",
+            HotkeyField::Region => "Region Capture",
+            HotkeyField::Window => "Window Capture",
+            HotkeyField::Fullscreen => "Full Screen",
+            HotkeyField::Scrolling => "Scrolling Capture",
+            HotkeyField::Ocr => "Copy Text (OCR)",
+            HotkeyField::RepeatLast => "Repeat Last Region",
             HotkeyField::RecordMp4 => "Record MP4",
             HotkeyField::RecordGif => "Record GIF",
         }
@@ -168,7 +167,7 @@ fn error_for<'a>(errors: &'a [String], hotkey: &str) -> Option<&'a str> {
 /// Options for a device dropdown: "" (default device) first, then the detected names, then the
 /// configured one if it is no longer present.
 fn device_options(detected: &[String], current: &str) -> Vec<(String, String)> {
-    let mut v = vec![(String::new(), "Default device".to_string())];
+    let mut v = vec![(String::new(), "Default Device".to_string())];
     v.extend(detected.iter().map(|d| (d.clone(), d.clone())));
     if !current.is_empty() && !detected.iter().any(|d| d == current) {
         v.push((current.to_string(), format!("{current} (not found)")));
@@ -762,7 +761,7 @@ impl SettingsWindow {
                 let label = match g.theme.as_str() {
                     "dark" => "Dark",
                     "light" => "Light",
-                    _ => "Use system setting",
+                    _ => "Use System Setting",
                 };
                 egui::ComboBox::from_id_salt("theme")
                     .selected_text(label)
@@ -771,7 +770,7 @@ impl SettingsWindow {
                         ui.selectable_value(
                             &mut g.theme,
                             "system".to_string(),
-                            "Use system setting",
+                            "Use System Setting",
                         );
                         ui.selectable_value(&mut g.theme, "dark".to_string(), "Dark");
                         ui.selectable_value(&mut g.theme, "light".to_string(), "Light");
@@ -780,7 +779,7 @@ impl SettingsWindow {
         );
         widgets::setting_row(
             ui,
-            "Accent color",
+            "Accent Color",
             "Buttons, selection, HUDs and click ripples.",
             |ui| {
                 ui.horizontal(|ui| {
@@ -792,7 +791,7 @@ impl SettingsWindow {
                     if let Some(h) = swatch_row(ui, &presets, &g.accent, p.text) {
                         g.accent = h;
                     }
-                    if widgets::button(ui, "Windows accent")
+                    if widgets::button(ui, "Windows Accent")
                         .on_hover_text("Use the accent color from Windows settings")
                         .clicked()
                         && let Some(c) = stinkshot_platform::system::system_accent()
@@ -802,23 +801,23 @@ impl SettingsWindow {
                 });
             },
         );
-        group_title(ui, p, "After a capture");
+        group_title(ui, p, "After a Capture");
         toggle_row(
             ui,
-            "Copy to clipboard",
+            "Copy to Clipboard",
             "Put every finished capture on the clipboard.",
             &mut g.copy_to_clipboard,
         );
         toggle_row(
             ui,
-            "Show toast",
+            "Show Toast",
             "A small card with Edit, Pin, Copy text and Folder actions.",
             &mut g.show_toast,
         );
         ui.add_enabled_ui(g.show_toast, |ui| {
             slider_row(
                 ui,
-                "Toast duration",
+                "Toast Duration",
                 "How long the toast stays. Hovering pauses the timer.",
                 &mut g.toast_seconds,
                 2..=30,
@@ -827,7 +826,7 @@ impl SettingsWindow {
         });
         toggle_row(
             ui,
-            "Play sound",
+            "Play Sound",
             "A short shutter sound after capturing.",
             &mut g.play_sound,
         );
@@ -839,7 +838,7 @@ impl SettingsWindow {
         let accent = uc::accent(shared);
         toggle_row(
             ui,
-            "Take over PrintScreen",
+            "Take Over PrintScreen",
             "Replace the Windows Snipping Tool shortcut with StinkShot's region capture.",
             &mut shared.config.hotkeys.take_over_printscreen,
         );
@@ -947,7 +946,7 @@ impl SettingsWindow {
             .color(p.text_tertiary),
         );
         ui.add_space(4.0);
-        if widgets::button(ui, "Reset shortcuts to defaults").clicked() {
+        if widgets::button(ui, "Reset Shortcuts to Defaults").clicked() {
             let keep = shared.config.hotkeys.take_over_printscreen;
             shared.config.hotkeys = Hotkeys {
                 take_over_printscreen: keep,
@@ -963,45 +962,45 @@ impl SettingsWindow {
         let c = &mut shared.config.capture;
         toggle_row(
             ui,
-            "Include mouse cursor",
+            "Include Mouse Cursor",
             "Draw the pointer into screenshots.",
             &mut c.include_cursor,
         );
         toggle_row(
             ui,
-            "Freeze screen",
+            "Freeze Screen",
             "Snapshot every monitor first so menus, tooltips and video stay still while you select.",
             &mut c.freeze_screen,
         );
         toggle_row(
             ui,
-            "Snap to windows and elements",
+            "Snap to Windows and Elements",
             "Highlight windows and UI elements under the cursor for one-click capture.",
             &mut c.snap_to_elements,
         );
         toggle_row(
             ui,
-            "Magnifier loupe",
+            "Magnifier Loupe",
             "Show a pixel loupe with coordinates and color while selecting.",
             &mut c.show_loupe,
         );
 
-        group_title(ui, p, "Window capture");
+        group_title(ui, p, "Window Capture");
         toggle_row(
             ui,
-            "Rounded corners",
+            "Rounded Corners",
             "Keep the real Windows 11 corners, with alpha, in PNG output.",
             &mut c.window_rounded_corners,
         );
         toggle_row(
             ui,
-            "Drop shadow",
+            "Drop Shadow",
             "Add a soft shadow around captured windows.",
             &mut c.window_shadow,
         );
         toggle_row(
             ui,
-            "Padded background frame",
+            "Padded Background Frame",
             "Place the window on a colored backdrop for sharing.",
             &mut c.window_padding,
         );
@@ -1016,7 +1015,7 @@ impl SettingsWindow {
             );
             widgets::setting_row(
                 ui,
-                "Padding color",
+                "Padding Color",
                 "Backdrop color for the padded frame.",
                 |ui| {
                     ui.horizontal(|ui| {
@@ -1038,7 +1037,7 @@ impl SettingsWindow {
         combo_row(
             ui,
             "format",
-            "Image format",
+            "Image Format",
             "PNG keeps alpha and text sharp; JPEG and WebP are smaller.",
             &mut c.format,
             &[
@@ -1050,7 +1049,7 @@ impl SettingsWindow {
         if c.format == ImageFormat::Jpeg {
             slider_row(
                 ui,
-                "JPEG quality",
+                "JPEG Quality",
                 "Higher is larger and cleaner.",
                 &mut c.jpeg_quality,
                 40..=100,
@@ -1061,7 +1060,7 @@ impl SettingsWindow {
             let parts = stinkshot_core::naming::NameParts {
                 now: chrono::Local::now(),
                 app: "firefox",
-                title: "Example page",
+                title: "Example Page",
                 width: 1280,
                 height: 720,
             };
@@ -1073,7 +1072,7 @@ impl SettingsWindow {
         };
         widgets::setting_row(
             ui,
-            "File name pattern",
+            "File Name Pattern",
             &format!(
                 "Tokens: {{yyyy}} {{MM}} {{dd}} {{HH}} {{mm}} {{ss}} {{fff}} {{app}} {{title}} {{w}} {{h}}. Example: {preview}"
             ),
@@ -1095,10 +1094,10 @@ impl SettingsWindow {
             },
         );
 
-        group_title(ui, p, "Scrolling capture");
+        group_title(ui, p, "Scrolling Capture");
         slider_row(
             ui,
-            "Maximum height",
+            "Maximum Height",
             "Stop stitching at this height.",
             &mut c.scroll_max_height,
             2000..=60000,
@@ -1106,7 +1105,7 @@ impl SettingsWindow {
         );
         slider_row(
             ui,
-            "Delay between scrolls",
+            "Delay Between Scrolls",
             "Raise this if the page lazy-loads or animates.",
             &mut c.scroll_delay_ms,
             30..=1000,
@@ -1122,7 +1121,7 @@ impl SettingsWindow {
         group_title(ui, p, "Defaults");
         widgets::setting_row(
             ui,
-            "Default color",
+            "Default Color",
             "Pick from the palette. Keys 1 to 8 choose palette colors in the editor.",
             |ui| {
                 ui.horizontal(|ui| {
@@ -1134,7 +1133,7 @@ impl SettingsWindow {
         );
         slider_row(
             ui,
-            "Stroke width",
+            "Stroke Width",
             "Lines, arrows and shapes.",
             &mut e.stroke_width,
             1.0..=24.0,
@@ -1142,7 +1141,7 @@ impl SettingsWindow {
         );
         slider_row(
             ui,
-            "Font size",
+            "Font Size",
             "Text annotations.",
             &mut e.font_size,
             8.0..=96.0,
@@ -1150,7 +1149,7 @@ impl SettingsWindow {
         );
         slider_row(
             ui,
-            "Blur radius",
+            "Blur Radius",
             "Blur tool strength.",
             &mut e.blur_radius,
             2.0..=48.0,
@@ -1158,7 +1157,7 @@ impl SettingsWindow {
         );
         slider_row(
             ui,
-            "Pixelate block",
+            "Pixelate Block",
             "Pixelate tool block size.",
             &mut e.pixelate_block,
             4..=64,
@@ -1171,7 +1170,7 @@ impl SettingsWindow {
         let mut reset = false;
         widgets::setting_row(
             ui,
-            "Palette colors",
+            "Palette Colors",
             "Click a color to edit it. Right-click to remove. Up to 12 colors.",
             |ui| {
                 ui.horizontal(|ui| {
@@ -1189,14 +1188,14 @@ impl SettingsWindow {
         );
         widgets::setting_row(
             ui,
-            "Manage palette",
+            "Manage Palette",
             "Add, remove or restore the built-in colors.",
             |ui| {
                 ui.horizontal(|ui| {
-                    if e.palette.len() < 12 && widgets::button(ui, "Add color").clicked() {
+                    if e.palette.len() < 12 && widgets::button(ui, "Add Color").clicked() {
                         add = true;
                     }
-                    if e.palette.len() > 1 && widgets::button(ui, "Remove last").clicked() {
+                    if e.palette.len() > 1 && widgets::button(ui, "Remove Last").clicked() {
                         remove = Some(e.palette.len() - 1);
                     }
                     if widgets::button(ui, "Reset").clicked() {
@@ -1235,7 +1234,7 @@ impl SettingsWindow {
         combo_row(
             ui,
             "fps",
-            "Frame rate",
+            "Frame Rate",
             "Capture frame rate for MP4.",
             &mut r.fps,
             &[(24u32, "24 fps"), (30, "30 fps"), (60, "60 fps")],
@@ -1258,21 +1257,21 @@ impl SettingsWindow {
         );
         toggle_row(
             ui,
-            "Show mouse clicks",
+            "Show Mouse Clicks",
             "Expanding ripples around clicks.",
             &mut r.show_clicks,
         );
         toggle_row(
             ui,
-            "Show key presses",
+            "Show Key Presses",
             "A chip with the current key combination.",
             &mut r.show_keys,
         );
 
-        group_title(ui, p, "Audio and webcam");
+        group_title(ui, p, "Audio and Webcam");
         toggle_row(
             ui,
-            "System audio",
+            "System Audio",
             "Record what your PC is playing.",
             &mut r.system_audio,
         );
@@ -1295,7 +1294,7 @@ impl SettingsWindow {
                         .iter()
                         .find(|(v, _)| v == value)
                         .map(|(_, l)| l.as_str())
-                        .unwrap_or("Default device");
+                        .unwrap_or("Default Device");
                     egui::ComboBox::from_id_salt(id)
                         .selected_text(cur.to_string())
                         .width(240.0)
@@ -1310,7 +1309,7 @@ impl SettingsWindow {
         dev_row(
             ui,
             "mic_dev",
-            "Microphone device",
+            "Microphone Device",
             if loaded {
                 "Which input to record."
             } else {
@@ -1322,14 +1321,14 @@ impl SettingsWindow {
         );
         toggle_row(
             ui,
-            "Webcam bubble",
+            "Webcam Bubble",
             "Show a round webcam overlay in the recording.",
             &mut r.webcam,
         );
         dev_row(
             ui,
             "cam_dev",
-            "Webcam device",
+            "Webcam Device",
             if loaded {
                 "Which camera to show."
             } else {
@@ -1342,7 +1341,7 @@ impl SettingsWindow {
         ui.add_enabled_ui(r.webcam, |ui| {
             slider_row(
                 ui,
-                "Webcam size",
+                "Webcam Size",
                 "Bubble diameter.",
                 &mut r.webcam_diameter,
                 96..=360,
@@ -1350,16 +1349,16 @@ impl SettingsWindow {
             );
         });
         widgets::setting_row(ui, "Devices", "Plugged something in? Look again.", |ui| {
-            if widgets::button(ui, "Refresh devices").clicked() {
+            if widgets::button(ui, "Refresh Devices").clicked() {
                 rescan = true;
             }
         });
 
-        group_title(ui, p, "GIF output");
+        group_title(ui, p, "GIF Output");
         combo_row(
             ui,
             "gif_fps",
-            "GIF frame rate",
+            "GIF Frame Rate",
             "Lower is smaller.",
             &mut r.gif_fps,
             &[
@@ -1373,7 +1372,7 @@ impl SettingsWindow {
         );
         slider_row(
             ui,
-            "GIF maximum width",
+            "GIF Maximum Width",
             "Wider recordings are scaled down.",
             &mut r.gif_max_width,
             240..=1920,
@@ -1398,14 +1397,14 @@ impl SettingsWindow {
         let custom = !shared.config.history.folder.is_empty();
         widgets::setting_row(
             ui,
-            "History folder",
+            "History Folder",
             &format!(
                 "{}  Existing captures stay where they are.",
                 shown_folder.display()
             ),
             |ui| {
                 ui.horizontal(|ui| {
-                    if custom && widgets::button(ui, "Use default").clicked() {
+                    if custom && widgets::button(ui, "Use Default").clicked() {
                         reset = true;
                     }
                     if widgets::button(ui, "Open").clicked() {
@@ -1448,14 +1447,14 @@ impl SettingsWindow {
         };
         toggle_row(
             ui,
-            "Index text for search",
+            "Index Text for Search",
             &ocr_desc,
             &mut shared.config.history.ocr_index,
         );
         let h = &mut shared.config.history;
         widgets::setting_row(
             ui,
-            "Keep captures",
+            "Keep Captures",
             "Older or excess items are deleted. Starred items are always kept.",
             |ui| {
                 ui.horizontal(|ui| {
@@ -1496,7 +1495,7 @@ impl SettingsWindow {
         );
         toggle_row(
             ui,
-            "Keep editable originals",
+            "Keep Editable Originals",
             "Store the unannotated original and annotations so captures can be re-edited. Redacted pixels remain in that original; it never leaves this PC.",
             &mut h.keep_editable,
         );
@@ -1532,7 +1531,7 @@ impl SettingsWindow {
         let enabled = shared.config.privacy.check_for_updates;
         toggle_row(
             ui,
-            "Check for updates",
+            "Check for Updates",
             "Once a day, asks code.mccullough.dev for the latest release tag. Sends nothing else.",
             &mut shared.config.privacy.check_for_updates,
         );
@@ -1543,7 +1542,7 @@ impl SettingsWindow {
         let mut check = false;
         widgets::setting_row(
             ui,
-            "Check now",
+            "Check Now",
             &if requested {
                 "Asked for the latest release. A message appears when it answers.".to_string()
             } else {
@@ -1551,7 +1550,7 @@ impl SettingsWindow {
             },
             |ui| {
                 ui.add_enabled_ui(enabled, |ui| {
-                    if widgets::button(ui, "Check now").clicked() {
+                    if widgets::button(ui, "Check Now").clicked() {
                         check = true;
                     }
                 });
@@ -1640,7 +1639,7 @@ impl SettingsWindow {
             .is_some_and(|t| t.elapsed() < Duration::from_secs(2));
         let mut open = false;
         let mut copy = false;
-        widgets::setting_row(ui, "Source code", REPO_URL, |ui| {
+        widgets::setting_row(ui, "Source Code", REPO_URL, |ui| {
             ui.horizontal(|ui| {
                 if widgets::button(ui, if copied { "Copied" } else { "Copy link" }).clicked() {
                     copy = true;

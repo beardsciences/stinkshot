@@ -3,7 +3,7 @@
 //! reports back through `WorkerMsg`; every send wakes the UI thread.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -40,6 +40,8 @@ pub enum WorkerMsg {
         windows: Vec<WinInfo>,
         result: Result<(Rgba, SourceInfo), String>,
     },
+    /// The window-capture worker crashed before it could report.
+    WindowCaptureFailed(String),
     /// Image + doc loaded for the overlay editor (re-edit).
     OpenAnnotate {
         base: Rgba,
@@ -133,15 +135,65 @@ fn spawn(name: &str, f: impl FnOnce() + Send + 'static) {
     }
 }
 
+static JOBS_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+
+/// Number of worker jobs (and tracked background threads) still running. The shell waits
+/// for this to reach zero on quit so recordings, exports and saves are not cut off.
+pub fn jobs_in_flight() -> usize {
+    JOBS_IN_FLIGHT.load(Ordering::SeqCst)
+}
+
+/// Counts one unit of in-flight work until dropped.
+pub struct InFlight(());
+
+impl InFlight {
+    pub fn begin() -> InFlight {
+        JOBS_IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+        InFlight(())
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        JOBS_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// Run `f` on a worker, turning panics into an error toast instead of a dead feature.
 fn job(env: &Env, name: &'static str, f: impl FnOnce(&Env) + Send + 'static) {
+    job_inner(env, name, f, None);
+}
+
+/// Like `job`, but when `f` panics `recover` supplies the terminal message the shell is
+/// waiting for, so the state the job owned (scroll HUD, pending capture, recorder
+/// Starting/Stopping) is released instead of staying stuck.
+fn job_recovering(
+    env: &Env,
+    name: &'static str,
+    f: impl FnOnce(&Env) + Send + 'static,
+    recover: impl FnOnce() -> WorkerMsg + Send + 'static,
+) {
+    job_inner(env, name, f, Some(Box::new(recover)));
+}
+
+fn job_inner(
+    env: &Env,
+    name: &'static str,
+    f: impl FnOnce(&Env) + Send + 'static,
+    recover: Option<Box<dyn FnOnce() -> WorkerMsg + Send>>,
+) {
     let env = env.clone();
+    let in_flight = InFlight::begin();
     spawn(name, move || {
+        let _in_flight = in_flight;
         let e2 = env.clone();
         if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&env))).is_err() {
             log::error!("worker {name} panicked");
+            if let Some(recover) = recover {
+                e2.send(recover());
+            }
             e2.notify(
-                "Something went wrong",
+                "Something Went Wrong",
                 format!("The {name} task crashed. See stinkshot.log."),
                 true,
             );
@@ -248,7 +300,7 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
                 Ok((id, p)) => (Some(id), Some(p)),
                 Err(e) => {
                     log::error!("saving capture to history failed: {e:#}");
-                    env.notify("Could not save to history", format!("{e:#}"), true);
+                    env.notify("Could Not Save to History", format!("{e:#}"), true);
                     (None, None)
                 }
             };
@@ -265,7 +317,7 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
                 Ok(()) => copied_image = true,
                 Err(e) => {
                     log::error!("clipboard copy failed: {e:#}");
-                    env.notify("Could not copy to clipboard", format!("{e:#}"), true);
+                    env.notify("Could Not Copy to Clipboard", format!("{e:#}"), true);
                 }
             }
         }
@@ -290,10 +342,10 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
                         }
                         saved_as = Some(target);
                     }
-                    Err(e) => env.notify("Could not save file", format!("{e:#}"), true),
+                    Err(e) => env.notify("Could Not Save File", format!("{e:#}"), true),
                 },
                 Ok(None) => {}
-                Err(e) => env.notify("Save As failed", format!("{e:#}"), true),
+                Err(e) => env.notify("Save As Failed", format!("{e:#}"), true),
             }
         }
 
@@ -301,7 +353,7 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
         if action == FinishAction::CopyText {
             match &env.ocr {
                 None => env.notify(
-                    "No OCR language installed",
+                    "No OCR Language Installed",
                     "Add a language in Windows Settings > Time & language.",
                     true,
                 ),
@@ -310,18 +362,18 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
                         let text = r.text.trim().to_string();
                         if text.is_empty() {
                             env.notify(
-                                "No text found",
+                                "No Text Found",
                                 "Nothing readable in the selection.",
                                 false,
                             );
                         } else {
                             match clipboard::set_text(&text) {
                                 Ok(()) => copied_text = Some(text),
-                                Err(e) => env.notify("Could not copy text", format!("{e:#}"), true),
+                                Err(e) => env.notify("Could Not Copy Text", format!("{e:#}"), true),
                             }
                         }
                     }
-                    Err(e) => env.notify("Text recognition failed", format!("{e:#}"), true),
+                    Err(e) => env.notify("Text Recognition Failed", format!("{e:#}"), true),
                 },
             }
         }
@@ -358,25 +410,30 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
 }
 
 pub fn capture_window(env: &Env, frozen: Frozen, windows: Vec<WinInfo>, win: WinInfo) {
-    job(env, "window-capture", move |env| {
-        let source = capture_ops::source_of(&win);
-        let result =
-            capture_ops::capture_window_image(&env.cfg, &win, env.cfg.capture.include_cursor)
-                .map(|img| (img, source))
-                .map_err(|e| format!("{e:#}"));
-        env.send(WorkerMsg::WindowCaptured {
-            frozen,
-            windows,
-            result,
-        });
-    });
+    job_recovering(
+        env,
+        "window-capture",
+        move |env| {
+            let source = capture_ops::source_of(&win);
+            let result =
+                capture_ops::capture_window_image(&env.cfg, &win, env.cfg.capture.include_cursor)
+                    .map(|img| (img, source))
+                    .map_err(|e| format!("{e:#}"));
+            env.send(WorkerMsg::WindowCaptured {
+                frozen,
+                windows,
+                result,
+            });
+        },
+        || WorkerMsg::WindowCaptureFailed("The capture task crashed.".into()),
+    );
 }
 
 pub fn ocr_image(env: &Env, img: Rgba) {
     job(env, "ocr-region", move |env| {
         let Some(engine) = &env.ocr else {
             env.notify(
-                "No OCR language installed",
+                "No OCR Language Installed",
                 "Add a language in Windows Settings > Time & language.",
                 true,
             );
@@ -386,15 +443,15 @@ pub fn ocr_image(env: &Env, img: Rgba) {
             Ok(r) => {
                 let text = r.text.trim().to_string();
                 if text.is_empty() {
-                    env.notify("No text found", "Nothing readable in the selection.", false);
+                    env.notify("No Text Found", "Nothing readable in the selection.", false);
                     return;
                 }
                 match clipboard::set_text(&text) {
-                    Ok(()) => env.notify("Text copied", preview(&text, 140), false),
-                    Err(e) => env.notify("Could not copy text", format!("{e:#}"), true),
+                    Ok(()) => env.notify("Text Copied", preview(&text, 140), false),
+                    Err(e) => env.notify("Could Not Copy Text", format!("{e:#}"), true),
                 }
             }
-            Err(e) => env.notify("Text recognition failed", format!("{e:#}"), true),
+            Err(e) => env.notify("Text Recognition Failed", format!("{e:#}"), true),
         }
     });
 }
@@ -417,88 +474,98 @@ pub const SCROLL_STOP: u8 = 1;
 pub const SCROLL_CANCEL: u8 = 2;
 
 pub fn scroll_capture(env: &Env, rect: PxRect, source: SourceInfo, control: Arc<AtomicU8>) {
-    job(env, "scroll-capture", move |env| {
-        let cfg = &env.cfg.capture;
-        let mut stitcher = Stitcher::new(StitchOptions {
-            max_height: cfg.scroll_max_height.max(500),
-            ..StitchOptions::default()
-        });
-        let delay = Duration::from_millis(cfg.scroll_delay_ms.clamp(30, 2000) as u64);
-        let center = capture_ops::center(rect);
-        let scale = capture_ops::scale_at(rect);
-        // About half a region per step to keep a healthy overlap for matching.
-        let mut notches = ((rect.h as f32 / scale) / 220.0).round().clamp(1.0, 8.0) as i32;
-        let mut failed = false;
-        let mut error: Option<String> = None;
+    job_recovering(
+        env,
+        "scroll-capture",
+        move |env| {
+            let cfg = &env.cfg.capture;
+            let mut stitcher = Stitcher::new(StitchOptions {
+                max_height: cfg.scroll_max_height.max(500),
+                ..StitchOptions::default()
+            });
+            let delay = Duration::from_millis(cfg.scroll_delay_ms.clamp(30, 2000) as u64);
+            let center = capture_ops::center(rect);
+            let scale = capture_ops::scale_at(rect);
+            // About half a region per step to keep a healthy overlap for matching.
+            let mut notches = ((rect.h as f32 / scale) / 220.0).round().clamp(1.0, 8.0) as i32;
+            let mut failed = false;
+            let mut error: Option<String> = None;
 
-        // Let the selection overlay and HUD finish disappearing before the first frame.
-        std::thread::sleep(Duration::from_millis(250));
-        for _ in 0..800 {
-            match control.load(Ordering::Relaxed) {
-                SCROLL_CANCEL => {
-                    env.send(WorkerMsg::ScrollDone {
-                        result: Err("cancelled".into()),
-                        cancelled: true,
-                        partial: false,
-                        source,
-                    });
-                    return;
+            // Let the selection overlay and HUD finish disappearing before the first frame.
+            std::thread::sleep(Duration::from_millis(250));
+            for _ in 0..800 {
+                match control.load(Ordering::Relaxed) {
+                    SCROLL_CANCEL => {
+                        env.send(WorkerMsg::ScrollDone {
+                            result: Err("cancelled".into()),
+                            cancelled: true,
+                            partial: false,
+                            source,
+                        });
+                        return;
+                    }
+                    SCROLL_STOP => break,
+                    _ => {}
                 }
-                SCROLL_STOP => break,
-                _ => {}
-            }
-            let frame = match capture::capture_rect(rect, false) {
-                Ok(f) => f,
-                Err(e) => {
-                    error = Some(format!("{e:#}"));
-                    break;
-                }
-            };
-            let first = stitcher.frames() == 0;
-            match stitcher.push(&frame) {
-                PushResult::Appended { added_rows } => {
-                    if !first {
-                        let ratio = added_rows as f32 / frame.height.max(1) as f32;
-                        if ratio > 0.85 {
-                            notches = (notches - 1).max(1);
-                        } else if ratio < 0.3 && notches < 12 {
-                            notches += 1;
+                let frame = match capture::capture_rect(rect, false) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        error = Some(format!("{e:#}"));
+                        break;
+                    }
+                };
+                let first = stitcher.frames() == 0;
+                match stitcher.push(&frame) {
+                    PushResult::Appended { added_rows } => {
+                        if !first {
+                            let ratio = added_rows as f32 / frame.height.max(1) as f32;
+                            if ratio > 0.85 {
+                                notches = (notches - 1).max(1);
+                            } else if ratio < 0.3 && notches < 12 {
+                                notches += 1;
+                            }
                         }
                     }
+                    PushResult::Unchanged => {}
+                    PushResult::End => break,
+                    PushResult::Failed => {
+                        failed = true;
+                        break;
+                    }
                 }
-                PushResult::Unchanged => {}
-                PushResult::End => break,
-                PushResult::Failed => {
-                    failed = true;
-                    break;
-                }
+                env.send(WorkerMsg::ScrollProgress {
+                    frames: stitcher.frames(),
+                    width: frame.width,
+                    height: stitcher.height(),
+                });
+                input::scroll_at(center, -notches);
+                std::thread::sleep(delay);
             }
-            env.send(WorkerMsg::ScrollProgress {
-                frames: stitcher.frames(),
-                width: frame.width,
-                height: stitcher.height(),
-            });
-            input::scroll_at(center, -notches);
-            std::thread::sleep(delay);
-        }
-        let frames = stitcher.frames();
-        if frames == 0 {
+            let frames = stitcher.frames();
+            if frames == 0 {
+                env.send(WorkerMsg::ScrollDone {
+                    result: Err(error.unwrap_or_else(|| "no frames were captured".into())),
+                    cancelled: false,
+                    partial: false,
+                    source,
+                });
+                return;
+            }
+            let img = stitcher.finish();
             env.send(WorkerMsg::ScrollDone {
-                result: Err(error.unwrap_or_else(|| "no frames were captured".into())),
+                result: Ok(img),
                 cancelled: false,
-                partial: false,
+                partial: failed || error.is_some(),
                 source,
             });
-            return;
-        }
-        let img = stitcher.finish();
-        env.send(WorkerMsg::ScrollDone {
-            result: Ok(img),
+        },
+        || WorkerMsg::ScrollDone {
+            result: Err("The scroll capture task crashed.".into()),
             cancelled: false,
-            partial: failed || error.is_some(),
-            source,
-        });
-    });
+            partial: false,
+            source: SourceInfo::default(),
+        },
+    );
 }
 
 // -------------------------------------------------------------------------- recording
@@ -513,21 +580,31 @@ pub fn temp_recording_path(history: &History) -> anyhow::Result<PathBuf> {
 }
 
 pub fn start_recorder(env: &Env, opts: RecordOptions) {
-    job(env, "recorder-start", move |env| {
-        let r = Recorder::start(opts).map_err(|e| format!("{e:#}"));
-        env.send(WorkerMsg::RecorderStarted(r));
-    });
+    job_recovering(
+        env,
+        "recorder-start",
+        move |env| {
+            let r = Recorder::start(opts).map_err(|e| format!("{e:#}"));
+            env.send(WorkerMsg::RecorderStarted(r));
+        },
+        || WorkerMsg::RecorderStarted(Err("The recorder task crashed.".into())),
+    );
 }
 
 pub fn stop_recorder(env: &Env, rec: Recorder) {
-    job(env, "recorder-stop", move |env| {
-        let r = rec.stop().map_err(|e| format!("{e:#}")).and_then(|res| {
-            stinkshot_record::probe(&res.path)
-                .map(|info| (res, info))
-                .map_err(|e| format!("{e:#}"))
-        });
-        env.send(WorkerMsg::RecordStopped(r));
-    });
+    job_recovering(
+        env,
+        "recorder-stop",
+        move |env| {
+            let r = rec.stop().map_err(|e| format!("{e:#}")).and_then(|res| {
+                stinkshot_record::probe(&res.path)
+                    .map(|info| (res, info))
+                    .map_err(|e| format!("{e:#}"))
+            });
+            env.send(WorkerMsg::RecordStopped(r));
+        },
+        || WorkerMsg::RecordStopped(Err("The recorder task crashed.".into())),
+    );
 }
 
 pub fn cancel_recorder(env: &Env, rec: Recorder) {
@@ -735,7 +812,7 @@ pub fn copy_item_image(env: &Env, id: ItemId) {
         };
         match run() {
             Ok(title) => env.notify(title, "Ready to paste.", false),
-            Err(e) => env.notify("Could not copy", format!("{e:#}"), true),
+            Err(e) => env.notify("Could Not Copy", format!("{e:#}"), true),
         }
     });
 }
@@ -770,13 +847,13 @@ pub fn copy_item_text(env: &Env, id: ItemId) {
             Ok(Some(text))
         };
         match run() {
-            Ok(Some(t)) => env.notify("Text copied", preview(&t, 140), false),
+            Ok(Some(t)) => env.notify("Text Copied", preview(&t, 140), false),
             Ok(None) => env.notify(
-                "No text found",
+                "No Text Found",
                 "This item has no recognizable text.",
                 false,
             ),
-            Err(e) => env.notify("Could not copy text", format!("{e:#}"), true),
+            Err(e) => env.notify("Could Not Copy Text", format!("{e:#}"), true),
         }
     });
 }
@@ -804,7 +881,7 @@ pub fn pin_item(env: &Env, id: ItemId) {
                 title,
                 item: id,
             }),
-            Err(e) => env.notify("Could not pin", format!("{e:#}"), true),
+            Err(e) => env.notify("Could Not Pin", format!("{e:#}"), true),
         }
     });
 }
@@ -840,7 +917,7 @@ pub fn edit_item(env: &Env, id: ItemId) {
                     source,
                 });
             }
-            Err(e) => env.notify("Could not open for editing", format!("{e:#}"), true),
+            Err(e) => env.notify("Could Not Open for Editing", format!("{e:#}"), true),
         }
     });
 }
@@ -848,9 +925,43 @@ pub fn edit_item(env: &Env, id: ItemId) {
 pub fn delete_item(env: &Env, id: ItemId) {
     job(env, "delete-item", move |env| {
         if let Err(e) = env.history.delete(id) {
-            env.notify("Could not delete", format!("{e:#}"), true);
+            env.notify("Could Not Delete", format!("{e:#}"), true);
         }
         env.send(WorkerMsg::HistoryChanged);
+    });
+}
+
+/// Run a shell action on one history item off the UI thread (Explorer can take seconds).
+fn with_item_job(
+    env: &Env,
+    name: &'static str,
+    id: ItemId,
+    f: impl FnOnce(&Path) -> anyhow::Result<()> + Send + 'static,
+) {
+    job(env, name, move |env| match env.history.get(id) {
+        Ok(Some(meta)) => {
+            if let Err(e) = f(&meta.path) {
+                env.notify("Action Failed", format!("{e:#}"), true);
+            }
+        }
+        Ok(None) => env.notify("Item Not Found", "It may have been deleted.", true),
+        Err(e) => env.notify("History Error", format!("{e:#}"), true),
+    });
+}
+
+pub fn reveal_item(env: &Env, id: ItemId) {
+    with_item_job(env, "reveal-item", id, system::reveal_in_explorer);
+}
+
+pub fn open_item(env: &Env, id: ItemId) {
+    with_item_job(env, "open-item", id, system::open_path);
+}
+
+pub fn open_url(env: &Env, url: String) {
+    job(env, "open-url", move |env| {
+        if let Err(e) = system::open_path(Path::new(&url)) {
+            env.notify("Could Not Open the Page", format!("{e:#}"), true);
+        }
     });
 }
 

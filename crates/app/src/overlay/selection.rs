@@ -305,6 +305,7 @@ pub struct Mapping {
 }
 
 impl Mapping {
+    #[cfg(test)]
     pub fn to_local(self, p: (f32, f32)) -> (f32, f32) {
         (
             self.origin.0 + p.0 * self.scale,
@@ -317,6 +318,7 @@ impl Mapping {
             (p.1 - self.origin.1) / self.scale,
         )
     }
+    #[cfg(test)]
     pub fn len_to_local(&self, l: f32) -> f32 {
         l * self.scale
     }

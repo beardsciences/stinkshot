@@ -6,7 +6,6 @@
 //!
 //! This module is mounted from `toast.rs` with `#[path]` so `main.rs` does not need to change;
 //! other files reach it as `crate::toast::ui_common`.
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -30,11 +29,6 @@ pub fn pal(shared: &Shared) -> &'static Palette {
 
 pub fn accent(shared: &Shared) -> Color32 {
     theme::rgba(shared.accent)
-}
-
-/// Accent at 18% alpha (the design's `accent + '2e'` soft fill).
-pub fn accent_soft(c: Color32) -> Color32 {
-    with_alpha(c, 0x2e)
 }
 
 pub fn with_alpha(c: Color32, a: u8) -> Color32 {
@@ -206,6 +200,7 @@ impl<T> Debounce<T> {
             _ => None,
         }
     }
+    #[cfg(test)]
     pub fn is_pending(&self) -> bool {
         self.pending.is_some()
     }
@@ -266,9 +261,11 @@ impl<K: Eq + Hash + Clone, V> Lru<K, V> {
     pub fn len(&self) -> usize {
         self.map.len()
     }
+    #[allow(dead_code)] // std-style companion of `len`
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
+    #[cfg(test)]
     pub fn contains(&self, k: &K) -> bool {
         self.map.contains_key(k)
     }
@@ -293,9 +290,6 @@ impl<K: Eq + Hash + Clone, V> Lru<K, V> {
             .min_by_key(|(_, (_, t))| *t)
             .map(|(k, _)| k.clone())?;
         self.map.remove(&stalest).map(|(v, _)| (stalest, v))
-    }
-    pub fn clear(&mut self) {
-        self.map.clear();
     }
 }
 
@@ -647,10 +641,7 @@ mod sys {
 }
 
 pub const VK_ESCAPE: u16 = 0x1B;
-pub const VK_RETURN: u16 = 0x0D;
 pub const VK_SNAPSHOT: u16 = 0x2C;
-pub const VK_PAUSE: u16 = 0x13;
-pub const VK_SCROLL: u16 = 0x91;
 pub const VK_LWIN: u16 = 0x5B;
 pub const VK_RWIN: u16 = 0x5C;
 

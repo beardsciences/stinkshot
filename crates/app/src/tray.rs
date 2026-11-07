@@ -90,10 +90,10 @@ impl Tray {
         let spec: [MenuSpec; 8] = [
             ("region", "Region", |c| &c.hotkeys.region),
             ("window", "Window", |c| &c.hotkeys.window),
-            ("full", "Full screen", |c| &c.hotkeys.fullscreen),
+            ("full", "Full Screen", |c| &c.hotkeys.fullscreen),
             ("scroll", "Scrolling", |c| &c.hotkeys.scrolling),
-            ("ocr", "Copy text (OCR)", |c| &c.hotkeys.ocr),
-            ("repeat", "Repeat last region", |c| {
+            ("ocr", "Copy Text (OCR)", |c| &c.hotkeys.ocr),
+            ("repeat", "Repeat Last Region", |c| {
                 &c.hotkeys.repeat_last_region
             }),
             ("rec_mp4", "Record MP4", |c| &c.hotkeys.record_mp4),

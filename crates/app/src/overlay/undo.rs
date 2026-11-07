@@ -29,11 +29,19 @@ impl UndoStack {
         self.future.clear();
     }
 
+    #[cfg(test)]
     pub fn can_undo(&self) -> bool {
         !self.past.is_empty()
     }
+    #[cfg(test)]
     pub fn can_redo(&self) -> bool {
         !self.future.is_empty()
+    }
+
+    #[cfg(test)]
+    pub fn clear(&mut self) {
+        self.past.clear();
+        self.future.clear();
     }
 
     /// Undo: returns the document to restore, remembering `current` for redo.
@@ -56,11 +64,6 @@ impl UndoStack {
             .iter_mut()
             .chain(self.future.iter_mut())
             .for_each(&mut f);
-    }
-
-    pub fn clear(&mut self) {
-        self.past.clear();
-        self.future.clear();
     }
 }
 

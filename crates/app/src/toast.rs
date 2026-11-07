@@ -2,7 +2,6 @@
 //! monitor with the cursor, above the taskbar; topmost, no activation, excluded from
 //! capture, auto-dismiss after config.general.toast_seconds (paused while hovered); click
 //! on the thumbnail = Edit. Actions: Edit, Pin, Copy text, Folder (design order).
-#![allow(dead_code)]
 
 #[path = "ui_common.rs"]
 pub mod ui_common;
@@ -67,7 +66,7 @@ impl ToastAction {
         match self {
             ToastAction::Edit => "Edit",
             ToastAction::Pin => "Pin",
-            ToastAction::CopyText => "Copy text",
+            ToastAction::CopyText => "Copy Text",
             ToastAction::Folder => "Folder",
             ToastAction::Play => "Play",
         }
@@ -174,18 +173,6 @@ impl Toast {
         };
         t.rect = t.compute_rect();
         t
-    }
-
-    /// Re-stack after a toast below this one went away.
-    pub fn set_stack_index(&mut self, index: usize) {
-        if index == self.stack_index {
-            return;
-        }
-        self.stack_index = index;
-        self.rect = self.compute_rect();
-        if let Some(h) = self.hwnd {
-            stinkshot_platform::window_util::set_rect(h, self.rect);
-        }
     }
 
     fn compute_rect(&self) -> PxRect {

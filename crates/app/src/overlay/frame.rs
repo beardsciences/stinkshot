@@ -449,8 +449,6 @@ impl Overlay {
                 tool: self.tool,
                 color: self.color,
                 width: self.width,
-                palette: &self.palette,
-                popup: self.popup,
             };
             let lay = ui::tool_bar(ctx, Pos2::new(tx * k, ty * k), &info, pal, accent, actions);
             let act_rect = ui::action_bar(ctx, Pos2::new(ax * k, ay * k), pal, actions);

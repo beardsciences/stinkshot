@@ -15,14 +15,12 @@ use stinkshot_core::{PxRect, Rgba};
 pub const TILE: u32 = 2048;
 
 pub struct RenderJob {
-    pub gen_id: u64,
     pub base: Arc<Rgba>,
     pub doc: Doc,
     pub fonts: Arc<Fonts>,
 }
 
 pub struct RenderResult {
-    pub gen_id: u64,
     pub doc: Doc,
     /// None if the renderer failed (the error is logged); the UI keeps its previous frame.
     pub image: Option<Rgba>,
@@ -33,7 +31,6 @@ pub struct RenderResult {
 pub struct Renderer {
     tx: Sender<RenderJob>,
     rx: Receiver<RenderResult>,
-    next_gen: u64,
 }
 
 impl Renderer {
@@ -51,7 +48,6 @@ impl Renderer {
                     let image = flatten(&job.base, &job.doc, &job.fonts);
                     if res_tx
                         .send(RenderResult {
-                            gen_id: job.gen_id,
                             doc: job.doc,
                             image,
                         })
@@ -65,30 +61,14 @@ impl Renderer {
         if let Err(e) = spawned {
             log::error!("overlay: could not start render worker: {e}");
         }
-        Self {
-            tx,
-            rx,
-            next_gen: 1,
-        }
+        Self { tx, rx }
     }
 
-    /// Queue a render; returns its generation id.
-    pub fn submit(&mut self, base: Arc<Rgba>, doc: Doc, fonts: Arc<Fonts>) -> u64 {
-        let gen_id = self.next_gen;
-        self.next_gen += 1;
-        if self
-            .tx
-            .send(RenderJob {
-                gen_id,
-                base,
-                doc,
-                fonts,
-            })
-            .is_err()
-        {
+    /// Queue a render; only the newest queued job is rendered.
+    pub fn submit(&mut self, base: Arc<Rgba>, doc: Doc, fonts: Arc<Fonts>) {
+        if self.tx.send(RenderJob { base, doc, fonts }).is_err() {
             log::error!("overlay: render worker is gone");
         }
-        gen_id
     }
 
     /// Newest finished result, if any.
@@ -114,8 +94,6 @@ pub fn flatten(base: &Rgba, doc: &Doc, fonts: &Fonts) -> Option<Rgba> {
 
 /// An image uploaded as a grid of <= TILE x TILE textures.
 pub struct TiledTexture {
-    pub width: u32,
-    pub height: u32,
     tiles: Vec<(PxRect, TextureHandle)>,
 }
 
@@ -168,11 +146,7 @@ impl TiledTexture {
             };
             tiles.push((r, ctx.load_texture(format!("{name}-{i}"), ci, opts)));
         }
-        Self {
-            width: img.width,
-            height: img.height,
-            tiles,
-        }
+        Self { tiles }
     }
 
     /// Draw the whole image with its top-left at `origin` (points) and `px_to_pt` points
@@ -182,34 +156,6 @@ impl TiledTexture {
         for (r, tex) in &self.tiles {
             let min = origin + Vec2::new(r.x as f32, r.y as f32) * px_to_pt;
             let max = min + Vec2::new(r.w as f32, r.h as f32) * px_to_pt;
-            painter.image(tex.id(), Rect::from_min_max(min, max), uv, tint);
-        }
-    }
-
-    /// Draw only image-pixel sub-rect `src` into points rect starting at `dst_min`
-    /// scaled by `px_to_pt` (used to paint un-dimmed frozen pixels inside the selection).
-    pub fn paint_region(
-        &self,
-        painter: &egui::Painter,
-        src: PxRect,
-        dst_min: Pos2,
-        px_to_pt: f32,
-        tint: Color32,
-    ) {
-        for (r, tex) in &self.tiles {
-            let Some(i) = r.intersect(&src) else { continue };
-            let uv = Rect::from_min_max(
-                Pos2::new(
-                    (i.x - r.x) as f32 / r.w as f32,
-                    (i.y - r.y) as f32 / r.h as f32,
-                ),
-                Pos2::new(
-                    (i.right() - r.x) as f32 / r.w as f32,
-                    (i.bottom() - r.y) as f32 / r.h as f32,
-                ),
-            );
-            let min = dst_min + Vec2::new((i.x - src.x) as f32, (i.y - src.y) as f32) * px_to_pt;
-            let max = min + Vec2::new(i.w as f32, i.h as f32) * px_to_pt;
             painter.image(tex.id(), Rect::from_min_max(min, max), uv, tint);
         }
     }

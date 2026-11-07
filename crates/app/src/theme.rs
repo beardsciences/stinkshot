@@ -1,4 +1,4 @@
-//! Design tokens from docs/design (Claude Design canvas "StinkShot UI"). Every surface
+//! Design tokens from docs/design (StinkShot UI mockups). Every surface
 //! uses these, never ad-hoc colors. Dark is primary; light values mirror Windows 11.
 //!
 //! Font: Segoe UI Variable (from `Shared.fonts.regular_bytes`), registered with egui by
@@ -22,7 +22,6 @@ pub struct Palette {
     pub overlay_dim: Color32, // area outside the selection
     pub danger: Color32,      // record dot, stop button
     pub on_accent: Color32,   // text on accent fills
-    pub annotation_default: Color32,
 }
 
 pub const DARK: Palette = Palette {
@@ -38,7 +37,6 @@ pub const DARK: Palette = Palette {
     overlay_dim: Color32::from_rgba_premultiplied(0, 0, 0, 148),
     danger: Color32::from_rgb(0xff, 0x5a, 0x52),
     on_accent: Color32::from_rgb(0x0d, 0x1f, 0x08),
-    annotation_default: Color32::from_rgb(0xff, 0x8a, 0x3d),
 };
 
 pub const LIGHT: Palette = Palette {
@@ -54,7 +52,6 @@ pub const LIGHT: Palette = Palette {
     overlay_dim: Color32::from_rgba_premultiplied(0, 0, 0, 148),
     danger: Color32::from_rgb(0xc4, 0x2b, 0x1c),
     on_accent: Color32::from_rgb(0x0d, 0x1f, 0x08),
-    annotation_default: Color32::from_rgb(0xff, 0x8a, 0x3d),
 };
 
 pub const DEFAULT_ACCENT: Color32 = Color32::from_rgb(0x7f, 0xd3, 0x6a);
@@ -548,11 +545,8 @@ pub enum Icon {
     Save,
     Close,
     Copy,
-    Undo,
-    Redo,
     Pause,
     Play,
-    Stop,
     Mic,
     Speaker,
     Webcam,
@@ -562,7 +556,6 @@ pub enum Icon {
     StarFilled,
     Folder,
     Trash,
-    Settings,
     History,
     Shield,
 }
@@ -580,7 +573,6 @@ mod icons {
         /// Filled SVG path (no stroke besides a hairline to smooth edges).
         Fill(&'static str),
         Circle(f32, f32, f32),
-        FillCircle(f32, f32, f32),
         Ellipse(f32, f32, f32, f32),
         Rect(f32, f32, f32, f32, f32),
         FillRect(f32, f32, f32, f32, f32),
@@ -619,14 +611,11 @@ mod icons {
             Icon::Save => &[Path("M5 4h11l3 3v13H5z M8 4v5h7V4 M8 20v-6h8v6")],
             Icon::Close => &[Path("M6 6l12 12M18 6L6 18")],
             Icon::Copy => &[Rect(8.0, 8.0, 12.0, 12.0, 2.0), Path("M4 16V4h12")],
-            Icon::Undo => &[Path("M9 5L4 10l5 5M4 10h10a5 5 0 010 10h-4")],
-            Icon::Redo => &[Path("M15 5l5 5-5 5M20 10H10a5 5 0 000 10h4")],
             Icon::Pause => &[
                 FillRect(6.0, 5.0, 4.0, 14.0, 1.0),
                 FillRect(14.0, 5.0, 4.0, 14.0, 1.0),
             ],
             Icon::Play => &[Fill("M7 4l13 8-13 8z")],
-            Icon::Stop => &[FillRect(6.0, 6.0, 12.0, 12.0, 2.0)],
             Icon::Mic => &[
                 Rect(9.0, 3.0, 6.0, 11.0, 3.0),
                 Path("M5 11a7 7 0 0014 0M12 18v3"),
@@ -645,12 +634,6 @@ mod icons {
                 "M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z",
             )],
             Icon::Trash => &[Path("M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13M10 11v6M14 11v6")],
-            Icon::Settings => &[
-                Path("M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1"),
-                Circle(15.0, 7.0, 2.0),
-                Circle(9.0, 12.0, 2.0),
-                Circle(17.0, 17.0, 2.0),
-            ],
             Icon::History => &[Circle(12.0, 12.0, 8.0), Path("M12 7v5l3 2")],
             Icon::Shield => &[
                 Path("M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"),
@@ -699,9 +682,6 @@ mod icons {
                 }
                 Circle(cx, cy, r) => {
                     painter.circle_stroke(t(cx, cy), r * scale, stroke);
-                }
-                FillCircle(cx, cy, r) => {
-                    painter.circle_filled(t(cx, cy), r * scale, color);
                 }
                 Ellipse(cx, cy, rx, ry) => {
                     let pts: Vec<Pos2> = (0..48)
@@ -1091,11 +1071,8 @@ mod icons {
                 Save,
                 Close,
                 Copy,
-                Undo,
-                Redo,
                 Pause,
                 Play,
-                Stop,
                 Mic,
                 Speaker,
                 Webcam,
@@ -1105,7 +1082,6 @@ mod icons {
                 StarFilled,
                 Folder,
                 Trash,
-                Settings,
                 History,
                 Shield,
             ] {

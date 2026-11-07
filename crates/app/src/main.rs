@@ -20,10 +20,8 @@ mod pin;
 mod record_ui;
 mod settings_ui;
 mod shell;
-#[allow(dead_code)]
 mod state;
 mod sysutil;
-#[allow(dead_code)]
 mod theme;
 mod toast;
 mod tray;

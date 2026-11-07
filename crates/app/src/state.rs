@@ -45,10 +45,6 @@ pub enum Command {
     /// Re-open a history item in the overlay editor (annotations editable).
     EditItem(ItemId),
     PinItem(ItemId),
-    PinImage {
-        image: Rgba,
-        title: String,
-    },
     /// Overlay finished an image capture.
     CaptureDone(CaptureOutput),
     /// Overlay finished selecting a region for a non-image mode.
@@ -66,7 +62,6 @@ pub enum Command {
     RecordCancel,
     /// Trim window finished: save [start,end) as mp4 and/or gif.
     TrimDone {
-        source: std::path::PathBuf,
         start: std::time::Duration,
         end: std::time::Duration,
         as_gif: bool,
@@ -91,8 +86,6 @@ pub enum Command {
     Quit,
     /// Open a web page (the update release page) in the default browser.
     OpenUrl(String),
-    /// Settings window: pause/resume global hotkeys while it records a new key combo.
-    SetHotkeysSuspended(bool),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

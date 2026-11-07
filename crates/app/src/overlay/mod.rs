@@ -26,7 +26,6 @@
 //! (egui widgets). This file owns the state machine.
 
 // The shell does not construct `Overlay` until integration; drop this allow then.
-#![allow(dead_code)]
 
 mod hover;
 mod paint;

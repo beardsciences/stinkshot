@@ -132,6 +132,8 @@ fn reveal_blocking(path: &Path) -> anyhow::Result<()> {
 
 /// ShellExecute "open".
 pub fn open_path(path: &Path) -> anyhow::Result<()> {
+    // Callers may be fresh worker threads; ShellExecute wants a COM apartment.
+    crate::util::ensure_com();
     let w = wide_os(path.as_os_str());
     // SAFETY: `w` is NUL-terminated and outlives the call.
     let r: HINSTANCE = unsafe {

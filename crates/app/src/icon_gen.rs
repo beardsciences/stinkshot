@@ -2,8 +2,6 @@
 //! Pure std so `build.rs` can include it (for the exe .ico) and the tray can reuse it at
 //! runtime (16/20/24/32 px depending on DPI).
 
-#![allow(dead_code)]
-
 /// Straight-alpha RGBA8, `size * size * 4` bytes.
 pub fn render_rgba(size: u32, accent: [u8; 3]) -> Vec<u8> {
     let n = size as usize;
@@ -71,6 +69,7 @@ fn in_mark(x: f32, y: f32) -> bool {
 }
 
 /// Smallest tray size that is not blurry at the given system DPI.
+#[allow(dead_code)] // the build script includes this file but only the binary draws the tray
 pub fn tray_size_for_dpi(dpi: u32) -> u32 {
     let want = (16 * dpi.max(96)).div_ceil(96);
     [16u32, 20, 24, 32]
@@ -80,6 +79,7 @@ pub fn tray_size_for_dpi(dpi: u32) -> u32 {
 }
 
 /// A multi-resolution .ico (BMP/DIB frames, no PNG dependency).
+#[allow(dead_code)] // used by build.rs (embedded .exe icon), not by the binary
 pub fn ico_bytes(accent: [u8; 3]) -> Vec<u8> {
     let sizes: [u32; 6] = [16, 24, 32, 48, 64, 256];
     let frames: Vec<Vec<u8>> = sizes.iter().map(|s| dib_frame(*s, accent)).collect();
@@ -105,6 +105,7 @@ pub fn ico_bytes(accent: [u8; 3]) -> Vec<u8> {
     out
 }
 
+#[allow(dead_code)] // used by build.rs through ico_bytes
 fn dib_frame(size: u32, accent: [u8; 3]) -> Vec<u8> {
     let rgba = render_rgba(size, accent);
     let n = size as usize;

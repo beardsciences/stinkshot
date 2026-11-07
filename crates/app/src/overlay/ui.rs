@@ -56,12 +56,10 @@ pub const TOOL_GROUPS: [&[(Tool, Icon)]; 2] = [
     ],
 ];
 
-pub struct BarInfo<'a> {
+pub struct BarInfo {
     pub tool: Tool,
     pub color: [u8; 4],
     pub width: f32,
-    pub palette: &'a [[u8; 4]],
-    pub popup: Option<Popup>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -191,17 +189,17 @@ pub fn action_bar(ctx: &Context, pos: Pos2, pal: &Palette, out: &mut Vec<UiActio
             bar_frame(pal).show(ui, |ui| {
                 ui.spacing_mut().item_spacing = Vec2::new(2.0, 0.0);
                 ui.horizontal(|ui| {
-                    if theme::widgets::icon_button(ui, Icon::Ocr, "Copy text (OCR)  Ctrl+T", false)
+                    if theme::widgets::icon_button(ui, Icon::Ocr, "Copy Text (OCR)  Ctrl+T", false)
                         .clicked()
                     {
                         out.push(UiAction::Finish(FinishAction::CopyText));
                     }
-                    if theme::widgets::icon_button(ui, Icon::Pin, "Pin to screen  Ctrl+P", false)
+                    if theme::widgets::icon_button(ui, Icon::Pin, "Pin to Screen  Ctrl+P", false)
                         .clicked()
                     {
                         out.push(UiAction::Finish(FinishAction::Pin));
                     }
-                    if theme::widgets::icon_button(ui, Icon::Save, "Save as  Ctrl+S", false)
+                    if theme::widgets::icon_button(ui, Icon::Save, "Save As  Ctrl+S", false)
                         .clicked()
                     {
                         out.push(UiAction::Finish(FinishAction::SaveAs));

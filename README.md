@@ -77,6 +77,19 @@ file extension (png, jpg, webp). The others are handy for scripts, AutoHotkey an
 - Captures: the history folder set in Settings. Annotation data lives beside each image in a
   `.stinkshot` subfolder, together with the search index and thumbnails.
 
+## Privacy
+
+Everything stays on your PC; the only network call is the optional update check, which is off by
+default.
+
+Redaction (Blur, Pixelate and Redact boxes) destroys the pixels in the exported image. However,
+with Keep Editable Originals on (the default), StinkShot also keeps the full, unannotated original
+of every annotated capture in `<history folder>\.stinkshot\edit\<file name>.base.png` so you can
+re-edit it later. That original still contains whatever you redacted. If you share or sync your
+history folder, or copy the `.stinkshot` folder, you share those originals too. To prevent this,
+turn off Settings > History > Keep Editable Originals (existing originals can be deleted by
+removing the `edit` folder), and never share the `.stinkshot` folder.
+
 ## Build
 
 Requirements: Windows 10 or 11, Rust 1.95 or newer (MSVC toolchain), Visual Studio Build Tools with

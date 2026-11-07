@@ -78,10 +78,23 @@ pub fn capture_window_image(cfg: &Config, win: &WinInfo, cursor: bool) -> anyhow
     })
 }
 
-/// The foreground window, skipping our own overlay/toast windows (the platform enumeration
-/// already excludes this process, so `foreground()` falls back to the top visible window).
+/// The window a "capture the current window" request means: the foreground window when it
+/// is a real capture target, otherwise the topmost visible window. After a tray menu click
+/// the foreground is usually the tray host or the taskbar, which are never targets.
 pub fn target_window() -> Option<WinInfo> {
-    windows_enum::foreground().or_else(|| windows_enum::visible_windows().into_iter().next())
+    target_from(&windows_enum::visible_windows())
+}
+
+/// `target_window` over an existing Z-ordered snapshot of `visible_windows()` (which
+/// already excludes this process and cloaked windows).
+pub fn target_from(windows: &[WinInfo]) -> Option<WinInfo> {
+    let usable = |w: &&WinInfo| w.process != "taskbar";
+    if let Some(fg) = windows_enum::foreground()
+        && let Some(w) = windows.iter().filter(usable).find(|w| w.hwnd == fg.hwnd)
+    {
+        return Some(w.clone());
+    }
+    windows.iter().find(usable).cloned()
 }
 
 /// Pixels of `rect` (virtual-desktop coords) out of a frozen desktop snapshot.

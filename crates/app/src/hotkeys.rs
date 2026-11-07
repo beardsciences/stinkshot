@@ -43,10 +43,10 @@ impl Action {
         match self {
             Action::Region => "Region",
             Action::Window => "Window",
-            Action::Fullscreen => "Full screen",
+            Action::Fullscreen => "Full Screen",
             Action::Scrolling => "Scrolling",
-            Action::Ocr => "Copy text (OCR)",
-            Action::RepeatLast => "Repeat last region",
+            Action::Ocr => "Copy Text (OCR)",
+            Action::RepeatLast => "Repeat Last Region",
             Action::RecordMp4 => "Record MP4",
             Action::RecordGif => "Record GIF",
         }
@@ -194,6 +194,8 @@ impl Hotkeys {
             }
         }
         self.actions = claimed;
+        // Everything registered above is live again, whatever the previous state was.
+        self.suspended = false;
         errors
     }
 
@@ -222,9 +224,40 @@ impl Hotkeys {
         out
     }
 
-    /// Pause all hotkeys (while the settings window is capturing a new combo).
+    /// Pause all hotkeys (while the settings window is capturing a new combo). The combos
+    /// are unregistered from Windows, not just ignored: RegisterHotKey swallows the
+    /// keystroke before any window sees it, so the settings window could never record a
+    /// combination that is already bound. Resuming registers them again.
     pub fn set_suspended(&mut self, suspended: bool) {
+        if self.suspended == suspended {
+            return;
+        }
         self.suspended = suspended;
+        let Some(m) = &self.manager else { return };
+        if suspended {
+            for hk in &self.registered {
+                if let Err(e) = m.unregister(*hk) {
+                    log::debug!("suspend: unregister {hk}: {e}");
+                }
+            }
+        } else {
+            let mut lost = Vec::new();
+            self.registered.retain(|hk| match m.register(*hk) {
+                Ok(()) => true,
+                Err(e) => {
+                    log::warn!("could not re-register hotkey {hk}: {e}");
+                    lost.push(hk.id());
+                    false
+                }
+            });
+            for id in lost {
+                self.actions.remove(&id);
+            }
+        }
+    }
+
+    pub fn is_suspended(&self) -> bool {
+        self.suspended
     }
 
     /// Unregister everything and give PrintScreen back to Windows. Call on quit.

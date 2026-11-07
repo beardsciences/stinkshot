@@ -2,7 +2,7 @@
 
 Read `docs/BRIEF.md` first (what and why). Visual spec: `docs/design/*.dc.html` (HTML mockups
 of every surface; colors/sizes there are the source of truth, mirrored in
-`crates/app/src/theme.rs`). Live canvas: https://claude.ai/artifact/5ktKSQNhG3DqYQVe4Dgs7j
+`crates/app/src/theme.rs`).
 
 ## Workspace
 

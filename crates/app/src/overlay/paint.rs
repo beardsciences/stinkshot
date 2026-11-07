@@ -6,7 +6,7 @@ use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape as EShape, Stroke
 use stinkshot_core::annotate::{Shape, ShapeKind};
 use stinkshot_core::{PtF, RectF, Rgba};
 
-use super::hover::{contrast_text, hex_string};
+use super::hover::contrast_text;
 use super::selection::{FRect, Handle8, handle_pos};
 use super::shapes::{self, ShapeHandle};
 
@@ -428,10 +428,6 @@ pub fn paint_loupe(
         StrokeKind::Inside,
     );
     sample(img, cx, cy)
-}
-
-pub fn hex_of(c: [u8; 3]) -> String {
-    hex_string(c)
 }
 
 #[cfg(test)]

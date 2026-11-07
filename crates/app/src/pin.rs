@@ -6,7 +6,6 @@
 //!
 //! The window is transparent (rounded corners + opacity are painted by egui), so the
 //! shell's `App::clear_color` must return fully transparent for the pin viewports.
-#![allow(dead_code)]
 
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
