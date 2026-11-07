@@ -16,6 +16,7 @@ mod history_ui;
 mod hotkeys;
 mod icon_gen;
 mod logger;
+mod logo_anim;
 mod overlay;
 mod pin;
 mod record_ui;

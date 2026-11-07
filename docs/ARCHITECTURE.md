@@ -13,9 +13,10 @@ of every surface; colors/sizes there are the source of truth, mirrored in
 | `stinkshot-history` | crates/history | Folder-of-files history + SQLite (bundled, FTS5) index, retention, thumbnails. Unit tested with temp dirs. |
 | `stinkshot-platform` | crates/platform | Windows APIs via `windows` 0.62: monitors/DPI, DXGI/GDI freeze, WGC window capture, window enumeration, UIA element snapping, clipboard, Windows.Media.Ocr, SendInput scroll, LL input hooks, registry (autostart, PrintScreen takeover), single instance + IPC, window helpers (Mica, topmost, exclude-from-capture). |
 | `stinkshot-record` | crates/record | WGC capture -> Media Foundation H.264 (hardware MFT preferred) + AAC; WASAPI loopback + mic mix; webcam bubble; click/key overlay; pause/resume; probe/thumbnails/trim; MP4 -> GIF (imagequant). |
+| `stinkshot-logo` | crates/logo | Pure std logo renderer (ray-marched green gel orb): exe icon and tray bitmaps at build time (app `build.rs`), About page animation frames and particle field at runtime. Optimized even in dev builds. |
 | `stinkshot` | crates/app | eframe/egui 0.37 app: shell (tray, hotkeys, CLI, IPC, workers, command routing), overlay editor, toast, pin, history, settings, recording HUDs, update check. |
 
-Dependency direction: core <- stitch, history, platform <- record <- app. Never upward.
+Dependency direction: core <- stitch, history, platform <- record <- app (logo <- app, standalone). Never upward.
 
 ## Fixed contracts
 

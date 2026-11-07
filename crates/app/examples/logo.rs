@@ -1,8 +1,9 @@
-//! Exports the logo PNGs: `cargo run -p stinkshot --example logo`.
+//! Exports the logo PNGs: `cargo run -p stinkshot --example logo [-- <gif path>]`.
 //!
-//! Writes docs/logo-256.png, the concept comparison sheets in docs/notes/logo/ and the
-//! tray animation / recording badge strips. The shipped logo is concept A ("Puff"), drawn by
-//! `src/icon_gen.rs`; concepts B and C are composed here on top of it for comparison only.
+//! Writes docs/logo-256.png and, in docs/notes/logo/, the icon size sheet, the tray sizes
+//! and capture animation on light and dark taskbars, and a strip of the About page
+//! animation (orb frames with the particle field composited the way `logo_anim` paints
+//! it). With a path argument it also writes an animated GIF of the About loop there.
 
 #[allow(dead_code)]
 #[path = "../src/icon_gen.rs"]
@@ -10,12 +11,16 @@ mod icon_gen;
 
 use std::path::{Path, PathBuf};
 
-use icon_gen::{ANIM, Pose, render_pose, render_rgba};
+use icon_gen::{ANIM, DEFAULT_ACCENT, Pose, render_pose, render_rgba};
+use stinkshot_logo::{
+    ABOUT_HALF, ORB_R, Opts, mote_alpha, mote_layers, motes, render, render_icon,
+};
 
-const ACCENT: [u8; 3] = [0x7f, 0xd3, 0x6a];
+/// (width, height, straight RGBA8).
+type Img = (u32, u32, Vec<u8>);
 
-type Img = (u32, Vec<u8>);
-type Concept = fn(u32) -> Img;
+const LIGHT: [u8; 3] = [0xf3, 0xf3, 0xf3];
+const DARK: [u8; 3] = [0x20, 0x20, 0x20];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -23,297 +28,289 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let notes = docs.join("notes").join("logo");
     std::fs::create_dir_all(&notes)?;
 
-    save(&docs.join("logo-256.png"), &(256, render_rgba(256, ACCENT)))?;
+    let sq = |s: u32, px: Vec<u8>| (s, s, px);
+    save(&docs.join("logo-256.png"), &sq(256, render_icon(256)))?;
 
-    let concepts: [(&str, Concept); 3] = [
-        ("a-puff", concept_a),
-        ("b-tile", concept_b),
-        ("c-lens", concept_c),
-    ];
-    for (name, f) in concepts {
-        let sheet = sheet(&[f(256), f(32), f(16)]);
-        save(&notes.join(format!("concept-{name}.png")), &sheet)?;
-    }
+    // Every shipped size, 1:1 and (below 64) zoomed, on light and dark.
+    let sizes = [256u32, 128, 64, 48, 32, 24, 20, 16];
+    let icons: Vec<Img> = sizes.iter().map(|s| sq(*s, render_icon(*s))).collect();
+    save(&notes.join("icon-sizes.png"), &sheet(&icons, 256))?;
 
-    // Tray sizes of the chosen logo, on light and dark taskbar colors, 1:1 and 4x zoomed.
-    let sizes = [16u32, 20, 24, 32];
-    let tray: Vec<Img> = sizes
+    // Tray sizes as the app shows them (embedded bitmaps), 1:1 and 4x.
+    let tray: Vec<Img> = [16u32, 20, 24, 32]
         .iter()
-        .map(|s| (*s, render_rgba(*s, ACCENT)))
+        .map(|s| sq(*s, render_rgba(*s, DEFAULT_ACCENT)))
         .collect();
     save(&notes.join("tray-sizes.png"), &taskbar_sheet(&tray))?;
 
     // Capture animation (rest + 7 frames + rest) at 20 px, plus the recording badge.
-    let mut frames = vec![(20, render_rgba(20, ACCENT))];
-    frames.extend(ANIM.iter().map(|p| (20, render_pose(20, ACCENT, *p))));
-    frames.push((
-        20,
-        render_pose(
-            20,
-            ACCENT,
-            Pose {
-                recording: true,
-                ..Pose::REST
-            },
-        ),
-    ));
+    let mut frames = vec![sq(20, render_rgba(20, DEFAULT_ACCENT))];
+    frames.extend(
+        ANIM.iter()
+            .map(|p| sq(20, render_pose(20, DEFAULT_ACCENT, *p))),
+    );
+    frames.push(sq(20, render_rgba(20, DEFAULT_ACCENT)));
+    let rec = Pose {
+        recording: true,
+        ..Pose::REST
+    };
+    frames.push(sq(20, render_pose(20, DEFAULT_ACCENT, rec)));
     save(&notes.join("tray-animation.png"), &taskbar_sheet(&frames))?;
-    let mut big = vec![(96, render_rgba(96, ACCENT))];
-    big.extend(ANIM.iter().map(|p| (96, render_pose(96, ACCENT, *p))));
-    big.push((
-        96,
-        render_pose(
-            96,
-            ACCENT,
-            Pose {
-                recording: true,
-                ..Pose::REST
-            },
-        ),
-    ));
-    save(&notes.join("animation-96.png"), &sheet(&big))?;
+
+    // About animation strip: 8 phases on dark (top) and light (bottom).
+    let n = 8;
+    let (cw, ch) = (240u32, 200u32);
+    let mut strip = blank(cw * n, ch * 2, DARK);
+    fill(&mut strip, 0, ch, cw * n, ch, LIGHT);
+    for i in 0..n {
+        let t = i as f32 / n as f32;
+        let orb = render(&Opts::about(184, t, 2));
+        for (row, dark) in [(0u32, true), (1, false)] {
+            let time = t as f64 * 12.0;
+            let frame = about_frame(&orb, cw, ch, time, dark);
+            blit(&mut strip, &frame, (i * cw) as i32, (row * ch) as i32);
+        }
+    }
+    save(&notes.join("about-animation.png"), &strip)?;
+
+    if let Some(gif_path) = std::env::args().nth(1) {
+        write_gif(Path::new(&gif_path), cw, ch)?;
+        println!("wrote {gif_path}");
+    }
     println!("wrote {}", notes.display());
     Ok(())
 }
 
-// ------------------------------------------------------------------- concepts
+// ------------------------------------------------------------------- about frame
 
-/// A: free-standing glossy puff letting off gas and stink lines (the shipped logo).
-fn concept_a(size: u32) -> Img {
-    (size, render_rgba(size, ACCENT))
-}
-
-/// B: the puff on a dark rounded "app tile" with viewfinder corner brackets.
-fn concept_b(size: u32) -> Img {
-    let mut img = shape(size, |x, y| {
-        let d = rounded_rect(x, y, 0.5, 0.5, 0.47, 0.47, 0.2);
-        (d < 0.0).then(|| {
-            let t = y.clamp(0.0, 1.0);
-            (mix([0.17, 0.22, 0.19], [0.08, 0.11, 0.09], t), 1.0)
-        })
-    });
-    let br = shape(size, |x, y| {
-        let (w, len) = (0.035f32.max(1.2 / size as f32), 0.14);
-        let mut hit = false;
-        for (cx, cy, sx, sy) in [
-            (0.17, 0.17, 1.0, 1.0),
-            (0.83, 0.17, -1.0, 1.0),
-            (0.17, 0.83, 1.0, -1.0),
-            (0.83, 0.83, -1.0, -1.0),
-        ] {
-            let (dx, dy) = ((x - cx) * sx, (y - cy) * sy);
-            hit |= (0.0..len).contains(&dx) && (0.0..w).contains(&dy);
-            hit |= (0.0..len).contains(&dy) && (0.0..w).contains(&dx);
+/// One About page frame: back motes, bloom, the orb, the pulse, front motes, over the
+/// page colour. Mirrors `logo_anim::show` at 1x.
+fn about_frame(orb: &[u8], w: u32, h: u32, time: f64, dark: bool) -> Img {
+    let view = 184.0f32;
+    let mut img = blank(w, h, if dark { DARK } else { LIGHT });
+    let (ox, oy) = ((w as f32 - view) / 2.0, (h as f32 - view) / 2.0);
+    let ms = motes(time, ABOUT_HALF);
+    let coverage = |x: f32, y: f32| -> f32 {
+        let (px, py) = ((x * 184.0) as i32, (y * 184.0) as i32);
+        if !(0..184).contains(&px) || !(0..184).contains(&py) {
+            return 0.0;
         }
-        hit.then_some(([0.65, 0.9, 0.59], 0.9))
-    });
-    over_img(&mut img, &br, 0, 0);
-    let inner = (size as f32 * 0.78).round() as u32;
-    let cloud = render_rgba(inner, ACCENT);
-    let off = ((size - inner) / 2) as i32;
-    over_img(&mut img, &(inner, cloud), off, off + (size as i32 / 40));
-    img
-}
-
-/// C: the puff with a glossy camera lens set into its face.
-fn concept_c(size: u32) -> Img {
-    let mut img = (size, render_rgba(size, ACCENT));
-    let (cx, cy) = if size <= 24 {
-        (0.52, 0.52)
-    } else {
-        (0.585, 0.53)
+        orb[((py * 184 + px) * 4 + 3) as usize] as f32 / 255.0
     };
-    let r = if size <= 24 { 0.2 } else { 0.15 };
-    let lens = shape(size, |x, y| {
-        let d = ((x - cx).powi(2) + (y - cy).powi(2)).sqrt();
-        if d > r {
-            return None;
+    let draw_motes = |img: &mut Img, front: bool| {
+        for m in ms.iter().filter(|m| (m.z >= 0.0) == front) {
+            let (cx, cy) = (ox + m.x * view, oy + m.y * view);
+            let halo = if front { 0.5 } else { 1.0 };
+            for (c, a, add) in mote_layers(m, dark, coverage(m.x, m.y), 0.8) {
+                if a <= 0.003 {
+                    continue;
+                }
+                let c = c.map(|v| v as f32);
+                splat(img, cx, cy, m.r * 6.0, c, add, |d| {
+                    a * mote_alpha(d, m.r, halo)
+                });
+            }
         }
-        if d > r * 0.78 {
-            return Some(([0.12, 0.2, 0.14], 1.0));
-        }
-        let t = ((y - (cy - r)) / (2.0 * r)).clamp(0.0, 1.0);
-        let mut c = mix([0.25, 0.42, 0.55], [0.03, 0.06, 0.1], t);
-        let gx = x - (cx - r * 0.28);
-        let gy = y - (cy - r * 0.3);
-        if (gx * gx + gy * gy).sqrt() < r * 0.2 {
-            c = [0.95, 0.98, 1.0];
-        }
-        Some((c, 1.0))
-    });
-    over_img(&mut img, &lens, 0, 0);
+    };
+    draw_motes(&mut img, false);
+    if dark {
+        let r = view * 0.5 * ORB_R * 1.25 / ABOUT_HALF;
+        splat(
+            &mut img,
+            w as f32 / 2.0,
+            h as f32 / 2.0,
+            r,
+            [127.0, 211.0, 106.0],
+            true,
+            |d| {
+                let f = d / r;
+                0.18 * (-f * f * 3.0).exp() * (1.0 - f)
+            },
+        );
+    }
+    blit(&mut img, &(184, 184, orb.to_vec()), ox as i32, oy as i32);
+    let pulse = 0.12 * (std::f64::consts::TAU * time / 3.0).sin() as f32;
+    if pulse > 0.0 {
+        let r = view * 0.26;
+        let k = pulse * if dark { 0.9 } else { 0.6 };
+        let cy = h as f32 / 2.0 + view * 0.04;
+        splat(
+            &mut img,
+            w as f32 / 2.0,
+            cy,
+            r,
+            [212.0, 255.0, 134.0],
+            dark,
+            |d| {
+                let f = d / r;
+                k * (-f * f * 3.0).exp() * (1.0 - f)
+            },
+        );
+    }
+    draw_motes(&mut img, true);
     img
+}
+
+/// Draws a radial splat of colour `c` with per-distance alpha, additive or normal over.
+fn splat(
+    img: &mut Img,
+    cx: f32,
+    cy: f32,
+    radius: f32,
+    c: [f32; 3],
+    add: bool,
+    a: impl Fn(f32) -> f32,
+) {
+    let (w, h) = (img.0 as i32, img.1 as i32);
+    let x0 = ((cx - radius).floor() as i32).max(0);
+    let x1 = ((cx + radius).ceil() as i32).min(w - 1);
+    let y0 = ((cy - radius).floor() as i32).max(0);
+    let y1 = ((cy + radius).ceil() as i32).min(h - 1);
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            let d = ((x as f32 + 0.5 - cx).powi(2) + (y as f32 + 0.5 - cy).powi(2)).sqrt();
+            if d > radius {
+                continue;
+            }
+            let al = a(d).clamp(0.0, 1.0);
+            let i = ((y * w + x) * 4) as usize;
+            for (px, ck) in img.2[i..i + 3].iter_mut().zip(c) {
+                let dst = *px as f32;
+                let v = if add {
+                    dst + ck * al
+                } else {
+                    dst + (ck - dst) * al
+                };
+                *px = v.round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+}
+
+fn write_gif(path: &Path, w: u32, h: u32) -> Result<(), Box<dyn std::error::Error>> {
+    // 72 phases of the 12 s loop played at 0.1 s per frame (1.67x speed).
+    let frames = 72;
+    let file = std::fs::File::create(path)?;
+    let mut enc = gif::Encoder::new(std::io::BufWriter::new(file), w as u16, h as u16, &[])?;
+    enc.set_repeat(gif::Repeat::Infinite)?;
+    for i in 0..frames {
+        let t = i as f32 / frames as f32;
+        let orb = render(&Opts::about(184, t, 2));
+        let mut img = about_frame(&orb, w, h, t as f64 * 12.0, true);
+        let mut f = gif::Frame::from_rgba_speed(w as u16, h as u16, &mut img.2, 10);
+        f.delay = 10;
+        enc.write_frame(&f)?;
+    }
+    Ok(())
 }
 
 // ------------------------------------------------------------------- helpers
 
-fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
-    [
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-    ]
+fn blank(w: u32, h: u32, c: [u8; 3]) -> Img {
+    let mut img = (w, h, vec![0u8; (w * h * 4) as usize]);
+    fill(&mut img, 0, 0, w, h, c);
+    img
 }
 
-fn rounded_rect(x: f32, y: f32, cx: f32, cy: f32, hx: f32, hy: f32, r: f32) -> f32 {
-    let qx = (x - cx).abs() - (hx - r);
-    let qy = (y - cy).abs() - (hy - r);
-    (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt() + qx.max(qy).min(0.0) - r
-}
-
-/// Rasterizes a shape function (unit coords -> color, alpha) with 6x6 supersampling.
-fn shape(size: u32, f: impl Fn(f32, f32) -> Option<([f32; 3], f32)>) -> Img {
-    let n = size as usize;
-    let mut out = vec![0u8; n * n * 4];
-    const SS: usize = 6;
-    for y in 0..n {
-        for x in 0..n {
-            let mut acc = [0.0f32; 4];
-            for sy in 0..SS {
-                for sx in 0..SS {
-                    let px = (x as f32 + (sx as f32 + 0.5) / SS as f32) / size as f32;
-                    let py = (y as f32 + (sy as f32 + 0.5) / SS as f32) / size as f32;
-                    if let Some((c, a)) = f(px, py) {
-                        for i in 0..3 {
-                            acc[i] += c[i] * a;
-                        }
-                        acc[3] += a;
-                    }
-                }
-            }
-            let t = (SS * SS) as f32;
-            if acc[3] > 0.0 {
-                let i = (y * n + x) * 4;
-                for c in 0..3 {
-                    out[i + c] = (acc[c] / acc[3] * 255.0).round().clamp(0.0, 255.0) as u8;
-                }
-                out[i + 3] = (acc[3] / t * 255.0).round().clamp(0.0, 255.0) as u8;
-            }
+fn fill(img: &mut Img, x0: u32, y0: u32, w: u32, h: u32, c: [u8; 3]) {
+    let iw = img.0;
+    for y in y0..y0 + h {
+        for x in x0..x0 + w {
+            let i = ((y * iw + x) * 4) as usize;
+            img.2[i..i + 4].copy_from_slice(&[c[0], c[1], c[2], 255]);
         }
     }
-    (size, out)
 }
 
 /// Straight-alpha source-over of `src` onto `dst` at an offset.
-fn over_img(dst: &mut Img, src: &Img, ox: i32, oy: i32) {
-    over_rect(&mut dst.1, dst.0, dst.0, src, ox, oy);
-}
-
-fn over_rect(dst: &mut [u8], dw: u32, dh: u32, src: &Img, ox: i32, oy: i32) {
-    let (s, data) = (src.0 as i32, &src.1);
-    for y in 0..s {
-        for x in 0..s {
+fn blit(dst: &mut Img, src: &Img, ox: i32, oy: i32) {
+    let (dw, dh) = (dst.0 as i32, dst.1 as i32);
+    for y in 0..src.1 as i32 {
+        for x in 0..src.0 as i32 {
             let (dx, dy) = (x + ox, y + oy);
-            if dx < 0 || dy < 0 || dx >= dw as i32 || dy >= dh as i32 {
+            if dx < 0 || dy < 0 || dx >= dw || dy >= dh {
                 continue;
             }
-            let si = ((y * s + x) * 4) as usize;
-            let di = ((dy * dw as i32 + dx) * 4) as usize;
-            let sa = data[si + 3] as f32 / 255.0;
-            let da = dst[di + 3] as f32 / 255.0;
+            let si = ((y * src.0 as i32 + x) * 4) as usize;
+            let di = ((dy * dw + dx) * 4) as usize;
+            let sa = src.2[si + 3] as f32 / 255.0;
+            let da = dst.2[di + 3] as f32 / 255.0;
             let oa = sa + da * (1.0 - sa);
             if oa <= 0.0 {
                 continue;
             }
             for c in 0..3 {
-                let v = (data[si + c] as f32 * sa + dst[di + c] as f32 * da * (1.0 - sa)) / oa;
-                dst[di + c] = v.round() as u8;
+                let v = (src.2[si + c] as f32 * sa + dst.2[di + c] as f32 * da * (1.0 - sa)) / oa;
+                dst.2[di + c] = v.round() as u8;
             }
-            dst[di + 3] = (oa * 255.0).round() as u8;
+            dst.2[di + 3] = (oa * 255.0).round() as u8;
         }
     }
 }
 
-fn fill(dst: &mut [u8], dw: u32, x0: u32, y0: u32, w: u32, h: u32, c: [u8; 3]) {
-    for y in y0..y0 + h {
-        for x in x0..x0 + w {
-            let i = ((y * dw + x) * 4) as usize;
-            dst[i..i + 4].copy_from_slice(&[c[0], c[1], c[2], 255]);
-        }
-    }
-}
-
-/// Upscales with nearest neighbor (for inspecting small sizes).
+/// Upscales with nearest neighbour (for inspecting small sizes).
 fn zoom(img: &Img, k: u32) -> Img {
-    let (s, d) = (img.0, &img.1);
-    let n = s * k;
-    let mut out = vec![0u8; (n * n * 4) as usize];
-    for y in 0..n {
-        for x in 0..n {
-            let si = (((y / k) * s + x / k) * 4) as usize;
-            let di = ((y * n + x) * 4) as usize;
-            out[di..di + 4].copy_from_slice(&d[si..si + 4]);
-        }
-    }
-    (n, out)
-}
-
-/// Images side by side on light and dark panels (top: light, bottom: dark), each image
-/// shown at 1:1 and, below 64 px, also zoomed to 128 px.
-fn sheet(imgs: &[Img]) -> (u32, u32, Vec<u8>) {
-    let pad = 16u32;
-    let cell = |i: &Img| if i.0 < 64 { i.0 + pad + 128 } else { i.0 };
-    let w: u32 = imgs.iter().map(|i| cell(i) + pad).sum::<u32>() + pad;
-    let ch = imgs.iter().map(|i| i.0.max(128)).max().unwrap_or(128) + 2 * pad;
-    let h = ch * 2;
+    let (w, h) = (img.0 * k, img.1 * k);
     let mut out = vec![0u8; (w * h * 4) as usize];
-    fill(&mut out, w, 0, 0, w, ch, [0xf3, 0xf3, 0xf3]);
-    fill(&mut out, w, 0, ch, w, ch, [0x20, 0x20, 0x20]);
-    for row in 0..2u32 {
-        let mut x = pad;
-        for img in imgs {
-            let y = row * ch + pad;
-            over_rect(&mut out, w, h, img, x as i32, y as i32);
-            if img.0 < 64 {
-                let z = zoom(img, 128 / img.0.max(1));
-                over_rect(&mut out, w, h, &z, (x + img.0 + pad) as i32, y as i32);
-            }
-            x += cell(img) + pad;
+    for y in 0..h {
+        for x in 0..w {
+            let si = (((y / k) * img.0 + x / k) * 4) as usize;
+            let di = ((y * w + x) * 4) as usize;
+            out[di..di + 4].copy_from_slice(&img.2[si..si + 4]);
         }
     }
     (w, h, out)
 }
 
-/// Small images on light and dark taskbar colors at 1:1 and 4x.
-fn taskbar_sheet(imgs: &[Img]) -> (u32, u32, Vec<u8>) {
+/// Images side by side on light (top) and dark (bottom) panels, each at 1:1 and, below
+/// 64 px, also zoomed to about 128 px.
+fn sheet(imgs: &[Img], cell_h: u32) -> Img {
+    let pad = 20u32;
+    let zoomed = |i: &Img| (i.0 < 64).then(|| zoom(i, (128 / i.0).max(1)));
+    let w: u32 = pad
+        + imgs
+            .iter()
+            .map(|i| i.0 + pad + zoomed(i).map_or(0, |z| z.0 + pad))
+            .sum::<u32>();
+    let row = cell_h + 2 * pad;
+    let mut out = blank(w, row * 2, LIGHT);
+    fill(&mut out, 0, row, w, row, DARK);
+    for r in 0..2u32 {
+        let mut x = pad;
+        for img in imgs {
+            let y = r * row + pad + (cell_h - img.1) / 2;
+            blit(&mut out, img, x as i32, y as i32);
+            x += img.0 + pad;
+            if let Some(z) = zoomed(img) {
+                let y = r * row + pad + (cell_h - z.1) / 2;
+                blit(&mut out, &z, x as i32, y as i32);
+                x += z.0 + pad;
+            }
+        }
+    }
+    out
+}
+
+/// Small images on light and dark taskbar colours at 1:1 and 4x.
+fn taskbar_sheet(imgs: &[Img]) -> Img {
     let pad = 8u32;
     let s = imgs.iter().map(|i| i.0).max().unwrap_or(16);
     let w = imgs.len() as u32 * (s * 4 + pad) + pad;
     let row = s * 4 + s + 3 * pad;
-    let h = row * 2;
-    let mut out = vec![0u8; (w * h * 4) as usize];
-    fill(&mut out, w, 0, 0, w, row, [0xee, 0xee, 0xee]);
-    fill(&mut out, w, 0, row, w, row, [0x1c, 0x1c, 0x1c]);
+    let mut out = blank(w, row * 2, LIGHT);
+    fill(&mut out, 0, row, w, row, DARK);
     for r in 0..2u32 {
         for (i, img) in imgs.iter().enumerate() {
             let x = pad + i as u32 * (s * 4 + pad);
             let y = r * row + pad;
-            over_rect(&mut out, w, h, img, x as i32, y as i32);
-            let z = zoom(img, 4);
-            over_rect(&mut out, w, h, &z, x as i32, (y + s + pad) as i32);
+            blit(&mut out, img, x as i32, y as i32);
+            blit(&mut out, &zoom(img, 4), x as i32, (y + s + pad) as i32);
         }
     }
-    (w, h, out)
+    out
 }
 
-fn save(path: &Path, img: &dyn ToPng) -> Result<(), Box<dyn std::error::Error>> {
-    let (w, h, data) = img.parts();
-    image::save_buffer(path, data, w, h, image::ExtendedColorType::Rgba8)?;
+fn save(path: &Path, img: &Img) -> Result<(), Box<dyn std::error::Error>> {
+    image::save_buffer(path, &img.2, img.0, img.1, image::ExtendedColorType::Rgba8)?;
     Ok(())
-}
-
-trait ToPng {
-    fn parts(&self) -> (u32, u32, &[u8]);
-}
-
-impl ToPng for Img {
-    fn parts(&self) -> (u32, u32, &[u8]) {
-        (self.0, self.0, &self.1)
-    }
-}
-
-impl ToPng for (u32, u32, Vec<u8>) {
-    fn parts(&self) -> (u32, u32, &[u8]) {
-        (self.0, self.1, &self.2)
-    }
 }

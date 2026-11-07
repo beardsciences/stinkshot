@@ -1,8 +1,8 @@
 //! Tray icon + menu (docs/design/Tray.dc.html): header "StinkShot <version> · offline",
 //! capture modes with their hotkey labels, record MP4/GIF, History, Settings, Quit.
-//! Left click = region capture; double click = History. Icon generated in code (the green
-//! 3D puff, `icon_gen`) at 16/20/24/32 px for DPI; it bounces after a capture
-//! (`flash_capture`) and carries a red dot while recording (`set_recording`).
+//! Left click = region capture; double click = History. Icon is the green gel orb
+//! (`icon_gen`, pre-rendered at 16/20/24/32 px for DPI); it squishes and pulses after a
+//! capture (`flash_capture`) and carries a red dot while recording (`set_recording`).
 
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
@@ -197,7 +197,7 @@ impl Tray {
         })
     }
 
-    /// Play the short puff/bounce animation (a capture just completed). `poll` advances it.
+    /// Play the short squish-and-pulse animation (a capture just completed). `poll` advances it.
     pub fn flash_capture(&mut self) {
         self.anim_start = Some(Instant::now());
         self.anim_frame = None;

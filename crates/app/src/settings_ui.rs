@@ -1599,6 +1599,7 @@ impl SettingsWindow {
     }
 
     fn page_about(&mut self, ui: &mut Ui, shared: &mut Shared, accent: Color32) {
+        crate::logo_anim::show(ui);
         let p = uc::pal(shared);
         let w = ui.available_width();
         let (r, _) = ui.allocate_exact_size(vec2(w, 92.0), Sense::hover());
