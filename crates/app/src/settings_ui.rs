@@ -533,7 +533,7 @@ impl Surface for SettingsWindow {
                             Section::Recording => self.page_recording(ui, shared),
                             Section::History => self.page_history(ui, shared),
                             Section::Privacy => self.page_privacy(ui, shared, accent),
-                            Section::About => self.page_about(ui, shared, accent),
+                            Section::About => self.page_about(ui, shared),
                         }
                         ui.add_space(16.0);
                     });
@@ -1598,36 +1598,13 @@ impl SettingsWindow {
         });
     }
 
-    fn page_about(&mut self, ui: &mut Ui, shared: &mut Shared, accent: Color32) {
-        crate::logo_anim::show(ui);
+    fn page_about(&mut self, ui: &mut Ui, shared: &mut Shared) {
         let p = uc::pal(shared);
-        let w = ui.available_width();
-        let (r, _) = ui.allocate_exact_size(vec2(w, 92.0), Sense::hover());
-        uc::card(ui, r, 8, p.card, p.stroke);
-        ui.painter().rect_filled(
-            egui::Rect::from_min_size(r.min + vec2(18.0, 18.0), vec2(56.0, 56.0)),
-            CornerRadius::same(14),
-            accent,
-        );
-        ui.painter().text(
-            r.min + vec2(18.0 + 28.0, 18.0 + 28.0),
-            Align2::CENTER_CENTER,
-            "S",
-            theme::semibold(30.0),
-            p.on_accent,
-        );
-        ui.painter().text(
-            r.min + vec2(92.0, 24.0),
-            Align2::LEFT_TOP,
-            "StinkShot",
-            theme::semibold(20.0),
-            p.text,
-        );
-        ui.painter().text(
-            r.min + vec2(92.0, 52.0),
-            Align2::LEFT_TOP,
-            format!("Version {}", env!("CARGO_PKG_VERSION")),
+        crate::logo_anim::header(
+            ui,
+            theme::semibold(22.0),
             uc::font(13.0),
+            p.text,
             p.text_secondary,
         );
         widgets::setting_row(

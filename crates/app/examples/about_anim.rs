@@ -1,4 +1,5 @@
-//! Runs the About page logo animation alone in a window and reports its timing:
+//! Runs the About page header (the animated logo with the name, version and tagline, in
+//! the app's fonts and page colours) alone in a window and reports its timing:
 //! `cargo run -p stinkshot --example about_anim -- [dark|light] [seconds] [screenshot.png]`.
 //!
 //! Prints how long the still frame and the full loop took to render, then, once the loop
@@ -19,7 +20,7 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("About logo")
-            .with_inner_size([440.0, 240.0]),
+            .with_inner_size([520.0, 300.0]),
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
@@ -32,9 +33,11 @@ fn main() -> eframe::Result {
             } else {
                 egui::Theme::Light
             });
+            install_fonts(&cc.egui_ctx);
             Ok(Box::new(App {
                 seconds,
                 shot,
+                dark,
                 opened: Instant::now(),
                 playing_since: None,
                 last: None,
@@ -53,6 +56,7 @@ enum Phase {
 }
 
 struct App {
+    dark: bool,
     seconds: f64,
     shot: Option<String>,
     opened: Instant,
@@ -66,10 +70,31 @@ struct App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.add_space(8.0);
-            logo_anim::show(ui);
-        });
+        // The settings content pane colour and text colours (theme.rs palette).
+        let (layer, text, secondary) = if self.dark {
+            (
+                egui::Color32::from_rgb(0x27, 0x27, 0x27),
+                egui::Color32::WHITE,
+                egui::Color32::from_rgb(0xc8, 0xc8, 0xc8),
+            )
+        } else {
+            (
+                egui::Color32::from_rgb(0xf9, 0xf9, 0xf9),
+                egui::Color32::from_rgb(0x1a, 0x1a, 0x1a),
+                egui::Color32::from_rgb(0x5c, 0x5c, 0x5c),
+            )
+        };
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(layer).inner_margin(12.0))
+            .show(ui, |ui| {
+                logo_anim::header(
+                    ui,
+                    egui::FontId::new(22.0, egui::FontFamily::Name(SEMIBOLD.into())),
+                    egui::FontId::proportional(13.0),
+                    text,
+                    secondary,
+                );
+            });
         let Some(stats) = logo_anim::stats(&ctx) else {
             return;
         };
@@ -126,6 +151,38 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
+}
+
+const SEMIBOLD: &str = "StinkShot.Semibold";
+
+/// The app's faces (theme.rs): Segoe UI Variable, and Segoe UI Semibold for headings.
+fn install_fonts(ctx: &egui::Context) {
+    let dir =
+        std::path::PathBuf::from(std::env::var_os("WINDIR").unwrap_or_default()).join("Fonts");
+    let mut defs = egui::FontDefinitions::default();
+    for (name, file) in [("Regular", "SegUIVar.ttf"), ("Semibold", "seguisb.ttf")] {
+        if let Ok(bytes) = std::fs::read(dir.join(file)) {
+            defs.font_data
+                .insert(name.into(), Arc::new(egui::FontData::from_owned(bytes)));
+        }
+    }
+    let mut fallbacks = defs
+        .families
+        .get(&egui::FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
+    if defs.font_data.contains_key("Regular") {
+        defs.families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, "Regular".into());
+    }
+    if defs.font_data.contains_key("Semibold") {
+        fallbacks.insert(0, "Semibold".into());
+    }
+    defs.families
+        .insert(egui::FontFamily::Name(SEMIBOLD.into()), fallbacks);
+    ctx.set_fonts(defs);
 }
 
 fn report(name: &str, v: &mut [f32]) {

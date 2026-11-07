@@ -1,4 +1,4 @@
-//! StinkShot logo: a glossy, translucent, lumpy green gel orb. See docs/notes/logo.md.
+//! Stinkshot logo: a glossy, translucent, lumpy green gel orb. See docs/notes/logo.md.
 //!
 //! Pure std so the app's `build.rs` can link it (the exe .ico and the pre-rendered tray
 //! bitmaps are made at build time) and the About page can render its animation frames on
@@ -102,7 +102,9 @@ impl Opts {
             shadow: 0.30,
             ss: ss.max(1),
             small: false,
-            march_steps: 64,
+            // 64 steps tore the silhouette where rays skim the creases (about 2500 missed
+            // pixels per 32 frames); 256 plus the near-miss rule leaves almost none.
+            march_steps: 256,
             glow_steps: 12,
             nucleus: 1.0,
         }
@@ -398,17 +400,26 @@ fn shade_ray(sc: &Scene, o: &Opts, pl: &Pal, ro: V, rd: V, px_world: f32) -> ([f
         let sq = h.sqrt();
         let (t0, t1) = (-b - sq, -b + sq);
         let mut t = t0.max(0.0);
+        let mut d = f32::MAX;
+        let mut exhausted = true;
         for _ in 0..o.march_steps {
-            let d = sc.sdf(ro + rd * t);
+            d = sc.sdf(ro + rd * t);
             dmin = dmin.min(d);
             if d < 0.0005 {
                 hit = Some(t);
+                exhausted = false;
                 break;
             }
             t += d * 0.95;
             if t > t1 {
+                exhausted = false;
                 break;
             }
+        }
+        // A ray skimming a crease can run out of steps while still crawling along the
+        // surface. Within half a pixel of it, that is a hit, not a hole in the silhouette.
+        if exhausted && d < 0.5 * px_world {
+            hit = Some(t);
         }
     }
     let Some(t) = hit else {
@@ -703,60 +714,106 @@ pub struct Mote {
     pub hue: f32,
 }
 
-/// The particle field at `time` seconds: ring A (12 motes, 1 rev / 8 s), ring B (8 motes,
-/// counter-rotating, 1 rev / 13 s) and 10 drift motes rising from below the orb, projected
-/// through the logo camera for a view of half extent `half`.
+/// Motes on ring A, ring B and drifting, in that order in `motes`.
+pub const RING_A: usize = 28;
+pub const RING_B: usize = 20;
+pub const DRIFT: usize = 16;
+/// Orbit radii in orb radii: far enough out that the rings clear the orb.
+const RING_A_R: f32 = 1.52;
+const RING_B_R: f32 = 1.68;
+/// Seconds of orbit behind each front ring mote drawn as its trail, and samples in it.
+pub const TRAIL_S: f64 = 0.42;
+pub const TRAIL_SAMPLES: usize = 16;
+
+/// The particle field at `time` seconds: ring A (`RING_A` motes, 1 rev / 8 s), ring B
+/// (`RING_B` motes, counter-rotating, 1 rev / 13 s), both well outside the orb, and
+/// `DRIFT` motes rising from below it, projected through the logo camera for a view of
+/// half extent `half`. The order is stable, so index `i` is the same mote at every time.
 pub fn motes(time: f64, half: f32) -> Vec<Mote> {
+    field(time, half, true)
+}
+
+/// Short fading trails behind the ring motes in front of the orb (so the rings read as
+/// spinning): `TRAIL_SAMPLES` small, dim motes per ring mote along the last `TRAIL_S`
+/// seconds of its orbit, tapering away from the head. Paint them with the front motes,
+/// before the heads.
+pub fn trails(time: f64, half: f32) -> Vec<Mote> {
+    let heads = field(time, half, false);
+    let mut out = Vec::with_capacity(RING_A * TRAIL_SAMPLES);
+    for k in 1..=TRAIL_SAMPLES {
+        let f = k as f32 / (TRAIL_SAMPLES + 1) as f32;
+        let past = field(time - TRAIL_S * f as f64, half, false);
+        for (h, p) in heads.iter().zip(&past) {
+            if h.z < 0.0 || p.z < 0.0 {
+                continue;
+            }
+            let fade = (1.0 - f).powf(1.6);
+            out.push(Mote {
+                r: p.r * (0.75 - 0.4 * f),
+                alpha: (h.alpha * 0.26 * fade).clamp(0.0, 1.0),
+                ..*p
+            });
+        }
+    }
+    out
+}
+
+/// The field at `time`; without `drift` only the ring motes, which is all trails need.
+fn field(time: f64, half: f32, drift: bool) -> Vec<Mote> {
     let cam = camera(half);
-    let mut out = Vec::with_capacity(30);
+    let mut out = Vec::with_capacity(RING_A + RING_B + DRIFT);
     let twinkle = |i: u32| {
         let hz = 1.3 + hash(i ^ 0x51ed);
         0.75 + 0.25 * ((time * hz as f64).fract() as f32 * TAU).sin()
     };
     let mut push = |p: V, i: u32, env: f32| {
         let d = p - EYE;
-        let z = dot(d, cam.fwd);
-        if z <= 0.1 {
-            return;
-        }
+        // Everything is within a couple of units of the target, far in front of the eye;
+        // never skip a mote, so indices stay stable.
+        let z = dot(d, cam.fwd).max(0.1);
         let u = dot(d, cam.right) / z / cam.scale;
         let v = dot(d, cam.up) / z / cam.scale;
         let z_view = cam.dist - z;
-        let r0 = 1.6 + 1.0 * hash(i ^ 0x9e37);
+        let r0 = 1.3 + 0.9 * hash(i ^ 0x9e37);
         out.push(Mote {
             x: (u + 1.0) * 0.5,
             y: (1.0 - v) * 0.5,
             z: z_view,
-            r: r0 * (1.0 + 0.35 * z_view).max(0.4),
+            r: r0 * (1.0 + 0.30 * z_view).max(0.4),
             alpha: (0.85 * env * twinkle(i)).clamp(0.0, 1.0),
             hue: hash(i ^ 0x2545),
         });
     };
-    // Ring A.
+    // Ring A: evenly spread with a little jitter, so it reads as a ring.
     let a_ang = TAU as f64 * time / 8.0;
-    for i in 0..12u32 {
-        let r = ORB_R * 1.18 * (1.0 + 0.06 * (2.0 * hash(i ^ 0xa11) - 1.0));
-        let th = (a_ang % TAU as f64) as f32 + i as f32 * 2.399;
+    for i in 0..RING_A as u32 {
+        let r = ORB_R * RING_A_R * (1.0 + 0.04 * (2.0 * hash(i ^ 0xa11) - 1.0));
+        let jitter = 0.35 * (hash(i ^ 0xa12) - 0.5);
+        let th = (a_ang % TAU as f64) as f32 + (i as f32 + jitter) * TAU / RING_A as f32;
         let p = V(r * th.cos(), 0.0, r * th.sin());
         push(rot_z(rot_x(p, 0.38), -0.20), i, 1.0);
     }
     // Ring B, counter-rotating.
     let b_ang = -(TAU as f64) * time / 13.0;
-    for i in 0..8u32 {
-        let r = ORB_R * 1.30 * (1.0 + 0.06 * (2.0 * hash(i ^ 0xb22) - 1.0));
-        let th = (b_ang % TAU as f64) as f32 + i as f32 * 2.399 + 0.5;
+    for i in 0..RING_B as u32 {
+        let r = ORB_R * RING_B_R * (1.0 + 0.04 * (2.0 * hash(i ^ 0xb22) - 1.0));
+        let jitter = 0.35 * (hash(i ^ 0xb23) - 0.5);
+        let th = (b_ang % TAU as f64) as f32 + (i as f32 + jitter) * TAU / RING_B as f32 + 0.5;
         let p = V(r * th.cos(), 0.0, r * th.sin());
         push(rot_x(p, -0.22), 100 + i, 1.0);
     }
+    if !drift {
+        return out;
+    }
     // Drift motes: staggered lifetimes, respawned at a new angle each cycle.
-    for i in 0..10u32 {
+    for i in 0..DRIFT as u32 {
         let life_s = 5.0 + 2.0 * hash(i ^ 0xd33) as f64;
-        let x = time / life_s + i as f64 / 10.0;
+        let x = time / life_s + i as f64 / DRIFT as f64;
         let cycle = x.floor() as u32;
         let life = x.fract() as f32;
         let seed = i.wrapping_mul(977) ^ cycle.wrapping_mul(7919);
         let ang = hash(seed) * TAU;
-        let rad = 0.9 + 0.3 * hash(seed ^ 0x77);
+        let rad = 0.9 + 0.4 * hash(seed ^ 0x77);
         let wob = 0.04 * ((TAU as f64 * time / 3.0) as f32 + i as f32).sin();
         let y = -0.6 + 0.12 * life * life_s as f32;
         let p = V(rad * ang.cos() + wob, y, rad * ang.sin());
@@ -768,7 +825,7 @@ pub fn motes(time: f64, half: f32) -> Vec<Mote> {
 
 /// Shared with the About page so particle colours match the shader palette.
 pub const PARTICLE_DARK: [[u8; 3]; 2] = [[0x7f, 0xd3, 0x6a], [0xd4, 0xff, 0x86]];
-pub const PARTICLE_LIGHT: [[u8; 3]; 2] = [[0x3f, 0xae, 0x5a], [0x1f, 0x8a, 0x3c]];
+pub const PARTICLE_LIGHT: [[u8; 3]; 2] = [[0x2a, 0x9a, 0x4c], [0x14, 0x6e, 0x34]];
 
 /// One painted layer of a mote: colour (sRGB), opacity, additive blending.
 pub type MoteLayer = ([u8; 3], f32, bool);
@@ -872,15 +929,34 @@ mod tests {
     fn motes_orbit_and_fade() {
         let a = motes(0.0, ABOUT_HALF);
         let b = motes(1.0, ABOUT_HALF);
-        assert!(a.len() >= 25);
+        assert_eq!(a.len(), RING_A + RING_B + DRIFT);
         assert_ne!(a[0], b[0]);
         // Some motes pass in front of the orb and some behind it.
         assert!(a.iter().any(|m| m.z > 0.0) && a.iter().any(|m| m.z < 0.0));
         assert!(a.iter().all(|m| (0.0..=1.0).contains(&m.alpha)));
-        // Everything stays near the frame.
+        // The rings run outside the view horizontally but stay near it.
         assert!(
             a.iter()
-                .all(|m| (-0.1..1.1).contains(&m.x) && (-0.1..1.1).contains(&m.y))
+                .all(|m| (-0.25..1.25).contains(&m.x) && (-0.1..1.1).contains(&m.y))
         );
+    }
+
+    #[test]
+    fn rings_clear_the_orb() {
+        // Ring motes beside the orb (near its centre plane) sit outside its silhouette.
+        let orb_frac = ORB_R / ABOUT_HALF * 0.5;
+        for m in &motes(2.0, ABOUT_HALF)[..RING_A + RING_B] {
+            if m.z.abs() < 0.3 {
+                let d = ((m.x - 0.5).powi(2) + (m.y - 0.5).powi(2)).sqrt();
+                assert!(d > orb_frac * 1.2, "{m:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn front_ring_motes_have_trails() {
+        let t = trails(3.0, ABOUT_HALF);
+        assert!(!t.is_empty());
+        assert!(t.iter().all(|m| m.z >= 0.0 && m.alpha < 0.3));
     }
 }

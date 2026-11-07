@@ -1,15 +1,18 @@
 //! The animated logo at the top of the About page: the gel orb spinning with its lumps
 //! sliding and breathing (one seamless loop every 12 s, 6 s while hovered), a faint bloom
 //! and pulse on dark themes, and a particle field of glowing motes on two tilted rings plus
-//! a few rising drifters, which pass behind and in front of the orb.
+//! a few rising drifters, which pass behind and in front of the orb. Ring motes in front
+//! of the orb trail a short fading streak, so the rings read as spinning.
 //!
 //! The orb is ray marched by `stinkshot-logo`, which is far too slow for 60 fps on the CPU,
 //! so the loop is pre-rendered once into `FRAMES` frames on worker threads (a still frame
 //! first, shown until the loop is ready) and played back with a crossfade between
-//! neighbouring frames. Two GPU textures are re-uploaded as the playhead moves; the CPU
-//! frames are dropped a minute after the page was last shown. Particles are drawn live
-//! with the egui painter. Nothing animates (and no repaint is requested) unless `show` is
-//! called, i.e. while the About page is visible. With Windows animations off
+//! neighbouring frames. The two frames are blended on the CPU into one image and uploaded
+//! to a single GPU texture (two overlaid textures add up alpha at the soft edges and the
+//! shadow, which pulsed); the CPU frames are dropped a minute after the page was last
+//! shown. Particles are drawn live with the egui painter. Nothing animates (and no repaint
+//! is requested) unless `show` is called, i.e. while the About page is visible, and not
+//! while the window is minimized or covered. With Windows animations off
 //! (SPI_GETCLIENTAREAANIMATION) the orb is a still frame, the motes are static and faint,
 //! and there is no bloom.
 
@@ -18,10 +21,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use egui::{
-    Color32, ColorImage, Mesh, Pos2, Rect, Sense, Shape, TextureHandle, TextureOptions, Ui, pos2,
-    vec2,
+    Align2, Color32, ColorImage, FontId, Mesh, Pos2, Rect, Sense, Shape, TextureHandle,
+    TextureOptions, Ui, pos2, vec2,
 };
 use stinkshot_logo::{ABOUT_HALF, Mote, Opts, mote_alpha, mote_layers};
+
+/// Crossfade steps between neighbouring frames (the blend is redone only when the step
+/// changes).
+const BLEND_STEPS: f64 = 32.0;
 
 /// Frames in one loop (spin + lump cycle), crossfaded on playback.
 pub const FRAMES: usize = 96;
@@ -34,6 +41,10 @@ const STILL_T: f32 = 0.06;
 pub const VIEW: f32 = 184.0;
 /// Height the widget reserves.
 pub const HEIGHT: f32 = 192.0;
+/// Height of the name, version and tagline under the orb in `header`.
+const HEADER_TEXT: f32 = 80.0;
+/// The tagline under the version.
+const TAGLINE: &str = "Local-first screenshots and screen recording for Windows";
 /// Particle layer opacity, animated and reduced-motion.
 const LAYER: f32 = 0.8;
 const LAYER_STATIC: f32 = 0.3;
@@ -73,14 +84,19 @@ struct Anim {
     cancel: Arc<AtomicBool>,
     /// Frame size the workers were started for and whether they render the loop.
     started_for: Option<(u32, bool)>,
-    /// GPU slots: which frame each holds (`usize::MAX` = still).
-    slots: [(usize, Option<TextureHandle>); 2],
+    /// The orb texture and what it holds: (frame, blend step), frame `usize::MAX` = still.
+    tex: Option<TextureHandle>,
+    tex_key: (usize, u32),
     sprite: Option<(TextureHandle, TextureHandle)>,
     phase: f64,
     rate: f64,
     last_time: Option<f64>,
     reduced: bool,
     reduced_at: Option<Instant>,
+    /// The window is unfocused and fully covered by the foreground window; re-checked
+    /// every half second.
+    hidden: bool,
+    hidden_at: Option<Instant>,
     last_shown: Instant,
     reaper: bool,
     stats: Stats,
@@ -93,8 +109,11 @@ impl Default for Anim {
             frames: Arc::default(),
             cancel: Arc::new(AtomicBool::new(false)),
             started_for: None,
-            slots: [(usize::MAX - 1, None), (usize::MAX - 1, None)],
+            tex: None,
+            tex_key: (usize::MAX - 1, 0),
             sprite: None,
+            hidden: false,
+            hidden_at: None,
             phase: 0.0,
             rate: 1.0 / LOOP_S,
             last_time: None,
@@ -123,6 +142,39 @@ pub fn stats(ctx: &egui::Context) -> Option<Stats> {
     let h = handle(ctx);
     let a = h.lock().ok()?;
     (a.stats.calls > 0).then_some(a.stats)
+}
+
+/// The About page header: the animated orb, with the app name, version and tagline
+/// centred under it.
+pub fn header(ui: &mut Ui, title: FontId, body: FontId, text: Color32, secondary: Color32) {
+    show(ui);
+    // The orb's view has empty space under the contact shadow; pull the text up into it.
+    ui.add_space(-12.0);
+    let w = ui.available_width();
+    let (r, _) = ui.allocate_exact_size(vec2(w, HEADER_TEXT), Sense::hover());
+    let x = r.center().x;
+    let painter = ui.painter();
+    painter.text(
+        pos2(x, r.top()),
+        Align2::CENTER_TOP,
+        "Stinkshot",
+        title,
+        text,
+    );
+    painter.text(
+        pos2(x, r.top() + 32.0),
+        Align2::CENTER_TOP,
+        format!("Version {}", env!("CARGO_PKG_VERSION")),
+        body.clone(),
+        secondary,
+    );
+    painter.text(
+        pos2(x, r.top() + 52.0),
+        Align2::CENTER_TOP,
+        TAGLINE,
+        body,
+        secondary,
+    );
 }
 
 /// Draws the animated logo, centred in the available width, `HEIGHT` tall.
@@ -219,20 +271,14 @@ pub fn show(ui: &mut Ui) {
         );
     }
 
-    // The orb: current frame, crossfaded into the next.
+    // The orb: current frame, crossfaded into the next on the CPU.
     let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-    if ready {
-        let i1 = (i0 + 1) % FRAMES;
-        let mix = (f - f.floor()) as f32;
-        let t0 = a.texture(&ctx, i0);
-        let t1 = a.texture(&ctx, i1);
-        if let Some(t) = t0 {
-            painter.image(t, view, uv, Color32::WHITE);
-        }
-        if let Some(t) = t1 {
-            painter.image(t, view, uv, Color32::WHITE.gamma_multiply(mix));
-        }
-    } else if let Some(t) = a.texture(&ctx, usize::MAX) {
+    let key = if ready {
+        (i0, ((f - f.floor()) * BLEND_STEPS).floor() as u32)
+    } else {
+        (usize::MAX, 0)
+    };
+    if let Some(t) = a.texture(&ctx, key) {
         painter.image(t, view, uv, Color32::WHITE);
     }
 
@@ -251,9 +297,44 @@ pub fn show(ui: &mut Ui) {
         }
     }
 
+    // In front: the ring trails, then the front motes.
+    if !reduced {
+        let trails = stinkshot_logo::trails(now, ABOUT_HALF);
+        paint_motes(&painter, &a, view, &trails, true, dark, layer, &coverage);
+    }
     paint_motes(&painter, &a, view, &motes, true, dark, layer, &coverage);
 
-    if !reduced {
+    // No repaints while nobody can see them: minimized, or unfocused under a window that
+    // covers this one. Restoring or uncovering the window repaints it anyway (the OS sends
+    // a resize or a paint); the slow poll is a backstop.
+    let (minimized, focused, occluded) = ctx.input(|i| {
+        let v = i.viewport();
+        (
+            v.minimized.unwrap_or(false),
+            v.focused.unwrap_or(true),
+            v.occluded.unwrap_or(false),
+        )
+    });
+    if focused {
+        a.hidden = false;
+    } else if a
+        .hidden_at
+        .is_none_or(|t| t.elapsed() > Duration::from_millis(500))
+    {
+        a.hidden = ctx.input(|i| {
+            let v = i.viewport();
+            let ppp = v.native_pixels_per_point.unwrap_or(ppp);
+            v.outer_rect
+                .or(v.inner_rect)
+                .is_some_and(|r| covered(r, ppp))
+        });
+        a.hidden_at = Some(Instant::now());
+    }
+    if minimized {
+        // Nothing: restoring the window repaints it.
+    } else if occluded || (!focused && a.hidden) {
+        ctx.request_repaint_after(Duration::from_secs(1));
+    } else if !reduced {
         ctx.request_repaint();
     } else {
         ctx.request_repaint_after(Duration::from_secs(2));
@@ -290,7 +371,7 @@ impl Anim {
             if !keep_still {
                 *f = Frames::default();
                 f.size = size;
-                self.slots = [(usize::MAX - 1, None), (usize::MAX - 1, None)];
+                self.tex_key = (usize::MAX - 1, 0);
                 self.still_took = None;
             }
             f.loop_frames = vec![None; FRAMES];
@@ -325,41 +406,33 @@ impl Anim {
         self.stats.still = self.still_took;
     }
 
-    /// GPU texture holding frame `idx` (`usize::MAX` = still), uploading into the slot not
-    /// needed by the other neighbour.
-    fn texture(&mut self, ctx: &egui::Context, idx: usize) -> Option<egui::TextureId> {
-        if let Some((_, Some(t))) = self.slots.iter().find(|(i, t)| *i == idx && t.is_some()) {
+    /// The orb texture for `key` = (frame, blend step) (`usize::MAX` = still): frame `i`
+    /// blended toward frame `i + 1` by `step / BLEND_STEPS` on the CPU, then uploaded.
+    /// Re-uploads only when the key changes.
+    fn texture(&mut self, ctx: &egui::Context, key: (usize, u32)) -> Option<egui::TextureId> {
+        if self.tex_key == key
+            && let Some(t) = &self.tex
+        {
             return Some(t.id());
         }
         let img = {
             let f = self.frames.lock().ok()?;
+            let (idx, step) = key;
             if idx == usize::MAX {
                 f.still.clone()?
             } else {
-                f.loop_frames.get(idx)?.clone()?
+                let a = f.loop_frames.get(idx)?.clone()?;
+                let b = f.loop_frames.get((idx + 1) % FRAMES)?.clone()?;
+                drop(f);
+                Arc::new(blend(&a, &b, step as f32 / BLEND_STEPS as f32))
             }
         };
-        // Replace the slot whose frame is furthest from `idx`.
-        let dist = |i: usize| {
-            if i >= FRAMES || idx >= FRAMES {
-                usize::MAX
-            } else {
-                let d = i.abs_diff(idx);
-                d.min(FRAMES - d)
-            }
-        };
-        let s = if dist(self.slots[0].0) >= dist(self.slots[1].0) {
-            0
-        } else {
-            1
-        };
-        let slot = &mut self.slots[s];
-        match &mut slot.1 {
+        match &mut self.tex {
             Some(t) => t.set(img, TextureOptions::LINEAR),
-            None => slot.1 = Some(ctx.load_texture("about-logo", img, TextureOptions::LINEAR)),
+            None => self.tex = Some(ctx.load_texture("about-logo", img, TextureOptions::LINEAR)),
         }
-        slot.0 = idx;
-        slot.1.as_ref().map(|t| t.id())
+        self.tex_key = key;
+        self.tex.as_ref().map(|t| t.id())
     }
 
     fn ensure_sprites(&mut self, ctx: &egui::Context) {
@@ -448,6 +521,57 @@ fn render_all(
             });
         }
     });
+}
+
+/// `a` crossfaded toward `b` by `mix`. Both are premultiplied, so a per-channel lerp is
+/// the correct mix: coverage never exceeds either frame's, unlike stacking two textures.
+fn blend(a: &ColorImage, b: &ColorImage, mix: f32) -> ColorImage {
+    if mix <= 0.0 || a.size != b.size {
+        return a.clone();
+    }
+    let m = (mix.clamp(0.0, 1.0) * 256.0) as u32;
+    let l = |x: u8, y: u8| ((x as u32 * (256 - m) + y as u32 * m + 128) >> 8) as u8;
+    let pixels = a
+        .pixels
+        .iter()
+        .zip(&b.pixels)
+        .map(|(p, q)| {
+            Color32::from_rgba_premultiplied(
+                l(p.r(), q.r()),
+                l(p.g(), q.g()),
+                l(p.b(), q.b()),
+                l(p.a(), q.a()),
+            )
+        })
+        .collect();
+    ColorImage {
+        size: a.size,
+        source_size: a.source_size,
+        pixels,
+    }
+}
+
+/// True when the foreground window (another window: this one is unfocused) covers `rect`,
+/// this window's rectangle in points. Cheap: one foreground lookup and one rectangle.
+fn covered(rect: Rect, ppp: f32) -> bool {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowRect, IsIconic};
+    // SAFETY: plain queries on a window handle; a stale handle just fails.
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.is_invalid() || IsIconic(fg).as_bool() {
+            return false;
+        }
+        let mut r = RECT::default();
+        if GetWindowRect(fg, &mut r).is_err() {
+            return false;
+        }
+        // A couple of pixels of slack for rounding.
+        r.left as f32 <= rect.min.x * ppp + 2.0
+            && r.top as f32 <= rect.min.y * ppp + 2.0
+            && r.right as f32 >= rect.max.x * ppp - 2.0
+            && r.bottom as f32 >= rect.max.y * ppp - 2.0
+    }
 }
 
 /// Frees the frames and textures once the About page has been out of sight for `KEEP`.
@@ -588,4 +712,22 @@ fn client_area_animation() -> bool {
         )
     };
     ok.is_err() || on.as_bool()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crossfade_never_adds_up_alpha() {
+        // A half-transparent edge pixel in both frames stays half transparent mid-fade
+        // (two stacked textures would reach 75%).
+        let px = Color32::from_rgba_premultiplied(40, 80, 20, 128);
+        let a = ColorImage::new([2, 1], vec![px, Color32::TRANSPARENT]);
+        let b = ColorImage::new([2, 1], vec![px, px]);
+        let m = blend(&a, &b, 0.5);
+        assert_eq!(m.pixels[0], px);
+        assert_eq!(m.pixels[1].a(), 64);
+        assert_eq!(blend(&a, &b, 0.0).pixels, a.pixels);
+    }
 }

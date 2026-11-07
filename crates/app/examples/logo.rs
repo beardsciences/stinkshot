@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use icon_gen::{ANIM, DEFAULT_ACCENT, Pose, render_pose, render_rgba};
 use stinkshot_logo::{
-    ABOUT_HALF, ORB_R, Opts, mote_alpha, mote_layers, motes, render, render_icon,
+    ABOUT_HALF, ORB_R, Opts, mote_alpha, mote_layers, motes, render, render_icon, trails,
 };
 
 /// (width, height, straight RGBA8).
@@ -59,7 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // About animation strip: 8 phases on dark (top) and light (bottom).
     let n = 8;
-    let (cw, ch) = (240u32, 200u32);
+    let (cw, ch) = (300u32, 200u32);
     let mut strip = blank(cw * n, ch * 2, DARK);
     fill(&mut strip, 0, ch, cw * n, ch, LIGHT);
     for i in 0..n {
@@ -90,6 +90,7 @@ fn about_frame(orb: &[u8], w: u32, h: u32, time: f64, dark: bool) -> Img {
     let mut img = blank(w, h, if dark { DARK } else { LIGHT });
     let (ox, oy) = ((w as f32 - view) / 2.0, (h as f32 - view) / 2.0);
     let ms = motes(time, ABOUT_HALF);
+    let tr = trails(time, ABOUT_HALF);
     let coverage = |x: f32, y: f32| -> f32 {
         let (px, py) = ((x * 184.0) as i32, (y * 184.0) as i32);
         if !(0..184).contains(&px) || !(0..184).contains(&py) {
@@ -98,7 +99,11 @@ fn about_frame(orb: &[u8], w: u32, h: u32, time: f64, dark: bool) -> Img {
         orb[((py * 184 + px) * 4 + 3) as usize] as f32 / 255.0
     };
     let draw_motes = |img: &mut Img, front: bool| {
-        for m in ms.iter().filter(|m| (m.z >= 0.0) == front) {
+        let trail = if front { &tr[..] } else { &[][..] };
+        for m in trail
+            .iter()
+            .chain(ms.iter().filter(|m| (m.z >= 0.0) == front))
+        {
             let (cx, cy) = (ox + m.x * view, oy + m.y * view);
             let halo = if front { 0.5 } else { 1.0 };
             for (c, a, add) in mote_layers(m, dark, coverage(m.x, m.y), 0.8) {
