@@ -81,16 +81,18 @@ static BRIDGE: OnceLock<Mutex<Option<Receiver<u32>>>> = OnceLock::new();
 fn start_bridge() -> Receiver<u32> {
     let (tx, rx): (Sender<u32>, Receiver<u32>) = channel();
     let events = GlobalHotKeyEvent::receiver().clone();
-    let spawned = std::thread::Builder::new().name("hotkey-bridge".into()).spawn(move || {
-        while let Ok(ev) = events.recv() {
-            if ev.state() == HotKeyState::Pressed {
-                if tx.send(ev.id()).is_err() {
-                    break;
+    let spawned = std::thread::Builder::new()
+        .name("hotkey-bridge".into())
+        .spawn(move || {
+            while let Ok(ev) = events.recv() {
+                if ev.state() == HotKeyState::Pressed {
+                    if tx.send(ev.id()).is_err() {
+                        break;
+                    }
+                    crate::wake::wake();
                 }
-                crate::wake::wake();
             }
-        }
-    });
+        });
     if let Err(e) = spawned {
         log::error!("cannot start hotkey bridge thread: {e}");
     }
@@ -101,11 +103,15 @@ impl Hotkeys {
     /// Returns the manager plus human-readable registration errors (conflicts, bad strings).
     pub fn new(cfg: &stinkshot_core::config::Hotkeys) -> (Hotkeys, Vec<String>) {
         let slot = BRIDGE.get_or_init(|| Mutex::new(Some(start_bridge())));
-        let rx = slot.lock().ok().and_then(|mut g| g.take()).unwrap_or_else(|| {
-            // A second Hotkeys in one process never receives events; this is only reachable
-            // in tests.
-            channel().1
-        });
+        let rx = slot
+            .lock()
+            .ok()
+            .and_then(|mut g| g.take())
+            .unwrap_or_else(|| {
+                // A second Hotkeys in one process never receives events; this is only reachable
+                // in tests.
+                channel().1
+            });
         let mut errors = Vec::new();
         let manager = match GlobalHotKeyManager::new() {
             Ok(m) => Some(m),
@@ -131,14 +137,18 @@ impl Hotkeys {
         let mut errors = Vec::new();
         self.unregister_all();
 
-        let uses_printscreen = bindings(cfg).iter().any(|(_, s)| s.to_ascii_lowercase().contains("printscreen"));
+        let uses_printscreen = bindings(cfg)
+            .iter()
+            .any(|(_, s)| s.to_ascii_lowercase().contains("printscreen"));
         let want_takeover = cfg.take_over_printscreen && uses_printscreen;
         if want_takeover || self.took_over_printscreen {
             match stinkshot_platform::system::take_over_printscreen(want_takeover) {
                 Ok(_) => self.took_over_printscreen = want_takeover,
                 Err(e) => {
                     log::warn!("PrintScreen takeover change failed: {e:#}");
-                    errors.push(format!("Could not change the Windows PrintScreen setting: {e}"));
+                    errors.push(format!(
+                        "Could not change the Windows PrintScreen setting: {e}"
+                    ));
                 }
             }
         }
@@ -160,7 +170,11 @@ impl Hotkeys {
                 }
             };
             if let Some(other) = claimed.get(&hotkey.id()) {
-                errors.push(format!("{}: already used for {}", display(text), other.label()));
+                errors.push(format!(
+                    "{}: already used for {}",
+                    display(text),
+                    other.label()
+                ));
                 continue;
             }
             match manager.register(hotkey) {
@@ -170,7 +184,12 @@ impl Hotkeys {
                 }
                 Err(e) => {
                     log::warn!("hotkey {text} for {} failed: {e}", action.label());
-                    errors.push(format!("{}: {} ({})", display(text), describe_register_error(&e), action.label()));
+                    errors.push(format!(
+                        "{}: {} ({})",
+                        display(text),
+                        describe_register_error(&e),
+                        action.label()
+                    ));
                 }
             }
         }
@@ -222,7 +241,9 @@ impl Hotkeys {
 
 fn describe_register_error(e: &global_hotkey::Error) -> String {
     match e {
-        global_hotkey::Error::AlreadyRegistered(_) => "already in use by another program".to_string(),
+        global_hotkey::Error::AlreadyRegistered(_) => {
+            "already in use by another program".to_string()
+        }
         other => other.to_string(),
     }
 }
@@ -238,7 +259,8 @@ pub fn display(hotkey: &str) -> String {
     for token in hotkey.split('+') {
         let t = token.trim();
         match t.to_ascii_uppercase().as_str() {
-            "CONTROL" | "CTRL" | "COMMANDORCONTROL" | "COMMANDORCTRL" | "CMDORCTRL" | "CMDORCONTROL" => ctrl = true,
+            "CONTROL" | "CTRL" | "COMMANDORCONTROL" | "COMMANDORCTRL" | "CMDORCTRL"
+            | "CMDORCONTROL" => ctrl = true,
             "ALT" | "OPTION" => alt = true,
             "SHIFT" => shift = true,
             "META" | "SUPER" | "WIN" | "CMD" | "COMMAND" => win = true,
@@ -337,7 +359,10 @@ mod tests {
     #[test]
     fn default_hotkeys_are_distinct() {
         let cfg = stinkshot_core::config::Hotkeys::default();
-        let mut ids: Vec<u32> = bindings(&cfg).iter().filter_map(|(_, t)| t.parse::<HotKey>().ok().map(|h| h.id())).collect();
+        let mut ids: Vec<u32> = bindings(&cfg)
+            .iter()
+            .filter_map(|(_, t)| t.parse::<HotKey>().ok().map(|h| h.id()))
+            .collect();
         let n = ids.len();
         ids.sort_unstable();
         ids.dedup();

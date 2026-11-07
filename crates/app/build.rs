@@ -16,14 +16,27 @@ fn main() {
     }
 
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR is set by cargo"));
-    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo"));
+    let manifest_dir = PathBuf::from(
+        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo"),
+    );
 
     let ico_path = out_dir.join("stinkshot.ico");
-    std::fs::write(&ico_path, icon_gen::ico_bytes([0x7f, 0xd3, 0x6a])).expect("write generated icon");
+    std::fs::write(&ico_path, icon_gen::ico_bytes([0x7f, 0xd3, 0x6a]))
+        .expect("write generated icon");
 
     let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.1.0".into());
-    let mut parts = version.split('.').map(|p| p.split('-').next().unwrap_or("0").parse::<u32>().unwrap_or(0));
-    let (major, minor, patch) = (parts.next().unwrap_or(0), parts.next().unwrap_or(0), parts.next().unwrap_or(0));
+    let mut parts = version.split('.').map(|p| {
+        p.split('-')
+            .next()
+            .unwrap_or("0")
+            .parse::<u32>()
+            .unwrap_or(0)
+    });
+    let (major, minor, patch) = (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+    );
 
     let slash = |p: PathBuf| p.to_string_lossy().replace('\\', "/");
     let rc = format!(

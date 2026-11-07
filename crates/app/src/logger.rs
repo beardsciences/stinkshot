@@ -26,7 +26,10 @@ impl FileLogger {
         // Windows cannot rename an open file; reopen after the rename via a fresh handle.
         let _ = file.flush();
         if std::fs::rename(&self.path, &old).is_ok()
-            && let Ok(f) = OpenOptions::new().create(true).append(true).open(&self.path)
+            && let Ok(f) = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.path)
         {
             *file = f;
             *written = 0;
@@ -37,8 +40,16 @@ impl FileLogger {
 impl Log for FileLogger {
     fn enabled(&self, metadata: &Metadata) -> bool {
         let t = metadata.target();
-        let noisy = t.starts_with("wgpu") || t.starts_with("naga") || t.starts_with("winit") || t.starts_with("egui") || t.starts_with("eframe");
-        if noisy { metadata.level() <= log::Level::Warn } else { true }
+        let noisy = t.starts_with("wgpu")
+            || t.starts_with("naga")
+            || t.starts_with("winit")
+            || t.starts_with("egui")
+            || t.starts_with("eframe");
+        if noisy {
+            metadata.level() <= log::Level::Warn
+        } else {
+            true
+        }
     }
 
     fn log(&self, record: &Record) {
@@ -87,14 +98,26 @@ pub fn init() {
             return;
         }
     };
-    let logger = FileLogger { file: Mutex::new(file), path, written: Mutex::new(written) };
+    let logger = FileLogger {
+        file: Mutex::new(file),
+        path,
+        written: Mutex::new(written),
+    };
     if log::set_boxed_logger(Box::new(logger)).is_ok() {
-        log::set_max_level(if cfg!(debug_assertions) { LevelFilter::Debug } else { LevelFilter::Info });
+        log::set_max_level(if cfg!(debug_assertions) {
+            LevelFilter::Debug
+        } else {
+            LevelFilter::Info
+        });
     }
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         log::error!("panic: {info}");
         default_hook(info);
     }));
-    log::info!("StinkShot {} starting (pid {})", env!("CARGO_PKG_VERSION"), std::process::id());
+    log::info!(
+        "StinkShot {} starting (pid {})",
+        env!("CARGO_PKG_VERSION"),
+        std::process::id()
+    );
 }

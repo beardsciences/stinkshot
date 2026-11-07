@@ -17,7 +17,10 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
-use egui::{Align2, Color32, CornerRadius, RichText, ScrollArea, Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2, pos2, vec2};
+use egui::{
+    Align2, Color32, CornerRadius, RichText, ScrollArea, Sense, Stroke, StrokeKind, Ui, UiBuilder,
+    Vec2, pos2, vec2,
+};
 use stinkshot_core::config::{Config, Hotkeys};
 use stinkshot_core::image::ImageFormat;
 use stinkshot_history::Stats;
@@ -182,12 +185,21 @@ fn days_label(days: u32) -> String {
 }
 
 fn gb_label(gb: f32) -> String {
-    if gb <= 0.0 { "No cap".into() } else { format!("{gb:.1} GB") }
+    if gb <= 0.0 {
+        "No cap".into()
+    } else {
+        format!("{gb:.1} GB")
+    }
 }
 
 /// "Last checked 2 hours ago" style text from a UTC timestamp.
-fn last_check_text(last: Option<chrono::DateTime<chrono::Utc>>, now: chrono::DateTime<chrono::Utc>) -> String {
-    let Some(t) = last else { return "Never checked".into() };
+fn last_check_text(
+    last: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> String {
+    let Some(t) = last else {
+        return "Never checked".into();
+    };
     let d = now.signed_duration_since(t);
     let s = d.num_seconds().max(0);
     let ago = if s < 60 {
@@ -271,7 +283,10 @@ impl SettingsWindow {
         let (tx, rx) = channel();
         let c = ctx.clone();
         if uc::spawn_worker("device-scan", move || {
-            let r = (stinkshot_record::list_microphones(), stinkshot_record::list_webcams());
+            let r = (
+                stinkshot_record::list_microphones(),
+                stinkshot_record::list_webcams(),
+            );
             let _ = tx.send(r);
             c.request_repaint();
         }) {
@@ -312,7 +327,10 @@ impl SettingsWindow {
             }
         }
         // Library stats for the History/Privacy pages (cheap SQL), refreshed every few seconds.
-        if matches!(self.section, Section::History | Section::Privacy) && self.stats_at.is_none_or(|t| t.elapsed() > Duration::from_secs(5))
+        if matches!(self.section, Section::History | Section::Privacy)
+            && self
+                .stats_at
+                .is_none_or(|t| t.elapsed() > Duration::from_secs(5))
         {
             self.stats = shared.history.stats().ok();
             self.stats_at = Some(Instant::now());
@@ -335,9 +353,15 @@ impl SettingsWindow {
     }
 
     fn apply_capture(&mut self, shared: &mut Shared, ctx: &egui::Context) -> bool {
-        let Some(field) = self.capturing else { return false };
+        let Some(field) = self.capturing else {
+            return false;
+        };
         let down = uc::async_key_down(uc::VK_SNAPSHOT);
-        let polled = if down && !self.print_prev { Some("PrintScreen") } else { None };
+        let polled = if down && !self.print_prev {
+            Some("PrintScreen")
+        } else {
+            None
+        };
         self.print_prev = down;
         let win = uc::async_key_down(uc::VK_LWIN) || uc::async_key_down(uc::VK_RWIN);
         let (events, mods) = ctx.input(|i| (i.events.clone(), i.modifiers));
@@ -393,8 +417,14 @@ impl Surface for SettingsWindow {
         let mut section = self.section;
 
         uc::root_ui(ctx, p.bg, |ui, rect| {
-            let nav = egui::Rect::from_min_size(rect.min + vec2(0.0, 8.0), vec2(NAV_W, rect.height() - 8.0));
-            let content = egui::Rect::from_min_max(pos2(rect.left() + NAV_W, rect.top() + 8.0), rect.right_bottom());
+            let nav = egui::Rect::from_min_size(
+                rect.min + vec2(0.0, 8.0),
+                vec2(NAV_W, rect.height() - 8.0),
+            );
+            let content = egui::Rect::from_min_max(
+                pos2(rect.left() + NAV_W, rect.top() + 8.0),
+                rect.right_bottom(),
+            );
 
             // Content layer (rounded top-left like the History window).
             ui.painter().rect_filled(
@@ -408,18 +438,25 @@ impl Surface for SettingsWindow {
                 p.layer,
             );
             ui.painter().line_segment(
-                [content.left_top() + vec2(8.0, 0.5), content.right_top() + vec2(0.0, 0.5)],
+                [
+                    content.left_top() + vec2(8.0, 0.5),
+                    content.right_top() + vec2(0.0, 0.5),
+                ],
                 Stroke::new(1.0, p.stroke),
             );
             ui.painter().line_segment(
-                [content.left_top() + vec2(0.5, 8.0), content.left_bottom() + vec2(0.5, 0.0)],
+                [
+                    content.left_top() + vec2(0.5, 8.0),
+                    content.left_bottom() + vec2(0.5, 0.0),
+                ],
                 Stroke::new(1.0, p.stroke),
             );
 
             // Navigation.
             let mut y = nav.top() + 8.0;
             for (sec, name) in SECTIONS {
-                let r = egui::Rect::from_min_size(pos2(nav.left() + 12.0, y), vec2(NAV_W - 24.0, 36.0));
+                let r =
+                    egui::Rect::from_min_size(pos2(nav.left() + 12.0, y), vec2(NAV_W - 24.0, 36.0));
                 y += 38.0;
                 let resp = ui.interact(r, ui.scope_id().with(("nav", name)), Sense::click());
                 let selected = sec == section;
@@ -430,10 +467,17 @@ impl Surface for SettingsWindow {
                         Color32::from_white_alpha(if shared.dark { 18 } else { 0 }),
                     );
                     if !shared.dark {
-                        ui.painter().rect_filled(r, CornerRadius::same(6), Color32::from_black_alpha(14));
+                        ui.painter().rect_filled(
+                            r,
+                            CornerRadius::same(6),
+                            Color32::from_black_alpha(14),
+                        );
                     }
                     ui.painter().rect_filled(
-                        egui::Rect::from_min_size(pos2(r.left() + 10.0, r.center().y - 8.0), vec2(3.0, 16.0)),
+                        egui::Rect::from_min_size(
+                            pos2(r.left() + 10.0, r.center().y - 8.0),
+                            vec2(3.0, 16.0),
+                        ),
                         CornerRadius::same(2),
                         accent,
                     );
@@ -444,7 +488,11 @@ impl Surface for SettingsWindow {
                         Color32::from_white_alpha(if shared.dark { 10 } else { 0 }),
                     );
                     if !shared.dark {
-                        ui.painter().rect_filled(r, CornerRadius::same(6), Color32::from_black_alpha(8));
+                        ui.painter().rect_filled(
+                            r,
+                            CornerRadius::same(6),
+                            Color32::from_black_alpha(8),
+                        );
                     }
                 }
                 ui.painter().text(
@@ -472,9 +520,15 @@ impl Surface for SettingsWindow {
                         ui.spacing_mut().item_spacing.y = 6.0;
                         ui.spacing_mut().slider_width = 180.0;
                         ui.label(
-                            RichText::new(SECTIONS.iter().find(|(s, _)| *s == section).map(|(_, n)| *n).unwrap_or(""))
-                                .size(28.0)
-                                .color(p.text),
+                            RichText::new(
+                                SECTIONS
+                                    .iter()
+                                    .find(|(s, _)| *s == section)
+                                    .map(|(_, n)| *n)
+                                    .unwrap_or(""),
+                            )
+                            .size(28.0)
+                            .color(p.text),
                         );
                         ui.add_space(6.0);
                         match section {
@@ -517,7 +571,11 @@ impl Surface for SettingsWindow {
             shared.config_dirty = true;
             self.pending_dirty = false;
         }
-        if closing { SurfaceStatus::Close } else { SurfaceStatus::Open }
+        if closing {
+            SurfaceStatus::Close
+        } else {
+            SurfaceStatus::Open
+        }
     }
 }
 
@@ -531,18 +589,39 @@ fn toggle_row(ui: &mut Ui, title: &str, desc: &str, v: &mut bool) {
     });
 }
 
-fn combo_row<T: Copy + PartialEq>(ui: &mut Ui, id: &str, title: &str, desc: &str, v: &mut T, opts: &[(T, &str)]) {
+fn combo_row<T: Copy + PartialEq>(
+    ui: &mut Ui,
+    id: &str,
+    title: &str,
+    desc: &str,
+    v: &mut T,
+    opts: &[(T, &str)],
+) {
     widgets::setting_row(ui, title, desc, |ui| {
-        let cur = opts.iter().find(|(o, _)| *o == *v).map(|(_, l)| *l).unwrap_or("Custom");
-        egui::ComboBox::from_id_salt(id).selected_text(cur).width(150.0).show_ui(ui, |ui| {
-            for (o, l) in opts {
-                ui.selectable_value(v, *o, *l);
-            }
-        });
+        let cur = opts
+            .iter()
+            .find(|(o, _)| *o == *v)
+            .map(|(_, l)| *l)
+            .unwrap_or("Custom");
+        egui::ComboBox::from_id_salt(id)
+            .selected_text(cur)
+            .width(150.0)
+            .show_ui(ui, |ui| {
+                for (o, l) in opts {
+                    ui.selectable_value(v, *o, *l);
+                }
+            });
     });
 }
 
-fn slider_row<N: egui::emath::Numeric>(ui: &mut Ui, title: &str, desc: &str, v: &mut N, range: std::ops::RangeInclusive<N>, suffix: &str) {
+fn slider_row<N: egui::emath::Numeric>(
+    ui: &mut Ui,
+    title: &str,
+    desc: &str,
+    v: &mut N,
+    range: std::ops::RangeInclusive<N>,
+    suffix: &str,
+) {
     widgets::setting_row(ui, title, desc, |ui| {
         ui.add(egui::Slider::new(v, range).suffix(suffix.to_string()));
     });
@@ -560,7 +639,8 @@ fn commit_text(ui: &mut Ui, id: &str, current: &str, width: f32, hint: &str) -> 
     let te_id = ui.scope_id().with(("commit_text", id));
     let focused = ui.memory(|m| m.has_focus(te_id));
     let mut buf: String = if focused {
-        ui.data(|d| d.get_temp::<String>(te_id)).unwrap_or_else(|| current.to_string())
+        ui.data(|d| d.get_temp::<String>(te_id))
+            .unwrap_or_else(|| current.to_string())
     } else {
         current.to_string()
     };
@@ -578,13 +658,20 @@ fn commit_text(ui: &mut Ui, id: &str, current: &str, width: f32, hint: &str) -> 
 fn swatch_row(ui: &mut Ui, colors: &[String], selected: &str, ring: Color32) -> Option<String> {
     let mut picked = None;
     for hex in colors {
-        let Some(c) = uc::hex_to_color(hex) else { continue };
+        let Some(c) = uc::hex_to_color(hex) else {
+            continue;
+        };
         let (r, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
         let is_sel = hex.eq_ignore_ascii_case(selected);
-        ui.painter().rect_filled(r.shrink(3.0), CornerRadius::same(13), c);
+        ui.painter()
+            .rect_filled(r.shrink(3.0), CornerRadius::same(13), c);
         if is_sel {
-            ui.painter()
-                .rect_stroke(r.shrink(0.5), CornerRadius::same(13), Stroke::new(2.0, ring), StrokeKind::Inside);
+            ui.painter().rect_stroke(
+                r.shrink(0.5),
+                CornerRadius::same(13),
+                Stroke::new(2.0, ring),
+                StrokeKind::Inside,
+            );
         } else if resp.hovered() {
             ui.painter().rect_stroke(
                 r.shrink(1.5),
@@ -606,15 +693,30 @@ fn swatch_row(ui: &mut Ui, colors: &[String], selected: &str, ring: Color32) -> 
 
 fn color_button(ui: &mut Ui, hex: &str) -> Option<String> {
     let mut c = uc::hex_to_color(hex).unwrap_or(Color32::WHITE);
-    let resp = egui::color_picker::color_edit_button_srgba(ui, &mut c, egui::color_picker::Alpha::Opaque);
-    if resp.changed() { Some(uc::color_to_hex(c)) } else { None }
+    let resp =
+        egui::color_picker::color_edit_button_srgba(ui, &mut c, egui::color_picker::Alpha::Opaque);
+    if resp.changed() {
+        Some(uc::color_to_hex(c))
+    } else {
+        None
+    }
 }
 
-fn info_card(ui: &mut Ui, p: &theme::Palette, accent: Color32, icon: Icon, title: &str, body: &str) {
+fn info_card(
+    ui: &mut Ui,
+    p: &theme::Palette,
+    accent: Color32,
+    icon: Icon,
+    title: &str,
+    body: &str,
+) {
     let w = ui.available_width();
-    let galley = ui
-        .painter()
-        .layout(body.to_string(), uc::font(13.0), p.text_secondary, w - 36.0 - 28.0 - 14.0);
+    let galley = ui.painter().layout(
+        body.to_string(),
+        uc::font(13.0),
+        p.text_secondary,
+        w - 36.0 - 28.0 - 14.0,
+    );
     let h = (16.0 + 20.0 + 6.0 + galley.size().y + 16.0).max(64.0);
     let (r, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
     uc::card(ui, r, 8, p.card, p.stroke);
@@ -631,8 +733,11 @@ fn info_card(ui: &mut Ui, p: &theme::Palette, accent: Color32, icon: Icon, title
         uc::font(15.0),
         p.text,
     );
-    ui.painter()
-        .galley(r.min + vec2(18.0 + 28.0 + 14.0, 16.0 + 24.0), galley, p.text_secondary);
+    ui.painter().galley(
+        r.min + vec2(18.0 + 28.0 + 14.0, 16.0 + 24.0),
+        galley,
+        p.text_secondary,
+    );
 }
 
 // ---------------------------------------------------------------------------------------
@@ -649,39 +754,54 @@ impl SettingsWindow {
             "Launch StinkShot to the tray when you sign in.",
             &mut g.start_with_windows,
         );
-        widgets::setting_row(ui, "Theme", "Follow Windows or force dark or light.", |ui| {
-            let label = match g.theme.as_str() {
-                "dark" => "Dark",
-                "light" => "Light",
-                _ => "Use system setting",
-            };
-            egui::ComboBox::from_id_salt("theme")
-                .selected_text(label)
-                .width(170.0)
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut g.theme, "system".to_string(), "Use system setting");
-                    ui.selectable_value(&mut g.theme, "dark".to_string(), "Dark");
-                    ui.selectable_value(&mut g.theme, "light".to_string(), "Light");
+        widgets::setting_row(
+            ui,
+            "Theme",
+            "Follow Windows or force dark or light.",
+            |ui| {
+                let label = match g.theme.as_str() {
+                    "dark" => "Dark",
+                    "light" => "Light",
+                    _ => "Use system setting",
+                };
+                egui::ComboBox::from_id_salt("theme")
+                    .selected_text(label)
+                    .width(170.0)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut g.theme,
+                            "system".to_string(),
+                            "Use system setting",
+                        );
+                        ui.selectable_value(&mut g.theme, "dark".to_string(), "Dark");
+                        ui.selectable_value(&mut g.theme, "light".to_string(), "Light");
+                    });
+            },
+        );
+        widgets::setting_row(
+            ui,
+            "Accent color",
+            "Buttons, selection, HUDs and click ripples.",
+            |ui| {
+                ui.horizontal(|ui| {
+                    let presets: Vec<String> =
+                        DEFAULT_ACCENTS.iter().map(|s| s.to_string()).collect();
+                    if let Some(h) = color_button(ui, &g.accent) {
+                        g.accent = h;
+                    }
+                    if let Some(h) = swatch_row(ui, &presets, &g.accent, p.text) {
+                        g.accent = h;
+                    }
+                    if widgets::button(ui, "Windows accent")
+                        .on_hover_text("Use the accent color from Windows settings")
+                        .clicked()
+                        && let Some(c) = stinkshot_platform::system::system_accent()
+                    {
+                        g.accent = stinkshot_core::config::to_hex_color(c);
+                    }
                 });
-        });
-        widgets::setting_row(ui, "Accent color", "Buttons, selection, HUDs and click ripples.", |ui| {
-            ui.horizontal(|ui| {
-                let presets: Vec<String> = DEFAULT_ACCENTS.iter().map(|s| s.to_string()).collect();
-                if let Some(h) = color_button(ui, &g.accent) {
-                    g.accent = h;
-                }
-                if let Some(h) = swatch_row(ui, &presets, &g.accent, p.text) {
-                    g.accent = h;
-                }
-                if widgets::button(ui, "Windows accent")
-                    .on_hover_text("Use the accent color from Windows settings")
-                    .clicked()
-                    && let Some(c) = stinkshot_platform::system::system_accent()
-                {
-                    g.accent = stinkshot_core::config::to_hex_color(c);
-                }
-            });
-        });
+            },
+        );
         group_title(ui, p, "After a capture");
         toggle_row(
             ui,
@@ -705,7 +825,12 @@ impl SettingsWindow {
                 " s",
             );
         });
-        toggle_row(ui, "Play sound", "A short shutter sound after capturing.", &mut g.play_sound);
+        toggle_row(
+            ui,
+            "Play sound",
+            "A short shutter sound after capturing.",
+            &mut g.play_sound,
+        );
         let _ = accent;
     }
 
@@ -722,16 +847,20 @@ impl SettingsWindow {
             ui.add_space(4.0);
             let text = self.hotkey_errors.join("\n");
             let w = ui.available_width();
-            let galley = ui.painter().layout(text, uc::font(12.0), p.danger, w - 28.0);
+            let galley = ui
+                .painter()
+                .layout(text, uc::font(12.0), p.danger, w - 28.0);
             let (r, _) = ui.allocate_exact_size(vec2(w, galley.size().y + 24.0), Sense::hover());
-            ui.painter().rect_filled(r, CornerRadius::same(8), uc::with_alpha(p.danger, 28));
+            ui.painter()
+                .rect_filled(r, CornerRadius::same(8), uc::with_alpha(p.danger, 28));
             ui.painter().rect_stroke(
                 r,
                 CornerRadius::same(8),
                 Stroke::new(1.0, uc::with_alpha(p.danger, 110)),
                 StrokeKind::Inside,
             );
-            ui.painter().galley(r.min + vec2(14.0, 12.0), galley, p.danger);
+            ui.painter()
+                .galley(r.min + vec2(14.0, 12.0), galley, p.danger);
         }
         group_title(ui, p, "Shortcuts");
         let hk_snapshot = shared.config.hotkeys.clone();
@@ -742,7 +871,11 @@ impl SettingsWindow {
             if !dupes.is_empty() {
                 desc.push_str(&format!(
                     "  Also used by {}.",
-                    dupes.iter().map(|f| f.label()).collect::<Vec<_>>().join(", ")
+                    dupes
+                        .iter()
+                        .map(|f| f.label())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ));
             }
             if let Some(e) = error_for(&self.hotkey_errors, &current) {
@@ -783,7 +916,11 @@ impl SettingsWindow {
                     }
                     if resp.clicked() && !key_consumed {
                         toggle_capture = true;
-                    } else if capturing && !key_consumed && ui.input(|i| i.pointer.any_click()) && !resp.hovered() {
+                    } else if capturing
+                        && !key_consumed
+                        && ui.input(|i| i.pointer.any_click())
+                        && !resp.hovered()
+                    {
                         // Clicked elsewhere: abandon.
                         toggle_capture = true;
                     }
@@ -803,9 +940,11 @@ impl SettingsWindow {
         }
         ui.add_space(8.0);
         ui.label(
-            RichText::new("Click a shortcut, then press the combination. Esc cancels, Backspace clears it.")
-                .size(12.0)
-                .color(p.text_tertiary),
+            RichText::new(
+                "Click a shortcut, then press the combination. Esc cancels, Backspace clears it.",
+            )
+            .size(12.0)
+            .color(p.text_tertiary),
         );
         ui.add_space(4.0);
         if widgets::button(ui, "Reset shortcuts to defaults").clicked() {
@@ -867,19 +1006,32 @@ impl SettingsWindow {
             &mut c.window_padding,
         );
         ui.add_enabled_ui(c.window_padding, |ui| {
-            slider_row(ui, "Padding", "Space around the window.", &mut c.window_padding_px, 0..=200, " px");
-            widgets::setting_row(ui, "Padding color", "Backdrop color for the padded frame.", |ui| {
-                ui.horizontal(|ui| {
-                    if let Some(h) = color_button(ui, &c.window_padding_color) {
-                        c.window_padding_color = h;
-                    }
-                    if let Some(t) = commit_text(ui, "pad_hex", &c.window_padding_color, 90.0, "#5b7fa8")
-                        && let Some(rgba) = uc::parse_hex(&t)
-                    {
-                        c.window_padding_color = stinkshot_core::config::to_hex_color(rgba);
-                    }
-                });
-            });
+            slider_row(
+                ui,
+                "Padding",
+                "Space around the window.",
+                &mut c.window_padding_px,
+                0..=200,
+                " px",
+            );
+            widgets::setting_row(
+                ui,
+                "Padding color",
+                "Backdrop color for the padded frame.",
+                |ui| {
+                    ui.horizontal(|ui| {
+                        if let Some(h) = color_button(ui, &c.window_padding_color) {
+                            c.window_padding_color = h;
+                        }
+                        if let Some(t) =
+                            commit_text(ui, "pad_hex", &c.window_padding_color, 90.0, "#5b7fa8")
+                            && let Some(rgba) = uc::parse_hex(&t)
+                        {
+                            c.window_padding_color = stinkshot_core::config::to_hex_color(rgba);
+                        }
+                    });
+                },
+            );
         });
 
         group_title(ui, p, "Saving");
@@ -889,7 +1041,11 @@ impl SettingsWindow {
             "Image format",
             "PNG keeps alpha and text sharp; JPEG and WebP are smaller.",
             &mut c.format,
-            &[(ImageFormat::Png, "PNG"), (ImageFormat::Jpeg, "JPEG"), (ImageFormat::Webp, "WebP")],
+            &[
+                (ImageFormat::Png, "PNG"),
+                (ImageFormat::Jpeg, "JPEG"),
+                (ImageFormat::Webp, "WebP"),
+            ],
         );
         if c.format == ImageFormat::Jpeg {
             slider_row(
@@ -918,9 +1074,17 @@ impl SettingsWindow {
         widgets::setting_row(
             ui,
             "File name pattern",
-            &format!("Tokens: {{yyyy}} {{MM}} {{dd}} {{HH}} {{mm}} {{ss}} {{fff}} {{app}} {{title}} {{w}} {{h}}. Example: {preview}"),
+            &format!(
+                "Tokens: {{yyyy}} {{MM}} {{dd}} {{HH}} {{mm}} {{ss}} {{fff}} {{app}} {{title}} {{w}} {{h}}. Example: {preview}"
+            ),
             |ui| {
-                if let Some(t) = commit_text(ui, "pattern", &c.filename_pattern, 260.0, "StinkShot_{yyyy}-{MM}-{dd}") {
+                if let Some(t) = commit_text(
+                    ui,
+                    "pattern",
+                    &c.filename_pattern,
+                    260.0,
+                    "StinkShot_{yyyy}-{MM}-{dd}",
+                ) {
                     let t = t.trim().to_string();
                     c.filename_pattern = if t.is_empty() {
                         Config::default().capture.filename_pattern
@@ -976,8 +1140,22 @@ impl SettingsWindow {
             1.0..=24.0,
             " px",
         );
-        slider_row(ui, "Font size", "Text annotations.", &mut e.font_size, 8.0..=96.0, " px");
-        slider_row(ui, "Blur radius", "Blur tool strength.", &mut e.blur_radius, 2.0..=48.0, " px");
+        slider_row(
+            ui,
+            "Font size",
+            "Text annotations.",
+            &mut e.font_size,
+            8.0..=96.0,
+            " px",
+        );
+        slider_row(
+            ui,
+            "Blur radius",
+            "Blur tool strength.",
+            &mut e.blur_radius,
+            2.0..=48.0,
+            " px",
+        );
         slider_row(
             ui,
             "Pixelate block",
@@ -1009,19 +1187,24 @@ impl SettingsWindow {
                 });
             },
         );
-        widgets::setting_row(ui, "Manage palette", "Add, remove or restore the built-in colors.", |ui| {
-            ui.horizontal(|ui| {
-                if e.palette.len() < 12 && widgets::button(ui, "Add color").clicked() {
-                    add = true;
-                }
-                if e.palette.len() > 1 && widgets::button(ui, "Remove last").clicked() {
-                    remove = Some(e.palette.len() - 1);
-                }
-                if widgets::button(ui, "Reset").clicked() {
-                    reset = true;
-                }
-            });
-        });
+        widgets::setting_row(
+            ui,
+            "Manage palette",
+            "Add, remove or restore the built-in colors.",
+            |ui| {
+                ui.horizontal(|ui| {
+                    if e.palette.len() < 12 && widgets::button(ui, "Add color").clicked() {
+                        add = true;
+                    }
+                    if e.palette.len() > 1 && widgets::button(ui, "Remove last").clicked() {
+                        remove = Some(e.palette.len() - 1);
+                    }
+                    if widgets::button(ui, "Reset").clicked() {
+                        reset = true;
+                    }
+                });
+            },
+        );
         if add {
             e.palette.push(uc::color_to_hex(accent));
         }
@@ -1031,7 +1214,11 @@ impl SettingsWindow {
         if reset {
             e.palette = Config::default().editor.palette;
             if !e.palette.iter().any(|h| h.eq_ignore_ascii_case(&e.color)) {
-                e.color = e.palette.first().cloned().unwrap_or_else(|| "#ff8a3d".into());
+                e.color = e
+                    .palette
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "#ff8a3d".into());
             }
         }
     }
@@ -1069,13 +1256,39 @@ impl SettingsWindow {
             0..=10,
             " s",
         );
-        toggle_row(ui, "Show mouse clicks", "Expanding ripples around clicks.", &mut r.show_clicks);
-        toggle_row(ui, "Show key presses", "A chip with the current key combination.", &mut r.show_keys);
+        toggle_row(
+            ui,
+            "Show mouse clicks",
+            "Expanding ripples around clicks.",
+            &mut r.show_clicks,
+        );
+        toggle_row(
+            ui,
+            "Show key presses",
+            "A chip with the current key combination.",
+            &mut r.show_keys,
+        );
 
         group_title(ui, p, "Audio and webcam");
-        toggle_row(ui, "System audio", "Record what your PC is playing.", &mut r.system_audio);
-        toggle_row(ui, "Microphone", "Mix your microphone into the recording.", &mut r.microphone);
-        let dev_row = |ui: &mut Ui, id: &str, title: &str, desc: &str, value: &mut String, opts: &[(String, String)], enabled: bool| {
+        toggle_row(
+            ui,
+            "System audio",
+            "Record what your PC is playing.",
+            &mut r.system_audio,
+        );
+        toggle_row(
+            ui,
+            "Microphone",
+            "Mix your microphone into the recording.",
+            &mut r.microphone,
+        );
+        let dev_row = |ui: &mut Ui,
+                       id: &str,
+                       title: &str,
+                       desc: &str,
+                       value: &mut String,
+                       opts: &[(String, String)],
+                       enabled: bool| {
             widgets::setting_row(ui, title, desc, |ui| {
                 ui.add_enabled_ui(enabled, |ui| {
                     let cur = opts
@@ -1107,7 +1320,12 @@ impl SettingsWindow {
             &mic_opts,
             r.microphone,
         );
-        toggle_row(ui, "Webcam bubble", "Show a round webcam overlay in the recording.", &mut r.webcam);
+        toggle_row(
+            ui,
+            "Webcam bubble",
+            "Show a round webcam overlay in the recording.",
+            &mut r.webcam,
+        );
         dev_row(
             ui,
             "cam_dev",
@@ -1122,7 +1340,14 @@ impl SettingsWindow {
             r.webcam,
         );
         ui.add_enabled_ui(r.webcam, |ui| {
-            slider_row(ui, "Webcam size", "Bubble diameter.", &mut r.webcam_diameter, 96..=360, " px");
+            slider_row(
+                ui,
+                "Webcam size",
+                "Bubble diameter.",
+                &mut r.webcam_diameter,
+                96..=360,
+                " px",
+            );
         });
         widgets::setting_row(ui, "Devices", "Plugged something in? Look again.", |ui| {
             if widgets::button(ui, "Refresh devices").clicked() {
@@ -1174,7 +1399,10 @@ impl SettingsWindow {
         widgets::setting_row(
             ui,
             "History folder",
-            &format!("{}  Existing captures stay where they are.", shown_folder.display()),
+            &format!(
+                "{}  Existing captures stay where they are.",
+                shown_folder.display()
+            ),
             |ui| {
                 ui.horizontal(|ui| {
                     if custom && widgets::button(ui, "Use default").clicked() {
@@ -1183,7 +1411,17 @@ impl SettingsWindow {
                     if widgets::button(ui, "Open").clicked() {
                         open = true;
                     }
-                    if widgets::button(ui, if picking { "Choosing\u{2026}" } else { "Change" }).clicked() && !picking {
+                    if widgets::button(
+                        ui,
+                        if picking {
+                            "Choosing\u{2026}"
+                        } else {
+                            "Change"
+                        },
+                    )
+                    .clicked()
+                        && !picking
+                    {
                         pick = true;
                     }
                 });
@@ -1208,7 +1446,12 @@ impl SettingsWindow {
         } else {
             "OCR each capture in the background so you can search what was on screen. No OCR language is installed: add one in Windows Settings, Time and language, Language and region.".to_string()
         };
-        toggle_row(ui, "Index text for search", &ocr_desc, &mut shared.config.history.ocr_index);
+        toggle_row(
+            ui,
+            "Index text for search",
+            &ocr_desc,
+            &mut shared.config.history.ocr_index,
+        );
         let h = &mut shared.config.history;
         widgets::setting_row(
             ui,
@@ -1226,7 +1469,9 @@ impl SettingsWindow {
                                 if t.starts_with("forever") || t.starts_with("never") {
                                     Some(0.0)
                                 } else {
-                                    t.split_whitespace().next().and_then(|n| n.parse::<f64>().ok())
+                                    t.split_whitespace()
+                                        .next()
+                                        .and_then(|n| n.parse::<f64>().ok())
                                 }
                             }),
                     );
@@ -1240,7 +1485,9 @@ impl SettingsWindow {
                                 if t.starts_with("no") {
                                     Some(0.0)
                                 } else {
-                                    t.split_whitespace().next().and_then(|n| n.parse::<f64>().ok())
+                                    t.split_whitespace()
+                                        .next()
+                                        .and_then(|n| n.parse::<f64>().ok())
                                 }
                             }),
                     );
@@ -1290,7 +1537,9 @@ impl SettingsWindow {
             &mut shared.config.privacy.check_for_updates,
         );
         let last = last_check_text(shared.config.privacy.last_update_check, chrono::Utc::now());
-        let requested = self.update_requested_at.is_some_and(|t| t.elapsed() < Duration::from_secs(4));
+        let requested = self
+            .update_requested_at
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(4));
         let mut check = false;
         widgets::setting_row(
             ui,
@@ -1307,7 +1556,11 @@ impl SettingsWindow {
                     }
                 });
                 if !enabled {
-                    ui.label(RichText::new("Turn on update checks first").size(12.0).color(p.text_tertiary));
+                    ui.label(
+                        RichText::new("Turn on update checks first")
+                            .size(12.0)
+                            .color(p.text_tertiary),
+                    );
                 }
             },
         );
@@ -1356,8 +1609,13 @@ impl SettingsWindow {
             uc::font(30.0),
             p.on_accent,
         );
-        ui.painter()
-            .text(r.min + vec2(92.0, 24.0), Align2::LEFT_TOP, "StinkShot", uc::font(20.0), p.text);
+        ui.painter().text(
+            r.min + vec2(92.0, 24.0),
+            Align2::LEFT_TOP,
+            "StinkShot",
+            uc::font(20.0),
+            p.text,
+        );
         ui.painter().text(
             r.min + vec2(92.0, 52.0),
             Align2::LEFT_TOP,
@@ -1370,10 +1628,16 @@ impl SettingsWindow {
             "License",
             "GPL-3.0-or-later. Free software: use, study, share and change it.",
             |ui| {
-                ui.label(RichText::new("GPL-3.0-or-later").size(13.0).color(p.text_secondary));
+                ui.label(
+                    RichText::new("GPL-3.0-or-later")
+                        .size(13.0)
+                        .color(p.text_secondary),
+                );
             },
         );
-        let copied = self.copied_url_at.is_some_and(|t| t.elapsed() < Duration::from_secs(2));
+        let copied = self
+            .copied_url_at
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(2));
         let mut open = false;
         let mut copy = false;
         widgets::setting_row(ui, "Source code", REPO_URL, |ui| {
@@ -1386,7 +1650,9 @@ impl SettingsWindow {
                 }
             });
         });
-        if open && let Err(e) = stinkshot_platform::system::open_path(std::path::Path::new(REPO_URL)) {
+        if open
+            && let Err(e) = stinkshot_platform::system::open_path(std::path::Path::new(REPO_URL))
+        {
             shared.outbox.push(Command::Notify {
                 title: "Could not open link".into(),
                 body: e.to_string(),
@@ -1411,7 +1677,11 @@ impl SettingsWindow {
             "Privacy",
             "Local only: no uploads, no accounts, no telemetry. The single optional network call is the update check.",
             |ui| {
-                ui.label(RichText::new("Offline by default").size(13.0).color(p.text_secondary));
+                ui.label(
+                    RichText::new("Offline by default")
+                        .size(13.0)
+                        .color(p.text_secondary),
+                );
             },
         );
         let _ = Vec2::ZERO;
@@ -1429,8 +1699,14 @@ mod tests {
             window: "shift+control+keys".into(),
             ..Hotkeys::default()
         };
-        assert_eq!(conflicts_with(&h, HotkeyField::Scrolling), vec![HotkeyField::Window]);
-        assert_eq!(conflicts_with(&h, HotkeyField::Window), vec![HotkeyField::Scrolling]);
+        assert_eq!(
+            conflicts_with(&h, HotkeyField::Scrolling),
+            vec![HotkeyField::Window]
+        );
+        assert_eq!(
+            conflicts_with(&h, HotkeyField::Window),
+            vec![HotkeyField::Scrolling]
+        );
         assert!(conflicts_with(&h, HotkeyField::Region).is_empty());
     }
 
@@ -1453,9 +1729,18 @@ mod tests {
 
     #[test]
     fn shell_errors_match_raw_or_friendly_prefix() {
-        let errors = vec!["Control+Shift+KeyS: already in use".to_string(), "Alt+PrtSc: invalid".to_string()];
-        assert_eq!(error_for(&errors, "Control+Shift+KeyS"), Some("Control+Shift+KeyS: already in use"));
-        assert_eq!(error_for(&errors, "Alt+PrintScreen"), Some("Alt+PrtSc: invalid"));
+        let errors = vec![
+            "Control+Shift+KeyS: already in use".to_string(),
+            "Alt+PrtSc: invalid".to_string(),
+        ];
+        assert_eq!(
+            error_for(&errors, "Control+Shift+KeyS"),
+            Some("Control+Shift+KeyS: already in use")
+        );
+        assert_eq!(
+            error_for(&errors, "Alt+PrintScreen"),
+            Some("Alt+PrtSc: invalid")
+        );
         assert_eq!(error_for(&errors, "Control+KeyT"), None);
         assert_eq!(error_for(&errors, ""), None);
     }
@@ -1489,7 +1774,10 @@ mod tests {
             last_check_text(Some(now - chrono::Duration::minutes(5)), now),
             "Last checked 5 min ago"
         );
-        assert_eq!(last_check_text(Some(now - chrono::Duration::hours(3)), now), "Last checked 3 h ago");
+        assert_eq!(
+            last_check_text(Some(now - chrono::Duration::hours(3)), now),
+            "Last checked 3 h ago"
+        );
         assert_eq!(
             last_check_text(Some(now - chrono::Duration::days(2)), now),
             "Last checked 2 days ago"

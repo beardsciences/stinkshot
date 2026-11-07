@@ -55,13 +55,21 @@ const ID_QUIT: &str = "quit";
 const ID_UPDATE: &str = "update";
 
 fn header_text(config: &Config) -> String {
-    let state = if config.privacy.check_for_updates { "update check on" } else { "offline" };
+    let state = if config.privacy.check_for_updates {
+        "update check on"
+    } else {
+        "offline"
+    };
     format!("StinkShot {} \u{b7} {}", env!("CARGO_PKG_VERSION"), state)
 }
 
 fn entry_text(label: &str, hotkey: &str) -> String {
     let key = display(hotkey);
-    if key.is_empty() { label.to_string() } else { format!("{label}\t{key}") }
+    if key.is_empty() {
+        label.to_string()
+    } else {
+        format!("{label}\t{key}")
+    }
 }
 
 fn accent_of(config: &Config) -> [u8; 3] {
@@ -85,23 +93,34 @@ impl Tray {
             ("full", "Full screen", |c| &c.hotkeys.fullscreen),
             ("scroll", "Scrolling", |c| &c.hotkeys.scrolling),
             ("ocr", "Copy text (OCR)", |c| &c.hotkeys.ocr),
-            ("repeat", "Repeat last region", |c| &c.hotkeys.repeat_last_region),
+            ("repeat", "Repeat last region", |c| {
+                &c.hotkeys.repeat_last_region
+            }),
             ("rec_mp4", "Record MP4", |c| &c.hotkeys.record_mp4),
             ("rec_gif", "Record GIF", |c| &c.hotkeys.record_gif),
         ];
         let mut entries = Vec::new();
         for (i, (id, label, hotkey)) in spec.into_iter().enumerate() {
             if i == 6 {
-                menu.append(&PredefinedMenuItem::separator()).context("tray menu")?;
+                menu.append(&PredefinedMenuItem::separator())
+                    .context("tray menu")?;
             }
             let item = MenuItem::with_id(id, entry_text(label, hotkey(config)), true, None);
             menu.append(&item).context("tray menu")?;
-            entries.push(Entry { label, item, hotkey });
+            entries.push(Entry {
+                label,
+                item,
+                hotkey,
+            });
         }
-        menu.append(&PredefinedMenuItem::separator()).context("tray menu")?;
-        menu.append(&MenuItem::with_id(ID_HISTORY, "History", true, None)).context("tray menu")?;
-        menu.append(&MenuItem::with_id(ID_SETTINGS, "Settings", true, None)).context("tray menu")?;
-        menu.append(&MenuItem::with_id(ID_QUIT, "Quit", true, None)).context("tray menu")?;
+        menu.append(&PredefinedMenuItem::separator())
+            .context("tray menu")?;
+        menu.append(&MenuItem::with_id(ID_HISTORY, "History", true, None))
+            .context("tray menu")?;
+        menu.append(&MenuItem::with_id(ID_SETTINGS, "Settings", true, None))
+            .context("tray menu")?;
+        menu.append(&MenuItem::with_id(ID_QUIT, "Quit", true, None))
+            .context("tray menu")?;
 
         let accent = accent_of(config);
         let dpi_size = icon_gen::tray_size_for_dpi(crate::sysutil::system_dpi());
@@ -122,10 +141,15 @@ impl Tray {
             .spawn(move || {
                 while let Ok(ev) = tray_events.recv() {
                     let msg = match ev {
-                        TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } => {
-                            Some(Msg::LeftClick)
-                        }
-                        TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } => Some(Msg::DoubleClick),
+                        TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } => Some(Msg::LeftClick),
+                        TrayIconEvent::DoubleClick {
+                            button: MouseButton::Left,
+                            ..
+                        } => Some(Msg::DoubleClick),
                         _ => None,
                     };
                     if let Some(m) = msg {
@@ -193,7 +217,12 @@ impl Tray {
         }
         self.update_url = None;
         if let Some(r) = release {
-            let item = MenuItem::with_id(ID_UPDATE, format!("Update available: {}", r.tag), !r.url.is_empty(), None);
+            let item = MenuItem::with_id(
+                ID_UPDATE,
+                format!("Update available: {}", r.tag),
+                !r.url.is_empty(),
+                None,
+            );
             if let Err(e) = self.menu.insert(&item, 1) {
                 log::warn!("tray update item: {e}");
                 return;
@@ -214,7 +243,9 @@ impl Tray {
                     }
                 }
                 Msg::LeftClick => {
-                    let recent_double = self.last_double.is_some_and(|t| t.elapsed() < DOUBLE_CLICK_QUIET);
+                    let recent_double = self
+                        .last_double
+                        .is_some_and(|t| t.elapsed() < DOUBLE_CLICK_QUIET);
                     if !recent_double {
                         self.pending_click = Some(Instant::now());
                         crate::wake::wake_after(CLICK_DELAY + Duration::from_millis(30));
@@ -264,7 +295,10 @@ mod tests {
     #[test]
     fn entry_text_has_tab_separated_hotkey() {
         assert_eq!(entry_text("Region", "PrintScreen"), "Region\tPrtSc");
-        assert_eq!(entry_text("Scrolling", "Control+Shift+KeyS"), "Scrolling\tCtrl+Shift+S");
+        assert_eq!(
+            entry_text("Scrolling", "Control+Shift+KeyS"),
+            "Scrolling\tCtrl+Shift+S"
+        );
         assert_eq!(entry_text("Window", ""), "Window");
     }
 

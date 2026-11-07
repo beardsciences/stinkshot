@@ -45,11 +45,18 @@ pub enum Command {
     /// Re-open a history item in the overlay editor (annotations editable).
     EditItem(ItemId),
     PinItem(ItemId),
-    PinImage { image: Rgba, title: String },
+    PinImage {
+        image: Rgba,
+        title: String,
+    },
     /// Overlay finished an image capture.
     CaptureDone(CaptureOutput),
     /// Overlay finished selecting a region for a non-image mode.
-    RegionChosen { purpose: RegionPurpose, rect: PxRect, source: SourceInfo },
+    RegionChosen {
+        purpose: RegionPurpose,
+        rect: PxRect,
+        source: SourceInfo,
+    },
     /// Overlay or selector was cancelled (Esc).
     Cancelled,
     /// Recording HUD actions.
@@ -58,7 +65,13 @@ pub enum Command {
     RecordStop,
     RecordCancel,
     /// Trim window finished: save [start,end) as mp4 and/or gif.
-    TrimDone { source: std::path::PathBuf, start: std::time::Duration, end: std::time::Duration, as_gif: bool, as_mp4: bool },
+    TrimDone {
+        source: std::path::PathBuf,
+        start: std::time::Duration,
+        end: std::time::Duration,
+        as_gif: bool,
+        as_mp4: bool,
+    },
     /// Scrolling HUD: stop and keep what's stitched so far.
     ScrollStop,
     ScrollCancel,
@@ -69,7 +82,11 @@ pub enum Command {
     DeleteItem(ItemId),
     StarItem(ItemId, bool),
     /// Show a transient message toast (errors, "Text copied", etc.).
-    Notify { title: String, body: String, error: bool },
+    Notify {
+        title: String,
+        body: String,
+        error: bool,
+    },
     CheckForUpdates,
     Quit,
     /// Open a web page (the update release page) in the default browser.
@@ -129,7 +146,13 @@ pub enum OverlayMode {
     SelectRegion(RegionPurpose),
     /// Already-captured image to annotate (window capture, scrolling result, full screen,
     /// re-edit). Shown centered over a dimmed frozen screen, selection = whole image.
-    Annotate { base: Rgba, doc: Doc, mode: &'static str, editing: Option<ItemId>, source: SourceInfo },
+    Annotate {
+        base: Rgba,
+        doc: Doc,
+        mode: &'static str,
+        editing: Option<ItemId>,
+        source: SourceInfo,
+    },
 }
 
 pub struct OverlayRequest {

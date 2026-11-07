@@ -17,7 +17,10 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Datelike, Local, TimeZone};
-use egui::{Align2, Color32, CornerRadius, Key, Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind, UiBuilder, pos2, vec2};
+use egui::{
+    Align2, Color32, CornerRadius, Key, Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind,
+    UiBuilder, pos2, vec2,
+};
 use stinkshot_core::Rgba;
 use stinkshot_history::{History, ItemId, ItemKind, ItemMeta, Query, Stats};
 use stinkshot_platform::Hwnd;
@@ -101,7 +104,13 @@ pub fn grid_layout(avail_w: f32, min_card: f32, gap: f32) -> (usize, f32) {
 }
 
 /// Rows to draw for a scroll window, with `overscan` extra rows each side.
-pub fn visible_rows(scroll_top: f32, view_h: f32, pitch: f32, nrows: usize, overscan: usize) -> Range<usize> {
+pub fn visible_rows(
+    scroll_top: f32,
+    view_h: f32,
+    pitch: f32,
+    nrows: usize,
+    overscan: usize,
+) -> Range<usize> {
     if nrows == 0 || pitch <= 0.0 {
         return 0..0;
     }
@@ -125,7 +134,9 @@ pub fn move_selection(cur: Option<usize>, nav: Nav, cols: usize, len: usize) -> 
     if len == 0 {
         return None;
     }
-    let Some(c) = cur.filter(|c| *c < len) else { return Some(0) };
+    let Some(c) = cur.filter(|c| *c < len) else {
+        return Some(0);
+    };
     let cols = cols.max(1);
     Some(match nav {
         Nav::Left => c.saturating_sub(1),
@@ -154,7 +165,10 @@ pub fn move_selection(cur: Option<usize>, nav: Nav, cols: usize, len: usize) -> 
 /// "firefox.exe" -> "Firefox"; "" -> "Unknown".
 pub fn pretty_app(app: &str) -> String {
     let t = app.trim();
-    let t = t.strip_suffix(".exe").or_else(|| t.strip_suffix(".EXE")).unwrap_or(t);
+    let t = t
+        .strip_suffix(".exe")
+        .or_else(|| t.strip_suffix(".EXE"))
+        .unwrap_or(t);
     let mut chars = t.chars();
     match chars.next() {
         Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
@@ -180,7 +194,10 @@ pub fn item_title(m: &ItemMeta) -> String {
 
 /// "Today 9:14", "Yesterday 16:02", "Nov 3", "Nov 3 2025".
 pub fn friendly_date(created: DateTime<Local>, now: DateTime<Local>) -> String {
-    let days = now.date_naive().signed_duration_since(created.date_naive()).num_days();
+    let days = now
+        .date_naive()
+        .signed_duration_since(created.date_naive())
+        .num_days();
     let time = created.format("%-H:%M");
     match days {
         0 => format!("Today {time}"),
@@ -213,15 +230,27 @@ fn fmt_gb(gb: f32) -> String {
 /// Sidebar footer text.
 pub fn retention_summary(keep_days: u32, max_gb: f32, used_bytes: u64) -> String {
     let used = uc::fmt_bytes(used_bytes);
-    let days = |d: u32| if d == 1 { "1 day".to_string() } else { format!("{d} days") };
+    let days = |d: u32| {
+        if d == 1 {
+            "1 day".to_string()
+        } else {
+            format!("{d} days")
+        }
+    };
     match (keep_days > 0, max_gb > 0.0) {
         (true, true) => format!(
             "Keeping {} or {}, starred kept forever. {used} used.",
             days(keep_days),
             fmt_gb(max_gb)
         ),
-        (true, false) => format!("Keeping {}, starred kept forever. {used} used.", days(keep_days)),
-        (false, true) => format!("Keeping up to {}, starred kept forever. {used} used.", fmt_gb(max_gb)),
+        (true, false) => format!(
+            "Keeping {}, starred kept forever. {used} used.",
+            days(keep_days)
+        ),
+        (false, true) => format!(
+            "Keeping up to {}, starred kept forever. {used} used.",
+            fmt_gb(max_gb)
+        ),
         (false, false) => format!("Keeping everything. {used} used."),
     }
 }
@@ -233,7 +262,11 @@ pub fn results_line(count: usize, more: bool, search: &str) -> String {
     } else {
         uc::fmt_thousands(count as u64)
     };
-    let noun = if count == 1 && !more { "capture" } else { "captures" };
+    let noun = if count == 1 && !more {
+        "capture"
+    } else {
+        "captures"
+    };
     let q = search.trim();
     if q.is_empty() {
         format!("{n} {noun}")
@@ -293,7 +326,11 @@ impl Act {
         let image = m.kind == ItemKind::Image;
         match self {
             Act::Edit | Act::Pin | Act::CopyImage => image,
-            Act::CopyText => image && ocr_available && m.ocr_text.as_deref().is_some_and(|t| !t.trim().is_empty()),
+            Act::CopyText => {
+                image
+                    && ocr_available
+                    && m.ocr_text.as_deref().is_some_and(|t| !t.trim().is_empty())
+            }
             Act::Open | Act::Reveal | Act::ToggleStar | Act::Delete => true,
         }
     }
@@ -304,7 +341,9 @@ impl Act {
         }
         Some(match self {
             Act::CopyText if !ocr_available => "No OCR language is installed",
-            Act::CopyText if m.kind == ItemKind::Image && m.ocr_text.is_none() => "Text is still being indexed",
+            Act::CopyText if m.kind == ItemKind::Image && m.ocr_text.is_none() => {
+                "Text is still being indexed"
+            }
             Act::CopyText if m.kind == ItemKind::Image => "No text found in this capture",
             _ => "Only for images",
         })
@@ -327,7 +366,11 @@ impl Act {
 
 /// Default action for Enter / double click.
 pub fn primary_act(m: &ItemMeta) -> Act {
-    if m.kind == ItemKind::Image { Act::Edit } else { Act::Open }
+    if m.kind == ItemKind::Image {
+        Act::Edit
+    } else {
+        Act::Open
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -516,8 +559,16 @@ impl HistoryWindow {
     fn query_for(&self, now: DateTime<Local>) -> Query {
         let text = self.applied_search.trim();
         Query {
-            text: if text.is_empty() { None } else { Some(text.to_string()) },
-            app: if let Filter::App(a) = &self.filter { Some(a.clone()) } else { None },
+            text: if text.is_empty() {
+                None
+            } else {
+                Some(text.to_string())
+            },
+            app: if let Filter::App(a) = &self.filter {
+                Some(a.clone())
+            } else {
+                None
+            },
             kind: None,
             starred_only: self.filter == Filter::Starred,
             since: self.date.since(now),
@@ -588,7 +639,9 @@ impl HistoryWindow {
     }
 
     fn filtering(&self) -> bool {
-        self.filter != Filter::All || !self.applied_search.trim().is_empty() || self.date != DateFilter::Any
+        self.filter != Filter::All
+            || !self.applied_search.trim().is_empty()
+            || self.date != DateFilter::Any
     }
 
     fn clear_filters(&mut self) {
@@ -612,7 +665,11 @@ impl HistoryWindow {
             match w.results.try_recv() {
                 Ok(res) => match res.image {
                     Some(img) => {
-                        let tex = ctx.load_texture(format!("hist_{}_{}", res.key.id, res.key.bytes), img, egui::TextureOptions::LINEAR);
+                        let tex = ctx.load_texture(
+                            format!("hist_{}_{}", res.key.id, res.key.bytes),
+                            img,
+                            egui::TextureOptions::LINEAR,
+                        );
                         if let Some((evicted, _)) = self.textures.insert(res.key, tex) {
                             self.requested.remove(&evicted);
                         }
@@ -668,7 +725,10 @@ impl HistoryWindow {
                 self.stats.recordings = self.stats.recordings.saturating_sub(1);
             }
             // Keep the keyboard cursor near where the item was.
-            self.selected = self.items.get(idx.min(self.items.len().saturating_sub(1))).map(|m| m.id);
+            self.selected = self
+                .items
+                .get(idx.min(self.items.len().saturating_sub(1)))
+                .map(|m| m.id);
         }
         self.requery_at = Some(Instant::now() + Duration::from_millis(500));
     }
@@ -733,14 +793,23 @@ impl Surface for HistoryWindow {
         let now = Local::now();
         let ocr_available = shared.ocr.is_some();
         let hotkey_hint = crate::settings_ui::ui_hotkey::display(&shared.config.hotkeys.region);
-        let retention = retention_summary(shared.config.history.keep_days, shared.config.history.max_gb, self.stats.bytes);
+        let retention = retention_summary(
+            shared.config.history.keep_days,
+            shared.config.history.max_gb,
+            self.stats.bytes,
+        );
         let folder = shared.history.folder().to_path_buf();
 
         // Keyboard (not while typing in the search box or a dialog).
         let typing = ctx.egui_wants_keyboard_input();
         let mut want_act: Option<(Act, ItemId)> = None;
         if self.confirm_delete.is_none() {
-            let (cmd_f, esc) = ctx.input(|i| (i.modifiers.command && i.key_pressed(Key::F), i.key_pressed(Key::Escape)));
+            let (cmd_f, esc) = ctx.input(|i| {
+                (
+                    i.modifiers.command && i.key_pressed(Key::F),
+                    i.key_pressed(Key::Escape),
+                )
+            });
             if cmd_f {
                 self.focus_search = true;
             }
@@ -759,7 +828,8 @@ impl Surface for HistoryWindow {
                     .map(|(_, n)| n)
                 });
                 if let Some(n) = nav
-                    && let Some(i) = move_selection(self.selected_index(), n, self.cols, self.items.len())
+                    && let Some(i) =
+                        move_selection(self.selected_index(), n, self.cols, self.items.len())
                 {
                     self.select_index(i);
                 }
@@ -814,7 +884,8 @@ impl Surface for HistoryWindow {
         let date = self.date;
         let more = self.more;
         let applied = self.applied_search.clone();
-        let queue_room = MAX_QUEUED.saturating_sub(self.requested.len().saturating_sub(self.textures.len()));
+        let queue_room =
+            MAX_QUEUED.saturating_sub(self.requested.len().saturating_sub(self.textures.len()));
         let items = &self.items;
         let apps = &self.apps;
         let textures = &mut self.textures;
@@ -823,8 +894,14 @@ impl Surface for HistoryWindow {
         let search = &mut self.search;
 
         uc::root_ui(ctx, p.bg, |ui, rect| {
-            let sidebar = Rect::from_min_size(rect.min + vec2(0.0, 8.0), vec2(SIDEBAR_W, rect.height() - 8.0));
-            let main = Rect::from_min_max(pos2(rect.left() + SIDEBAR_W, rect.top() + 8.0), rect.right_bottom());
+            let sidebar = Rect::from_min_size(
+                rect.min + vec2(0.0, 8.0),
+                vec2(SIDEBAR_W, rect.height() - 8.0),
+            );
+            let main = Rect::from_min_max(
+                pos2(rect.left() + SIDEBAR_W, rect.top() + 8.0),
+                rect.right_bottom(),
+            );
             ui.painter().rect_filled(
                 main,
                 CornerRadius {
@@ -836,11 +913,17 @@ impl Surface for HistoryWindow {
                 p.layer,
             );
             ui.painter().line_segment(
-                [main.left_top() + vec2(8.0, 0.5), main.right_top() + vec2(0.0, 0.5)],
+                [
+                    main.left_top() + vec2(8.0, 0.5),
+                    main.right_top() + vec2(0.0, 0.5),
+                ],
                 Stroke::new(1.0, p.stroke),
             );
             ui.painter().line_segment(
-                [main.left_top() + vec2(0.5, 8.0), main.left_bottom() + vec2(0.5, 0.0)],
+                [
+                    main.left_top() + vec2(0.5, 8.0),
+                    main.left_bottom() + vec2(0.5, 0.0),
+                ],
                 Stroke::new(1.0, p.stroke),
             );
 
@@ -856,21 +939,36 @@ impl Surface for HistoryWindow {
                 Color32::from_black_alpha(8)
             };
             let mut y = sidebar.top() + 8.0;
-            let nav_row = |ui: &mut egui::Ui, y: &mut f32, h: f32, label: &str, count: Option<u64>, active: bool, id: String| -> bool {
-                let r = Rect::from_min_size(pos2(sidebar.left() + 12.0, *y), vec2(SIDEBAR_W - 24.0, h));
+            let nav_row = |ui: &mut egui::Ui,
+                           y: &mut f32,
+                           h: f32,
+                           label: &str,
+                           count: Option<u64>,
+                           active: bool,
+                           id: String|
+             -> bool {
+                let r =
+                    Rect::from_min_size(pos2(sidebar.left() + 12.0, *y), vec2(SIDEBAR_W - 24.0, h));
                 *y += h + 2.0;
                 let resp = ui.interact(r, ui.scope_id().with(("hist_nav", id)), Sense::click());
                 if active {
                     ui.painter().rect_filled(r, CornerRadius::same(6), sel_fill);
                     ui.painter().rect_filled(
-                        Rect::from_min_size(pos2(r.left() + 2.0, r.center().y - 8.0), vec2(3.0, 16.0)),
+                        Rect::from_min_size(
+                            pos2(r.left() + 2.0, r.center().y - 8.0),
+                            vec2(3.0, 16.0),
+                        ),
                         CornerRadius::same(2),
                         accent,
                     );
                 } else if resp.hovered() {
-                    ui.painter().rect_filled(r, CornerRadius::same(6), hover_fill);
+                    ui.painter()
+                        .rect_filled(r, CornerRadius::same(6), hover_fill);
                 }
-                let mut job = egui::text::LayoutJob::single_section(label.to_string(), egui::TextFormat::simple(uc::font(13.0), p.text));
+                let mut job = egui::text::LayoutJob::single_section(
+                    label.to_string(),
+                    egui::TextFormat::simple(uc::font(13.0), p.text),
+                );
                 job.wrap = egui::text::TextWrapping {
                     max_width: r.width() - 20.0 - 52.0,
                     max_rows: 1,
@@ -878,8 +976,11 @@ impl Surface for HistoryWindow {
                     overflow_character: Some('\u{2026}'),
                 };
                 let g = ui.painter().layout_job(job);
-                ui.painter()
-                    .galley(pos2(r.left() + 12.0, r.center().y - g.size().y / 2.0), g, p.text);
+                ui.painter().galley(
+                    pos2(r.left() + 12.0, r.center().y - g.size().y / 2.0),
+                    g,
+                    p.text,
+                );
                 if let Some(c) = count {
                     ui.painter().text(
                         pos2(r.right() - 10.0, r.center().y),
@@ -935,14 +1036,23 @@ impl Surface for HistoryWindow {
             y += 24.0;
 
             // Footer first so the app list knows how much room it has.
-            let footer_g = ui
-                .painter()
-                .layout(retention.clone(), uc::font(12.0), p.text_tertiary, SIDEBAR_W - 44.0);
+            let footer_g = ui.painter().layout(
+                retention.clone(),
+                uc::font(12.0),
+                p.text_tertiary,
+                SIDEBAR_W - 44.0,
+            );
             let footer_h = footer_g.size().y + 24.0;
             let footer_top = sidebar.bottom() - footer_h;
-            ui.painter()
-                .galley(pos2(sidebar.left() + 22.0, footer_top + 12.0), footer_g, p.text_tertiary);
-            let list_rect = Rect::from_min_max(pos2(sidebar.left(), y), pos2(sidebar.right(), (footer_top - 4.0).max(y)));
+            ui.painter().galley(
+                pos2(sidebar.left() + 22.0, footer_top + 12.0),
+                footer_g,
+                p.text_tertiary,
+            );
+            let list_rect = Rect::from_min_max(
+                pos2(sidebar.left(), y),
+                pos2(sidebar.right(), (footer_top - 4.0).max(y)),
+            );
             ui.scope_builder(UiBuilder::new().max_rect(list_rect), |ui| {
                 ScrollArea::vertical()
                     .id_salt("hist_apps")
@@ -952,18 +1062,29 @@ impl Surface for HistoryWindow {
                         let _ = &mut ly;
                         for (name, count) in apps.iter() {
                             let active = matches!(&filter, Filter::App(a) if a == name);
-                            let r = Rect::from_min_size(pos2(sidebar.left() + 12.0, ui.cursor().top()), vec2(SIDEBAR_W - 24.0 - 6.0, 34.0));
+                            let r = Rect::from_min_size(
+                                pos2(sidebar.left() + 12.0, ui.cursor().top()),
+                                vec2(SIDEBAR_W - 24.0 - 6.0, 34.0),
+                            );
                             ui.allocate_rect(r, Sense::hover());
-                            let resp = ui.interact(r, ui.scope_id().with(("hist_app", name.as_str())), Sense::click());
+                            let resp = ui.interact(
+                                r,
+                                ui.scope_id().with(("hist_app", name.as_str())),
+                                Sense::click(),
+                            );
                             if active {
                                 ui.painter().rect_filled(r, CornerRadius::same(6), sel_fill);
                                 ui.painter().rect_filled(
-                                    Rect::from_min_size(pos2(r.left() + 2.0, r.center().y - 8.0), vec2(3.0, 16.0)),
+                                    Rect::from_min_size(
+                                        pos2(r.left() + 2.0, r.center().y - 8.0),
+                                        vec2(3.0, 16.0),
+                                    ),
                                     CornerRadius::same(2),
                                     accent,
                                 );
                             } else if resp.hovered() {
-                                ui.painter().rect_filled(r, CornerRadius::same(6), hover_fill);
+                                ui.painter()
+                                    .rect_filled(r, CornerRadius::same(6), hover_fill);
                             }
                             ui.painter().text(
                                 pos2(r.left() + 12.0, r.center().y),
@@ -992,23 +1113,38 @@ impl Surface for HistoryWindow {
             let header = Rect::from_min_size(inner.min, vec2(inner.width(), 36.0));
             let folder_w = 108.0;
             let date_w = 130.0;
-            let search_rect = Rect::from_min_max(header.min, pos2(header.right() - folder_w - date_w - 20.0, header.bottom()));
+            let search_rect = Rect::from_min_max(
+                header.min,
+                pos2(header.right() - folder_w - date_w - 20.0, header.bottom()),
+            );
             let search_id = ui.scope_id().with("hist_search");
             let search_focused = ui.memory(|m| m.has_focus(search_id));
-            ui.painter().rect_filled(search_rect, CornerRadius::same(6), p.bg);
             ui.painter()
-                .rect_stroke(search_rect, CornerRadius::same(6), Stroke::new(1.0, p.stroke), StrokeKind::Inside);
+                .rect_filled(search_rect, CornerRadius::same(6), p.bg);
+            ui.painter().rect_stroke(
+                search_rect,
+                CornerRadius::same(6),
+                Stroke::new(1.0, p.stroke),
+                StrokeKind::Inside,
+            );
             ui.painter().rect_filled(
                 Rect::from_min_max(
                     pos2(search_rect.left() + 3.0, search_rect.bottom() - 2.0),
                     pos2(search_rect.right() - 3.0, search_rect.bottom()),
                 ),
                 CornerRadius::same(1),
-                if search_focused || !search.is_empty() { accent } else { p.stroke },
+                if search_focused || !search.is_empty() {
+                    accent
+                } else {
+                    p.stroke
+                },
             );
             widgets::paint_icon(
                 ui.painter(),
-                Rect::from_center_size(pos2(search_rect.left() + 20.0, search_rect.center().y), vec2(16.0, 16.0)),
+                Rect::from_center_size(
+                    pos2(search_rect.left() + 20.0, search_rect.center().y),
+                    vec2(16.0, 16.0),
+                ),
                 Icon::Search,
                 p.text_secondary,
             );
@@ -1038,10 +1174,15 @@ impl Surface for HistoryWindow {
                 search_changed = true;
             }
             if !search.is_empty() {
-                let cr = Rect::from_center_size(pos2(search_rect.right() - 18.0, search_rect.center().y), vec2(24.0, 24.0));
-                let cresp = ui.interact(cr, ui.scope_id().with("hist_search_clear"), Sense::click());
+                let cr = Rect::from_center_size(
+                    pos2(search_rect.right() - 18.0, search_rect.center().y),
+                    vec2(24.0, 24.0),
+                );
+                let cresp =
+                    ui.interact(cr, ui.scope_id().with("hist_search_clear"), Sense::click());
                 if cresp.hovered() {
-                    ui.painter().rect_filled(cr, CornerRadius::same(5), hover_fill);
+                    ui.painter()
+                        .rect_filled(cr, CornerRadius::same(5), hover_fill);
                 }
                 widgets::paint_icon(
                     ui.painter(),
@@ -1054,7 +1195,10 @@ impl Surface for HistoryWindow {
                     search_changed = true;
                 }
             }
-            let date_rect = Rect::from_min_size(pos2(search_rect.right() + 10.0, header.top()), vec2(date_w, 36.0));
+            let date_rect = Rect::from_min_size(
+                pos2(search_rect.right() + 10.0, header.top()),
+                vec2(date_w, 36.0),
+            );
             ui.scope_builder(
                 UiBuilder::new()
                     .max_rect(date_rect)
@@ -1074,8 +1218,22 @@ impl Surface for HistoryWindow {
                     }
                 },
             );
-            let folder_rect = Rect::from_min_size(pos2(date_rect.right() + 10.0, header.top()), vec2(folder_w, 36.0));
-            if uc::rect_button(ui, "open_folder", folder_rect, "Open folder", uc::BtnKind::Neutral, true, p, accent).clicked() {
+            let folder_rect = Rect::from_min_size(
+                pos2(date_rect.right() + 10.0, header.top()),
+                vec2(folder_w, 36.0),
+            );
+            if uc::rect_button(
+                ui,
+                "open_folder",
+                folder_rect,
+                "Open folder",
+                uc::BtnKind::Neutral,
+                true,
+                p,
+                accent,
+            )
+            .clicked()
+            {
                 open_folder = true;
             }
 
@@ -1083,18 +1241,30 @@ impl Surface for HistoryWindow {
             let mut top = header.bottom() + 14.0;
             if !total_empty {
                 let line = results_line(items.len(), more, &applied);
-                ui.painter()
-                    .text(pos2(inner.left(), top), Align2::LEFT_TOP, line, uc::font(13.0), p.text_secondary);
+                ui.painter().text(
+                    pos2(inner.left(), top),
+                    Align2::LEFT_TOP,
+                    line,
+                    uc::font(13.0),
+                    p.text_secondary,
+                );
                 top += 24.0;
             }
             if !ocr_available {
                 let msg = "No OCR language is installed, so search only covers window titles and app names. Add one in Windows Settings under Time and language, then Language and region.";
-                let g = ui
-                    .painter()
-                    .layout(msg.to_string(), uc::font(12.0), p.text_secondary, inner.width() - 28.0);
-                let r = Rect::from_min_size(pos2(inner.left(), top), vec2(inner.width(), g.size().y + 20.0));
+                let g = ui.painter().layout(
+                    msg.to_string(),
+                    uc::font(12.0),
+                    p.text_secondary,
+                    inner.width() - 28.0,
+                );
+                let r = Rect::from_min_size(
+                    pos2(inner.left(), top),
+                    vec2(inner.width(), g.size().y + 20.0),
+                );
                 uc::card(ui, r, 8, p.card, p.stroke);
-                ui.painter().galley(r.min + vec2(14.0, 10.0), g, p.text_secondary);
+                ui.painter()
+                    .galley(r.min + vec2(14.0, 10.0), g, p.text_secondary);
                 top = r.bottom() + 12.0;
             }
             if let Some(err) = &load_error {
@@ -1104,8 +1274,12 @@ impl Surface for HistoryWindow {
                     p.danger,
                     inner.width() - 28.0,
                 );
-                let r = Rect::from_min_size(pos2(inner.left(), top), vec2(inner.width(), g.size().y + 20.0));
-                ui.painter().rect_filled(r, CornerRadius::same(8), uc::with_alpha(p.danger, 28));
+                let r = Rect::from_min_size(
+                    pos2(inner.left(), top),
+                    vec2(inner.width(), g.size().y + 20.0),
+                );
+                ui.painter()
+                    .rect_filled(r, CornerRadius::same(8), uc::with_alpha(p.danger, 28));
                 ui.painter().galley(r.min + vec2(14.0, 10.0), g, p.danger);
                 top = r.bottom() + 12.0;
             }
@@ -1113,28 +1287,40 @@ impl Surface for HistoryWindow {
             // ---------------- Main: action bar (bottom) ----------------
             let sel_meta = selected.and_then(|id| items.iter().find(|m| m.id == id));
             let bar_h = 56.0;
-            let bar_rect = Rect::from_min_size(pos2(inner.left(), inner.bottom() - bar_h), vec2(inner.width(), bar_h));
+            let bar_rect = Rect::from_min_size(
+                pos2(inner.left(), inner.bottom() - bar_h),
+                vec2(inner.width(), bar_h),
+            );
             let grid_bottom = if sel_meta.is_some() {
                 bar_rect.top() - 12.0
             } else {
                 inner.bottom()
             };
-            let grid_rect = Rect::from_min_max(pos2(inner.left(), top), pos2(inner.right(), grid_bottom.max(top + 40.0)));
+            let grid_rect = Rect::from_min_max(
+                pos2(inner.left(), top),
+                pos2(inner.right(), grid_bottom.max(top + 40.0)),
+            );
 
             // ---------------- Main: grid / empty states ----------------
             if items.is_empty() {
-                let c = Rect::from_center_size(grid_rect.center(), vec2(grid_rect.width().min(460.0), 220.0));
+                let c = Rect::from_center_size(
+                    grid_rect.center(),
+                    vec2(grid_rect.width().min(460.0), 220.0),
+                );
                 let (icon, title, body) = if total_empty {
                     (
                         Icon::History,
                         "No captures yet".to_string(),
-                        format!("Press {hotkey_hint} to capture a region. Everything you capture is saved here, with searchable text."),
+                        format!(
+                            "Press {hotkey_hint} to capture a region. Everything you capture is saved here, with searchable text."
+                        ),
                     )
                 } else {
                     (
                         Icon::Search,
                         "Nothing matches".to_string(),
-                        "Try different words, another date range, or clear the filters.".to_string(),
+                        "Try different words, another date range, or clear the filters."
+                            .to_string(),
                     )
                 };
                 widgets::paint_icon(
@@ -1150,17 +1336,47 @@ impl Surface for HistoryWindow {
                     uc::font(18.0),
                     p.text,
                 );
-                let g = ui.painter().layout(body, uc::font(13.0), p.text_secondary, c.width());
+                let g = ui
+                    .painter()
+                    .layout(body, uc::font(13.0), p.text_secondary, c.width());
                 let gh = g.size().y;
                 let gw = g.size().x;
-                ui.painter()
-                    .galley(pos2(c.center().x - gw / 2.0, c.top() + 92.0), g, p.text_secondary);
-                let b = Rect::from_center_size(pos2(c.center().x, c.top() + 92.0 + gh + 34.0), vec2(180.0, 34.0));
+                ui.painter().galley(
+                    pos2(c.center().x - gw / 2.0, c.top() + 92.0),
+                    g,
+                    p.text_secondary,
+                );
+                let b = Rect::from_center_size(
+                    pos2(c.center().x, c.top() + 92.0 + gh + 34.0),
+                    vec2(180.0, 34.0),
+                );
                 if total_empty {
-                    if uc::rect_button(ui, "empty_capture", b, "Capture a region", uc::BtnKind::Accent, true, p, accent).clicked() {
+                    if uc::rect_button(
+                        ui,
+                        "empty_capture",
+                        b,
+                        "Capture a region",
+                        uc::BtnKind::Accent,
+                        true,
+                        p,
+                        accent,
+                    )
+                    .clicked()
+                    {
                         capture_region = true;
                     }
-                } else if uc::rect_button(ui, "empty_clear", b, "Clear filters", uc::BtnKind::Neutral, true, p, accent).clicked() {
+                } else if uc::rect_button(
+                    ui,
+                    "empty_clear",
+                    b,
+                    "Clear filters",
+                    uc::BtnKind::Neutral,
+                    true,
+                    p,
+                    accent,
+                )
+                .clicked()
+                {
                     clear_filters = true;
                 }
             } else {
@@ -1176,11 +1392,13 @@ impl Surface for HistoryWindow {
                             let nrows = items.len().div_ceil(cols);
                             let pitch = CARD_H + GAP;
                             let total_h = nrows as f32 * pitch;
-                            let (full, _) = ui.allocate_exact_size(vec2(avail_w, total_h), Sense::hover());
+                            let (full, _) =
+                                ui.allocate_exact_size(vec2(avail_w, total_h), Sense::hover());
                             let cell = |i: usize| {
                                 let (row, col) = (i / cols, i % cols);
                                 Rect::from_min_size(
-                                    full.min + vec2(col as f32 * (card_w + GAP), row as f32 * pitch),
+                                    full.min
+                                        + vec2(col as f32 * (card_w + GAP), row as f32 * pitch),
                                     vec2(card_w, CARD_H),
                                 )
                             };
@@ -1189,7 +1407,8 @@ impl Surface for HistoryWindow {
                             {
                                 ui.scroll_to_rect(cell(i).expand(GAP / 2.0), None);
                             }
-                            let rows = visible_rows(viewport.min.y, viewport.height(), pitch, nrows, 1);
+                            let rows =
+                                visible_rows(viewport.min.y, viewport.height(), pitch, nrows, 1);
                             if rows.end >= nrows.saturating_sub(1) && more {
                                 want_more = true;
                             }
@@ -1202,7 +1421,10 @@ impl Surface for HistoryWindow {
                                     if !ui.is_rect_visible(r) {
                                         continue;
                                     }
-                                    let key = ThumbKey { id: m.id, bytes: m.bytes };
+                                    let key = ThumbKey {
+                                        id: m.id,
+                                        bytes: m.bytes,
+                                    };
                                     let tex = textures.get(&key).map(|t| (t.id(), t.size()));
                                     if tex.is_none()
                                         && !requested.contains(&key)
@@ -1213,7 +1435,11 @@ impl Surface for HistoryWindow {
                                         to_request.push(key);
                                         room -= 1;
                                     }
-                                    let resp = ui.interact(r, ui.scope_id().with(("hist_card", m.id)), Sense::click());
+                                    let resp = ui.interact(
+                                        r,
+                                        ui.scope_id().with(("hist_card", m.id)),
+                                        Sense::click(),
+                                    );
                                     let hovered = resp.hovered();
                                     paint_card(
                                         ui,
@@ -1228,24 +1454,52 @@ impl Surface for HistoryWindow {
                                         failed.contains(&key),
                                     );
                                     // Star button.
-                                    let star_r = Rect::from_center_size(pos2(r.right() - 24.0, r.top() + 24.0), vec2(30.0, 30.0));
+                                    let star_r = Rect::from_center_size(
+                                        pos2(r.right() - 24.0, r.top() + 24.0),
+                                        vec2(30.0, 30.0),
+                                    );
                                     if m.starred || hovered {
-                                        let sresp = ui.interact(star_r, ui.scope_id().with(("hist_star", m.id)), Sense::click());
+                                        let sresp = ui.interact(
+                                            star_r,
+                                            ui.scope_id().with(("hist_star", m.id)),
+                                            Sense::click(),
+                                        );
                                         let (icon, col) = if m.starred {
                                             (Icon::StarFilled, STAR_COLOR)
                                         } else {
-                                            (Icon::Star, Color32::from_white_alpha(if sresp.hovered() { 230 } else { 150 }))
+                                            (
+                                                Icon::Star,
+                                                Color32::from_white_alpha(if sresp.hovered() {
+                                                    230
+                                                } else {
+                                                    150
+                                                }),
+                                            )
                                         };
                                         if sresp.hovered() {
-                                            ui.painter().circle_filled(star_r.center(), 15.0, Color32::from_black_alpha(110));
+                                            ui.painter().circle_filled(
+                                                star_r.center(),
+                                                15.0,
+                                                Color32::from_black_alpha(110),
+                                            );
                                         }
                                         widgets::paint_icon(
                                             ui.painter(),
-                                            Rect::from_center_size(star_r.center(), vec2(18.0, 18.0)),
+                                            Rect::from_center_size(
+                                                star_r.center(),
+                                                vec2(18.0, 18.0),
+                                            ),
                                             icon,
                                             col,
                                         );
-                                        if sresp.on_hover_text(if m.starred { "Remove star" } else { "Star" }).clicked() {
+                                        if sresp
+                                            .on_hover_text(if m.starred {
+                                                "Remove star"
+                                            } else {
+                                                "Star"
+                                            })
+                                            .clicked()
+                                        {
                                             act_req = Some((Act::ToggleStar, m.id));
                                             clicked = Some(m.id);
                                             continue;
@@ -1260,7 +1514,10 @@ impl Surface for HistoryWindow {
                                     resp.context_menu(|ui| {
                                         for act in Act::MENU {
                                             let enabled = act.enabled(m, ocr_available);
-                                            let b = ui.add_enabled(enabled, egui::Button::new(act.label(m)));
+                                            let b = ui.add_enabled(
+                                                enabled,
+                                                egui::Button::new(act.label(m)),
+                                            );
                                             let b = match act.disabled_reason(m, ocr_available) {
                                                 Some(why) => b.on_disabled_hover_text(why),
                                                 None => b,
@@ -1282,7 +1539,10 @@ impl Surface for HistoryWindow {
             if let Some(m) = sel_meta {
                 uc::card(ui, bar_rect, 8, p.card, p.stroke);
                 let text_w = (bar_rect.width() - 28.0 - 8.0 * 36.0 - 130.0).max(80.0);
-                let mut job = egui::text::LayoutJob::single_section(item_title(m), egui::TextFormat::simple(uc::font(13.0), p.text));
+                let mut job = egui::text::LayoutJob::single_section(
+                    item_title(m),
+                    egui::TextFormat::simple(uc::font(13.0), p.text),
+                );
                 job.wrap = egui::text::TextWrapping {
                     max_width: text_w,
                     max_rows: 1,
@@ -1290,11 +1550,19 @@ impl Surface for HistoryWindow {
                     overflow_character: Some('\u{2026}'),
                 };
                 let g = ui.painter().layout_job(job);
-                ui.painter().galley(pos2(bar_rect.left() + 14.0, bar_rect.top() + 10.0), g, p.text);
+                ui.painter().galley(
+                    pos2(bar_rect.left() + 14.0, bar_rect.top() + 10.0),
+                    g,
+                    p.text,
+                );
                 ui.painter().text(
                     pos2(bar_rect.left() + 14.0, bar_rect.top() + 31.0),
                     Align2::LEFT_TOP,
-                    format!("{} \u{b7} {}", item_meta_line(m, now), uc::fmt_bytes(m.bytes)),
+                    format!(
+                        "{} \u{b7} {}",
+                        item_meta_line(m, now),
+                        uc::fmt_bytes(m.bytes)
+                    ),
                     uc::font(12.0),
                     p.text_tertiary,
                 );
@@ -1308,25 +1576,32 @@ impl Surface for HistoryWindow {
                         .layout(egui::Layout::right_to_left(egui::Align::Center)),
                     |ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
-                        let mut icon_act = |ui: &mut egui::Ui, act: Act, icon: Icon, selected_look: bool| {
-                            let enabled = act.enabled(m, ocr_available);
-                            let tip = act
-                                .disabled_reason(m, ocr_available)
-                                .map(|w| format!("{} ({w})", act.label(m)))
-                                .unwrap_or_else(|| act.label(m).to_string());
-                            let r = ui
-                                .add_enabled_ui(enabled, |ui| widgets::icon_button(ui, icon, &tip, selected_look))
-                                .inner;
-                            if r.clicked() {
-                                act_req = Some((act, m.id));
-                            }
-                        };
+                        let mut icon_act =
+                            |ui: &mut egui::Ui, act: Act, icon: Icon, selected_look: bool| {
+                                let enabled = act.enabled(m, ocr_available);
+                                let tip = act
+                                    .disabled_reason(m, ocr_available)
+                                    .map(|w| format!("{} ({w})", act.label(m)))
+                                    .unwrap_or_else(|| act.label(m).to_string());
+                                let r = ui
+                                    .add_enabled_ui(enabled, |ui| {
+                                        widgets::icon_button(ui, icon, &tip, selected_look)
+                                    })
+                                    .inner;
+                                if r.clicked() {
+                                    act_req = Some((act, m.id));
+                                }
+                            };
                         // Right to left: rightmost first.
                         icon_act(ui, Act::Delete, Icon::Trash, false);
                         icon_act(
                             ui,
                             Act::ToggleStar,
-                            if m.starred { Icon::StarFilled } else { Icon::Star },
+                            if m.starred {
+                                Icon::StarFilled
+                            } else {
+                                Icon::Star
+                            },
                             m.starred,
                         );
                         icon_act(ui, Act::Reveal, Icon::Folder, false);
@@ -1400,28 +1675,57 @@ impl Surface for HistoryWindow {
                 Some(m) => {
                     let name = item_title(&m);
                     let starred = m.starred;
-                    let modal = egui::Modal::new(egui::Id::unique("hist_delete_modal")).show(ctx, |ui| {
-                        ui.set_width(360.0);
-                        ui.label(RichText::new("Delete this capture?").size(15.0).color(p.text));
-                        ui.add_space(4.0);
-                        ui.label(RichText::new(name).size(12.0).color(p.text_secondary));
-                        ui.add_space(2.0);
-                        let extra = if starred { "It is starred. " } else { "" };
-                        ui.label(
-                            RichText::new(format!("{extra}The file is removed from disk and cannot be restored."))
+                    let modal =
+                        egui::Modal::new(egui::Id::unique("hist_delete_modal")).show(ctx, |ui| {
+                            ui.set_width(360.0);
+                            ui.label(
+                                RichText::new("Delete this capture?")
+                                    .size(15.0)
+                                    .color(p.text),
+                            );
+                            ui.add_space(4.0);
+                            ui.label(RichText::new(name).size(12.0).color(p.text_secondary));
+                            ui.add_space(2.0);
+                            let extra = if starred { "It is starred. " } else { "" };
+                            ui.label(
+                                RichText::new(format!(
+                                    "{extra}The file is removed from disk and cannot be restored."
+                                ))
                                 .size(12.0)
                                 .color(p.text_tertiary),
-                        );
-                        ui.add_space(14.0);
-                        let (mut cancel, mut del) = (false, false);
-                        ui.horizontal(|ui| {
-                            let (r1, _) = ui.allocate_exact_size(vec2(170.0, 34.0), Sense::hover());
-                            cancel = uc::rect_button(ui, "del_cancel", r1, "Cancel", uc::BtnKind::Neutral, true, p, accent).clicked();
-                            let (r2, _) = ui.allocate_exact_size(vec2(170.0, 34.0), Sense::hover());
-                            del = uc::rect_button(ui, "del_ok", r2, "Delete", uc::BtnKind::Danger, true, p, accent).clicked();
+                            );
+                            ui.add_space(14.0);
+                            let (mut cancel, mut del) = (false, false);
+                            ui.horizontal(|ui| {
+                                let (r1, _) =
+                                    ui.allocate_exact_size(vec2(170.0, 34.0), Sense::hover());
+                                cancel = uc::rect_button(
+                                    ui,
+                                    "del_cancel",
+                                    r1,
+                                    "Cancel",
+                                    uc::BtnKind::Neutral,
+                                    true,
+                                    p,
+                                    accent,
+                                )
+                                .clicked();
+                                let (r2, _) =
+                                    ui.allocate_exact_size(vec2(170.0, 34.0), Sense::hover());
+                                del = uc::rect_button(
+                                    ui,
+                                    "del_ok",
+                                    r2,
+                                    "Delete",
+                                    uc::BtnKind::Danger,
+                                    true,
+                                    p,
+                                    accent,
+                                )
+                                .clicked();
+                            });
+                            (cancel, del)
                         });
-                        (cancel, del)
-                    });
                     let (cancel, del) = modal.inner;
                     if del {
                         self.confirm_delete = None;
@@ -1466,14 +1770,22 @@ fn paint_card(
     painter.rect_filled(thumb, top_round, p.bg);
     match tex {
         Some((id, size)) => {
-            let (u0, v0, u1, v1) = uc::cover_uv((size[0] as f32, size[1] as f32), thumb.width(), thumb.height());
+            let (u0, v0, u1, v1) = uc::cover_uv(
+                (size[0] as f32, size[1] as f32),
+                thumb.width(),
+                thumb.height(),
+            );
             painter.add(
                 egui::epaint::RectShape::filled(thumb, top_round, Color32::WHITE)
                     .with_texture(id, Rect::from_min_max(pos2(u0, v0), pos2(u1, v1))),
             );
         }
         None => {
-            let icon = if m.kind == ItemKind::Image { Icon::Search } else { Icon::Play };
+            let icon = if m.kind == ItemKind::Image {
+                Icon::Search
+            } else {
+                Icon::Play
+            };
             let _ = icon;
             if failed || m.kind == ItemKind::Video {
                 // No thumbnail will ever arrive: show the type instead of a spinner.
@@ -1492,14 +1804,21 @@ fn paint_card(
                 widgets::paint_icon(
                     &painter,
                     Rect::from_center_size(thumb.center() - vec2(0.0, 8.0), vec2(28.0, 28.0)),
-                    if m.kind == ItemKind::Image { Icon::Search } else { Icon::Play },
+                    if m.kind == ItemKind::Image {
+                        Icon::Search
+                    } else {
+                        Icon::Play
+                    },
                     p.text_tertiary,
                 );
             } else {
                 // Loading shimmer: static soft bars so a screenful of cards does not repaint forever.
                 let bar = |y: f32, w: f32, a: u8| {
                     painter.rect_filled(
-                        Rect::from_min_size(thumb.min + vec2(18.0, y), vec2(thumb.width() * w, 8.0)),
+                        Rect::from_min_size(
+                            thumb.min + vec2(18.0, y),
+                            vec2(thumb.width() * w, 8.0),
+                        ),
                         CornerRadius::same(3),
                         Color32::from_white_alpha(a),
                     );
@@ -1518,7 +1837,11 @@ fn paint_card(
             Icon::Play,
             Color32::WHITE,
         );
-        let tag = if m.kind == ItemKind::Gif { "GIF" } else { "MP4" };
+        let tag = if m.kind == ItemKind::Gif {
+            "GIF"
+        } else {
+            "MP4"
+        };
         let g = painter.layout_no_wrap(tag.to_string(), uc::font(11.0), Color32::WHITE);
         let tr = Rect::from_min_size(
             pos2(thumb.left() + 8.0, thumb.bottom() - 8.0 - g.size().y - 6.0),
@@ -1530,7 +1853,10 @@ fn paint_card(
 
     // Info block.
     let text_w = r.width() - 24.0;
-    let mut job = egui::text::LayoutJob::single_section(item_title(m), egui::TextFormat::simple(uc::font(13.0), p.text));
+    let mut job = egui::text::LayoutJob::single_section(
+        item_title(m),
+        egui::TextFormat::simple(uc::font(13.0), p.text),
+    );
     job.wrap = egui::text::TextWrapping {
         max_width: text_w,
         max_rows: 1,
@@ -1539,7 +1865,10 @@ fn paint_card(
     };
     let g = painter.layout_job(job);
     painter.galley(pos2(r.left() + 12.0, thumb.bottom() + 10.0), g, p.text);
-    let mut job = egui::text::LayoutJob::single_section(item_meta_line(m, now), egui::TextFormat::simple(uc::font(12.0), p.text_tertiary));
+    let mut job = egui::text::LayoutJob::single_section(
+        item_meta_line(m, now),
+        egui::TextFormat::simple(uc::font(12.0), p.text_tertiary),
+    );
     job.wrap = egui::text::TextWrapping {
         max_width: text_w,
         max_rows: 1,
@@ -1547,11 +1876,20 @@ fn paint_card(
         overflow_character: Some('\u{2026}'),
     };
     let g = painter.layout_job(job);
-    painter.galley(pos2(r.left() + 12.0, thumb.bottom() + 10.0 + 19.0), g, p.text_tertiary);
+    painter.galley(
+        pos2(r.left() + 12.0, thumb.bottom() + 10.0 + 19.0),
+        g,
+        p.text_tertiary,
+    );
 
     // Border / selection.
     if selected {
-        painter.rect_stroke(r, CornerRadius::same(8), Stroke::new(2.0, accent), StrokeKind::Inside);
+        painter.rect_stroke(
+            r,
+            CornerRadius::same(8),
+            Stroke::new(2.0, accent),
+            StrokeKind::Inside,
+        );
     } else {
         let col = if hovered {
             Color32::from_white_alpha(if p.text == Color32::WHITE { 40 } else { 0 })
@@ -1683,7 +2021,10 @@ mod tests {
         m.height = 4210;
         let line = item_meta_line(&m, now);
         assert!(line.starts_with("Today "));
-        assert!(line.ends_with("scrolling \u{b7} 1,280 \u{d7} 4,210"), "{line}");
+        assert!(
+            line.ends_with("scrolling \u{b7} 1,280 \u{d7} 4,210"),
+            "{line}"
+        );
         m.mode = "region".into();
         assert!(!item_meta_line(&m, now).contains("region"));
     }
@@ -1695,8 +2036,14 @@ mod tests {
         let today = DateFilter::Today.since(now).unwrap();
         assert_eq!(today.date_naive(), now.date_naive());
         assert_eq!(today.format("%H:%M:%S").to_string(), "00:00:00");
-        assert_eq!(DateFilter::Week.since(now).unwrap(), now - chrono::Duration::days(7));
-        assert_eq!(DateFilter::Month.since(now).unwrap(), now - chrono::Duration::days(30));
+        assert_eq!(
+            DateFilter::Week.since(now).unwrap(),
+            now - chrono::Duration::days(7)
+        );
+        assert_eq!(
+            DateFilter::Month.since(now).unwrap(),
+            now - chrono::Duration::days(30)
+        );
     }
 
     #[test]
@@ -1706,12 +2053,18 @@ mod tests {
             retention_summary(90, 5.0, two_gb),
             "Keeping 90 days or 5 GB, starred kept forever. 2.1 GB used."
         );
-        assert_eq!(retention_summary(1, 0.0, 0), "Keeping 1 day, starred kept forever. 0 B used.");
+        assert_eq!(
+            retention_summary(1, 0.0, 0),
+            "Keeping 1 day, starred kept forever. 0 B used."
+        );
         assert_eq!(
             retention_summary(0, 2.5, 0),
             "Keeping up to 2.5 GB, starred kept forever. 0 B used."
         );
-        assert_eq!(retention_summary(0, 0.0, two_gb), "Keeping everything. 2.1 GB used.");
+        assert_eq!(
+            retention_summary(0, 0.0, two_gb),
+            "Keeping everything. 2.1 GB used."
+        );
     }
 
     #[test]
@@ -1722,7 +2075,10 @@ mod tests {
             results_line(6, false, "invoice 4471"),
             "6 captures contain text matching \u{201c}invoice 4471\u{201d}"
         );
-        assert_eq!(results_line(1, false, "x"), "1 capture contains text matching \u{201c}x\u{201d}");
+        assert_eq!(
+            results_line(1, false, "x"),
+            "1 capture contains text matching \u{201c}x\u{201d}"
+        );
         assert_eq!(results_line(400, true, ""), "400+ captures");
     }
 
@@ -1735,12 +2091,21 @@ mod tests {
         assert!(Act::Open.enabled(&vid, true));
         assert!(Act::CopyText.enabled(&img, true));
         assert!(!Act::CopyText.enabled(&img, false));
-        assert_eq!(Act::CopyText.disabled_reason(&img, false), Some("No OCR language is installed"));
+        assert_eq!(
+            Act::CopyText.disabled_reason(&img, false),
+            Some("No OCR language is installed")
+        );
         let mut pending = meta(3, ItemKind::Image);
         pending.ocr_text = None;
-        assert_eq!(Act::CopyText.disabled_reason(&pending, true), Some("Text is still being indexed"));
+        assert_eq!(
+            Act::CopyText.disabled_reason(&pending, true),
+            Some("Text is still being indexed")
+        );
         pending.ocr_text = Some("  ".into());
-        assert_eq!(Act::CopyText.disabled_reason(&pending, true), Some("No text found in this capture"));
+        assert_eq!(
+            Act::CopyText.disabled_reason(&pending, true),
+            Some("No text found in this capture")
+        );
         assert_eq!(primary_act(&img), Act::Edit);
         assert_eq!(primary_act(&vid), Act::Open);
     }
@@ -1750,13 +2115,28 @@ mod tests {
         let mut m = meta(9, ItemKind::Image);
         assert!(matches!(Act::Edit.command(&m), Some(Command::EditItem(9))));
         assert!(matches!(Act::Pin.command(&m), Some(Command::PinItem(9))));
-        assert!(matches!(Act::CopyImage.command(&m), Some(Command::CopyItemImage(9))));
-        assert!(matches!(Act::CopyText.command(&m), Some(Command::CopyItemText(9))));
+        assert!(matches!(
+            Act::CopyImage.command(&m),
+            Some(Command::CopyItemImage(9))
+        ));
+        assert!(matches!(
+            Act::CopyText.command(&m),
+            Some(Command::CopyItemText(9))
+        ));
         assert!(matches!(Act::Open.command(&m), Some(Command::OpenItem(9))));
-        assert!(matches!(Act::Reveal.command(&m), Some(Command::RevealItem(9))));
-        assert!(matches!(Act::ToggleStar.command(&m), Some(Command::StarItem(9, true))));
+        assert!(matches!(
+            Act::Reveal.command(&m),
+            Some(Command::RevealItem(9))
+        ));
+        assert!(matches!(
+            Act::ToggleStar.command(&m),
+            Some(Command::StarItem(9, true))
+        ));
         m.starred = true;
-        assert!(matches!(Act::ToggleStar.command(&m), Some(Command::StarItem(9, false))));
+        assert!(matches!(
+            Act::ToggleStar.command(&m),
+            Some(Command::StarItem(9, false))
+        ));
         // Delete always goes through the confirmation dialog first.
         assert!(Act::Delete.command(&m).is_none());
     }

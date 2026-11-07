@@ -35,12 +35,35 @@ pub enum WorkerMsg {
     CaptureSaved(Box<CaptureSaved>),
     HistoryChanged,
     /// Window capture finished; the overlay can open in Annotate mode.
-    WindowCaptured { frozen: Frozen, windows: Vec<WinInfo>, result: Result<(Rgba, SourceInfo), String> },
+    WindowCaptured {
+        frozen: Frozen,
+        windows: Vec<WinInfo>,
+        result: Result<(Rgba, SourceInfo), String>,
+    },
     /// Image + doc loaded for the overlay editor (re-edit).
-    OpenAnnotate { base: Rgba, doc: Doc, mode: &'static str, editing: Option<ItemId>, source: SourceInfo },
-    PinReady { image: Rgba, title: String, item: ItemId },
-    ScrollProgress { frames: usize, width: u32, height: u32 },
-    ScrollDone { result: Result<Rgba, String>, cancelled: bool, partial: bool, source: SourceInfo },
+    OpenAnnotate {
+        base: Rgba,
+        doc: Doc,
+        mode: &'static str,
+        editing: Option<ItemId>,
+        source: SourceInfo,
+    },
+    PinReady {
+        image: Rgba,
+        title: String,
+        item: ItemId,
+    },
+    ScrollProgress {
+        frames: usize,
+        width: u32,
+        height: u32,
+    },
+    ScrollDone {
+        result: Result<Rgba, String>,
+        cancelled: bool,
+        partial: bool,
+        source: SourceInfo,
+    },
     RecorderStarted(Result<Recorder, String>),
     RecordStopped(Result<(RecordingResult, MediaInfo), String>),
     ExportProgress(f32),
@@ -93,7 +116,11 @@ impl Env {
         crate::wake::wake();
     }
     pub fn notify(&self, title: &str, body: impl Into<String>, error: bool) {
-        self.send(WorkerMsg::Cmd(Command::Notify { title: title.to_string(), body: body.into(), error }));
+        self.send(WorkerMsg::Cmd(Command::Notify {
+            title: title.to_string(),
+            body: body.into(),
+            error,
+        }));
     }
     pub fn kick_ocr(&self) {
         let _ = self.bg.send(BgKick::Ocr);
@@ -113,7 +140,11 @@ fn job(env: &Env, name: &'static str, f: impl FnOnce(&Env) + Send + 'static) {
         let e2 = env.clone();
         if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&env))).is_err() {
             log::error!("worker {name} panicked");
-            e2.notify("Something went wrong", format!("The {name} task crashed. See stinkshot.log."), true);
+            e2.notify(
+                "Something went wrong",
+                format!("The {name} task crashed. See stinkshot.log."),
+                true,
+            );
         }
     });
 }
@@ -126,7 +157,12 @@ fn encode_save(img: &Rgba, path: &Path, cfg: &Config) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
-    img.save(path, filedialog::format_for_path(path), cfg.capture.jpeg_quality).with_context(|| format!("write {}", path.display()))
+    img.save(
+        path,
+        filedialog::format_for_path(path),
+        cfg.capture.jpeg_quality,
+    )
+    .with_context(|| format!("write {}", path.display()))
 }
 
 /// Write the flattened image (+ re-edit sidecar) into the history folder and index it.
@@ -157,7 +193,12 @@ fn save_to_history(
         width: flat.width,
         height: flat.height,
     };
-    let path = naming::unique_path(env.history.folder(), &cfg.capture.filename_pattern, &parts, fmt.extension());
+    let path = naming::unique_path(
+        env.history.folder(),
+        &cfg.capture.filename_pattern,
+        &parts,
+        fmt.extension(),
+    );
     encode_save(flat, &path, cfg)?;
     write_sidecar(cfg, &path, base, doc, false);
     let id = env.history.add(NewItem {
@@ -175,26 +216,42 @@ fn save_to_history(
 fn write_sidecar(cfg: &Config, path: &Path, base: &Rgba, doc: &Doc, was_editing: bool) {
     if cfg.history.keep_editable && !doc.shapes.is_empty() {
         if let Err(e) = annotate::save_editable(path, base, doc) {
-            log::warn!("could not save editable sidecar for {}: {e:#}", path.display());
+            log::warn!(
+                "could not save editable sidecar for {}: {e:#}",
+                path.display()
+            );
         }
     } else if was_editing && let Err(e) = annotate::delete_editable(path) {
-        log::warn!("could not remove stale sidecar for {}: {e:#}", path.display());
+        log::warn!(
+            "could not remove stale sidecar for {}: {e:#}",
+            path.display()
+        );
     }
 }
 
 pub fn finish_capture(env: &Env, out: CaptureOutput) {
     job(env, "capture-save", move |env| {
-        let CaptureOutput { base, doc, flattened, rect, action, source, mode, editing } = out;
+        let CaptureOutput {
+            base,
+            doc,
+            flattened,
+            rect,
+            action,
+            source,
+            mode,
+            editing,
+        } = out;
         let (width, height) = (flattened.width, flattened.height);
 
-        let (item, path) = match save_to_history(env, &base, &doc, &flattened, &source, mode, editing) {
-            Ok((id, p)) => (Some(id), Some(p)),
-            Err(e) => {
-                log::error!("saving capture to history failed: {e:#}");
-                env.notify("Could not save to history", format!("{e:#}"), true);
-                (None, None)
-            }
-        };
+        let (item, path) =
+            match save_to_history(env, &base, &doc, &flattened, &source, mode, editing) {
+                Ok((id, p)) => (Some(id), Some(p)),
+                Err(e) => {
+                    log::error!("saving capture to history failed: {e:#}");
+                    env.notify("Could not save to history", format!("{e:#}"), true);
+                    (None, None)
+                }
+            };
         drop(base);
 
         let want_copy = match action {
@@ -220,7 +277,11 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
                 .and_then(|p| p.file_stem())
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "StinkShot".to_string());
-            let start_dir = LAST_SAVE_DIR.lock().ok().and_then(|g| g.clone()).unwrap_or_else(|| env.history.folder().to_path_buf());
+            let start_dir = LAST_SAVE_DIR
+                .lock()
+                .ok()
+                .and_then(|g| g.clone())
+                .unwrap_or_else(|| env.history.folder().to_path_buf());
             match filedialog::save_image(&stem, env.cfg.capture.format, Some(&start_dir)) {
                 Ok(Some(target)) => match encode_save(&flattened, &target, &env.cfg) {
                     Ok(()) => {
@@ -239,12 +300,20 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
         let mut copied_text = None;
         if action == FinishAction::CopyText {
             match &env.ocr {
-                None => env.notify("No OCR language installed", "Add a language in Windows Settings > Time & language.", true),
+                None => env.notify(
+                    "No OCR language installed",
+                    "Add a language in Windows Settings > Time & language.",
+                    true,
+                ),
                 Some(engine) => match engine.recognize(&flattened) {
                     Ok(r) => {
                         let text = r.text.trim().to_string();
                         if text.is_empty() {
-                            env.notify("No text found", "Nothing readable in the selection.", false);
+                            env.notify(
+                                "No text found",
+                                "Nothing readable in the selection.",
+                                false,
+                            );
                         } else {
                             match clipboard::set_text(&text) {
                                 Ok(()) => copied_text = Some(text),
@@ -291,17 +360,26 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
 pub fn capture_window(env: &Env, frozen: Frozen, windows: Vec<WinInfo>, win: WinInfo) {
     job(env, "window-capture", move |env| {
         let source = capture_ops::source_of(&win);
-        let result = capture_ops::capture_window_image(&env.cfg, &win, env.cfg.capture.include_cursor)
-            .map(|img| (img, source))
-            .map_err(|e| format!("{e:#}"));
-        env.send(WorkerMsg::WindowCaptured { frozen, windows, result });
+        let result =
+            capture_ops::capture_window_image(&env.cfg, &win, env.cfg.capture.include_cursor)
+                .map(|img| (img, source))
+                .map_err(|e| format!("{e:#}"));
+        env.send(WorkerMsg::WindowCaptured {
+            frozen,
+            windows,
+            result,
+        });
     });
 }
 
 pub fn ocr_image(env: &Env, img: Rgba) {
     job(env, "ocr-region", move |env| {
         let Some(engine) = &env.ocr else {
-            env.notify("No OCR language installed", "Add a language in Windows Settings > Time & language.", true);
+            env.notify(
+                "No OCR language installed",
+                "Add a language in Windows Settings > Time & language.",
+                true,
+            );
             return;
         };
         match engine.recognize(&img) {
@@ -341,7 +419,10 @@ pub const SCROLL_CANCEL: u8 = 2;
 pub fn scroll_capture(env: &Env, rect: PxRect, source: SourceInfo, control: Arc<AtomicU8>) {
     job(env, "scroll-capture", move |env| {
         let cfg = &env.cfg.capture;
-        let mut stitcher = Stitcher::new(StitchOptions { max_height: cfg.scroll_max_height.max(500), ..StitchOptions::default() });
+        let mut stitcher = Stitcher::new(StitchOptions {
+            max_height: cfg.scroll_max_height.max(500),
+            ..StitchOptions::default()
+        });
         let delay = Duration::from_millis(cfg.scroll_delay_ms.clamp(30, 2000) as u64);
         let center = capture_ops::center(rect);
         let scale = capture_ops::scale_at(rect);
@@ -355,7 +436,12 @@ pub fn scroll_capture(env: &Env, rect: PxRect, source: SourceInfo, control: Arc<
         for _ in 0..800 {
             match control.load(Ordering::Relaxed) {
                 SCROLL_CANCEL => {
-                    env.send(WorkerMsg::ScrollDone { result: Err("cancelled".into()), cancelled: true, partial: false, source });
+                    env.send(WorkerMsg::ScrollDone {
+                        result: Err("cancelled".into()),
+                        cancelled: true,
+                        partial: false,
+                        source,
+                    });
                     return;
                 }
                 SCROLL_STOP => break,
@@ -387,7 +473,11 @@ pub fn scroll_capture(env: &Env, rect: PxRect, source: SourceInfo, control: Arc<
                     break;
                 }
             }
-            env.send(WorkerMsg::ScrollProgress { frames: stitcher.frames(), width: frame.width, height: stitcher.height() });
+            env.send(WorkerMsg::ScrollProgress {
+                frames: stitcher.frames(),
+                width: frame.width,
+                height: stitcher.height(),
+            });
             input::scroll_at(center, -notches);
             std::thread::sleep(delay);
         }
@@ -402,7 +492,12 @@ pub fn scroll_capture(env: &Env, rect: PxRect, source: SourceInfo, control: Arc<
             return;
         }
         let img = stitcher.finish();
-        env.send(WorkerMsg::ScrollDone { result: Ok(img), cancelled: false, partial: failed || error.is_some(), source });
+        env.send(WorkerMsg::ScrollDone {
+            result: Ok(img),
+            cancelled: false,
+            partial: failed || error.is_some(),
+            source,
+        });
     });
 }
 
@@ -411,7 +506,10 @@ pub fn scroll_capture(env: &Env, rect: PxRect, source: SourceInfo, control: Arc<
 pub fn temp_recording_path(history: &History) -> anyhow::Result<PathBuf> {
     let dir = history.folder().join(".stinkshot").join("tmp");
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-    Ok(dir.join(format!("Recording_{}.mp4", chrono::Local::now().format("%Y%m%d_%H%M%S_%3f"))))
+    Ok(dir.join(format!(
+        "Recording_{}.mp4",
+        chrono::Local::now().format("%Y%m%d_%H%M%S_%3f")
+    )))
 }
 
 pub fn start_recorder(env: &Env, opts: RecordOptions) {
@@ -423,10 +521,11 @@ pub fn start_recorder(env: &Env, opts: RecordOptions) {
 
 pub fn stop_recorder(env: &Env, rec: Recorder) {
     job(env, "recorder-stop", move |env| {
-        let r = rec
-            .stop()
-            .map_err(|e| format!("{e:#}"))
-            .and_then(|res| stinkshot_record::probe(&res.path).map(|info| (res, info)).map_err(|e| format!("{e:#}")));
+        let r = rec.stop().map_err(|e| format!("{e:#}")).and_then(|res| {
+            stinkshot_record::probe(&res.path)
+                .map(|info| (res, info))
+                .map_err(|e| format!("{e:#}"))
+        });
         env.send(WorkerMsg::RecordStopped(r));
     });
 }
@@ -441,14 +540,29 @@ fn media_parts(info: &MediaInfo) -> (u32, u32) {
 
 /// Export the recording at `source` (trimmed to [start, end)) as MP4 and/or GIF into the
 /// history folder, index the results and delete the temporary source.
-pub fn export_recording(env: &Env, source: PathBuf, start: Duration, end: Duration, as_gif: bool, as_mp4: bool) {
+pub fn export_recording(
+    env: &Env,
+    source: PathBuf,
+    start: Duration,
+    end: Duration,
+    as_gif: bool,
+    as_mp4: bool,
+) {
     job(env, "recording-export", move |env| {
         let result = export_inner(env, &source, start, end, as_gif, as_mp4);
         let exported = match result {
             Ok(x) => x,
             Err(e) => {
                 log::error!("export failed: {e:#}");
-                Exported { items: Vec::new(), thumb: None, duration: Duration::ZERO, width: 0, height: 0, bytes: 0, error: Some(format!("{e:#}")) }
+                Exported {
+                    items: Vec::new(),
+                    thumb: None,
+                    duration: Duration::ZERO,
+                    width: 0,
+                    height: 0,
+                    bytes: 0,
+                    error: Some(format!("{e:#}")),
+                }
             }
         };
         env.send(WorkerMsg::Exported(Box::new(exported)));
@@ -456,11 +570,23 @@ pub fn export_recording(env: &Env, source: PathBuf, start: Duration, end: Durati
     });
 }
 
-fn export_inner(env: &Env, source: &Path, start: Duration, end: Duration, as_gif: bool, as_mp4: bool) -> anyhow::Result<Exported> {
+fn export_inner(
+    env: &Env,
+    source: &Path,
+    start: Duration,
+    end: Duration,
+    as_gif: bool,
+    as_mp4: bool,
+) -> anyhow::Result<Exported> {
     let info = stinkshot_record::probe(source).context("read the recording")?;
-    let end = if end.is_zero() || end > info.duration { info.duration } else { end };
+    let end = if end.is_zero() || end > info.duration {
+        info.duration
+    } else {
+        end
+    };
     let start = start.min(end);
-    let full = start <= Duration::from_millis(40) && end + Duration::from_millis(80) >= info.duration;
+    let full =
+        start <= Duration::from_millis(40) && end + Duration::from_millis(80) >= info.duration;
     let (w, h) = media_parts(&info);
     let mid = start + (end - start) / 2;
     let thumb = stinkshot_record::frame_at(source, mid, 220).ok();
@@ -468,13 +594,26 @@ fn export_inner(env: &Env, source: &Path, start: Duration, end: Duration, as_gif
     let progress_for = |index: u32| {
         let tx = env.tx.clone();
         move |p: f32| {
-            let _ = tx.send(WorkerMsg::ExportProgress(((index as f32 + p.clamp(0.0, 1.0)) / steps).clamp(0.0, 1.0)));
+            let _ = tx.send(WorkerMsg::ExportProgress(
+                ((index as f32 + p.clamp(0.0, 1.0)) / steps).clamp(0.0, 1.0),
+            ));
             crate::wake::wake();
         }
     };
     let name_for = |ext: &str| {
-        let parts = NameParts { now: chrono::Local::now(), app: "", title: "", width: w, height: h };
-        naming::unique_path(env.history.folder(), &env.cfg.capture.filename_pattern, &parts, ext)
+        let parts = NameParts {
+            now: chrono::Local::now(),
+            app: "",
+            title: "",
+            width: w,
+            height: h,
+        };
+        naming::unique_path(
+            env.history.folder(),
+            &env.cfg.capture.filename_pattern,
+            &parts,
+            ext,
+        )
     };
 
     let mut items = Vec::new();
@@ -562,7 +701,15 @@ fn export_inner(env: &Env, source: &Path, start: Duration, end: Duration, as_gif
     if indexed.is_empty() && error.is_none() {
         return Err(anyhow!("nothing was exported"));
     }
-    Ok(Exported { items: indexed, thumb, duration: end - start, width: w, height: h, bytes, error })
+    Ok(Exported {
+        items: indexed,
+        thumb,
+        duration: end - start,
+        width: w,
+        height: h,
+        bytes,
+        error,
+    })
 }
 
 // ------------------------------------------------------------------------ history items
@@ -570,7 +717,10 @@ fn export_inner(env: &Env, source: &Path, start: Duration, end: Duration, as_gif
 pub fn copy_item_image(env: &Env, id: ItemId) {
     job(env, "copy-image", move |env| {
         let run = || -> anyhow::Result<&'static str> {
-            let meta = env.history.get(id)?.ok_or_else(|| anyhow!("item no longer exists"))?;
+            let meta = env
+                .history
+                .get(id)?
+                .ok_or_else(|| anyhow!("item no longer exists"))?;
             match meta.kind {
                 ItemKind::Image => {
                     let img = Rgba::load(&meta.path)?;
@@ -593,14 +743,20 @@ pub fn copy_item_image(env: &Env, id: ItemId) {
 pub fn copy_item_text(env: &Env, id: ItemId) {
     job(env, "copy-text", move |env| {
         let run = || -> anyhow::Result<Option<String>> {
-            let meta = env.history.get(id)?.ok_or_else(|| anyhow!("item no longer exists"))?;
+            let meta = env
+                .history
+                .get(id)?
+                .ok_or_else(|| anyhow!("item no longer exists"))?;
             let text = match meta.ocr_text {
                 Some(t) if !t.trim().is_empty() => t,
                 _ => {
                     if meta.kind != ItemKind::Image {
                         return Ok(None);
                     }
-                    let engine = env.ocr.as_ref().ok_or_else(|| anyhow!("no OCR language is installed"))?;
+                    let engine = env
+                        .ocr
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("no OCR language is installed"))?;
                     let img = Rgba::load(&meta.path)?;
                     let text = engine.recognize(&img)?.text.trim().to_string();
                     env.history.set_ocr_text(id, &text)?;
@@ -615,7 +771,11 @@ pub fn copy_item_text(env: &Env, id: ItemId) {
         };
         match run() {
             Ok(Some(t)) => env.notify("Text copied", preview(&t, 140), false),
-            Ok(None) => env.notify("No text found", "This item has no recognizable text.", false),
+            Ok(None) => env.notify(
+                "No text found",
+                "This item has no recognizable text.",
+                false,
+            ),
             Err(e) => env.notify("Could not copy text", format!("{e:#}"), true),
         }
     });
@@ -624,15 +784,26 @@ pub fn copy_item_text(env: &Env, id: ItemId) {
 pub fn pin_item(env: &Env, id: ItemId) {
     job(env, "pin-item", move |env| {
         let run = || -> anyhow::Result<(Rgba, String)> {
-            let meta = env.history.get(id)?.ok_or_else(|| anyhow!("item no longer exists"))?;
+            let meta = env
+                .history
+                .get(id)?
+                .ok_or_else(|| anyhow!("item no longer exists"))?;
             if meta.kind != ItemKind::Image {
                 return Err(anyhow!("only images can be pinned"));
             }
-            let title = meta.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            let title = meta
+                .path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
             Ok((Rgba::load(&meta.path)?, title))
         };
         match run() {
-            Ok((image, title)) => env.send(WorkerMsg::PinReady { image, title, item: id }),
+            Ok((image, title)) => env.send(WorkerMsg::PinReady {
+                image,
+                title,
+                item: id,
+            }),
             Err(e) => env.notify("Could not pin", format!("{e:#}"), true),
         }
     });
@@ -641,11 +812,17 @@ pub fn pin_item(env: &Env, id: ItemId) {
 pub fn edit_item(env: &Env, id: ItemId) {
     job(env, "edit-item", move |env| {
         let run = || -> anyhow::Result<(Rgba, Doc, SourceInfo)> {
-            let meta = env.history.get(id)?.ok_or_else(|| anyhow!("item no longer exists"))?;
+            let meta = env
+                .history
+                .get(id)?
+                .ok_or_else(|| anyhow!("item no longer exists"))?;
             if meta.kind != ItemKind::Image {
                 return Err(anyhow!("only images can be edited"));
             }
-            let source = SourceInfo { app: meta.app.clone(), window_title: meta.window_title.clone() };
+            let source = SourceInfo {
+                app: meta.app.clone(),
+                window_title: meta.window_title.clone(),
+            };
             if let Some((base, doc)) = annotate::load_editable(&meta.path)? {
                 return Ok((base, doc, source));
             }
@@ -655,7 +832,13 @@ pub fn edit_item(env: &Env, id: ItemId) {
         };
         match run() {
             Ok((base, doc, source)) => {
-                env.send(WorkerMsg::OpenAnnotate { base, doc, mode: "region", editing: Some(id), source });
+                env.send(WorkerMsg::OpenAnnotate {
+                    base,
+                    doc,
+                    mode: "region",
+                    editing: Some(id),
+                    source,
+                });
             }
             Err(e) => env.notify("Could not open for editing", format!("{e:#}"), true),
         }
@@ -772,10 +955,16 @@ fn maintain(c: &BgConfig, tx: &Sender<WorkerMsg>) {
 /// Raw recordings abandoned by a crash are kept a week, then removed.
 fn clean_temp_recordings(history: &History) {
     let dir = history.folder().join(".stinkshot").join("tmp");
-    let Ok(entries) = std::fs::read_dir(&dir) else { return };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
     let cutoff = std::time::SystemTime::now() - Duration::from_secs(7 * 24 * 3600);
     for e in entries.flatten() {
-        let old = e.metadata().and_then(|m| m.modified()).map(|t| t < cutoff).unwrap_or(false);
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .map(|t| t < cutoff)
+            .unwrap_or(false);
         if old && let Err(err) = std::fs::remove_file(e.path()) {
             log::debug!("temp cleanup {}: {err}", e.path().display());
         }

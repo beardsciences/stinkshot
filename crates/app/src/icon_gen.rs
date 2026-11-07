@@ -73,7 +73,10 @@ fn in_mark(x: f32, y: f32) -> bool {
 /// Smallest tray size that is not blurry at the given system DPI.
 pub fn tray_size_for_dpi(dpi: u32) -> u32 {
     let want = (16 * dpi.max(96)).div_ceil(96);
-    [16u32, 20, 24, 32].into_iter().find(|s| *s >= want).unwrap_or(32)
+    [16u32, 20, 24, 32]
+        .into_iter()
+        .find(|s| *s >= want)
+        .unwrap_or(32)
 }
 
 /// A multi-resolution .ico (BMP/DIB frames, no PNG dependency).

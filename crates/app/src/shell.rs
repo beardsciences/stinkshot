@@ -55,13 +55,16 @@ use crate::pin::Pin;
 use crate::record_ui::{Countdown, HudToggles, RecordFrame, RecordHud, ScrollHud, TrimWindow};
 use crate::settings_ui::SettingsWindow;
 use crate::state::{
-    CaptureOutput, Command, FinishAction, OverlayMode, OverlayRequest, RegionPurpose, Shared, SourceInfo, Surface, SurfaceStatus,
+    CaptureOutput, Command, FinishAction, OverlayMode, OverlayRequest, RegionPurpose, Shared,
+    SourceInfo, Surface, SurfaceStatus,
 };
 use crate::theme;
 use crate::toast::{Toast, ToastKind};
 use crate::tray::Tray;
 use crate::update::Release;
-use crate::workers::{self, BgConfig, BgKick, Env, SCROLL_CANCEL, SCROLL_RUN, SCROLL_STOP, WorkerMsg};
+use crate::workers::{
+    self, BgConfig, BgKick, Env, SCROLL_CANCEL, SCROLL_RUN, SCROLL_STOP, WorkerMsg,
+};
 use crate::{logger, sysutil, wake};
 
 const ROOT_TITLE: &str = "StinkShot.Root";
@@ -85,7 +88,10 @@ pub fn run() -> anyhow::Result<()> {
             }
             return Ok(());
         }
-        CliAction::RunApp { initial, forward_args } => (initial, forward_args),
+        CliAction::RunApp {
+            initial,
+            forward_args,
+        } => (initial, forward_args),
     };
 
     let Some(guard) = system::acquire_single_instance() else {
@@ -126,7 +132,10 @@ fn run_app(initial: Option<Command>, guard: InstanceGuard) -> anyhow::Result<()>
     let config = Config::load();
     let fonts = Arc::new(Fonts::load_system().context("load system fonts")?);
     let history_dir = config.history_folder();
-    let history = Arc::new(History::open(&history_dir).with_context(|| format!("open history folder {}", history_dir.display()))?);
+    let history = Arc::new(
+        History::open(&history_dir)
+            .with_context(|| format!("open history folder {}", history_dir.display()))?,
+    );
 
     // OCR engine creation touches COM; do it on a scratch thread so the UI thread's apartment
     // stays the one winit sets up.
@@ -143,7 +152,14 @@ fn run_app(initial: Option<Command>, guard: InstanceGuard) -> anyhow::Result<()>
             }
         });
 
-    let boot = Boot { config, fonts, history, ocr, initial, guard };
+    let boot = Boot {
+        config,
+        fonts,
+        history,
+        ocr,
+        initial,
+        guard,
+    };
     let options = eframe::NativeOptions {
         viewport: root_viewport(),
         renderer: eframe::Renderer::Wgpu,
@@ -152,7 +168,11 @@ fn run_app(initial: Option<Command>, guard: InstanceGuard) -> anyhow::Result<()>
     eframe::run_native(
         "StinkShot",
         options,
-        Box::new(move |cc| Ok(Box::new(Shell::new(cc, boot).map_err(|e| format!("{e:#}"))?))),
+        Box::new(move |cc| {
+            Ok(Box::new(
+                Shell::new(cc, boot).map_err(|e| format!("{e:#}"))?,
+            ))
+        }),
     )
     .map_err(|e| anyhow!("{e}"))
 }
@@ -185,7 +205,10 @@ struct Slot<T> {
 
 impl<T> Slot<T> {
     fn new(s: T) -> Self {
-        Self { s, st: HwndState::default() }
+        Self {
+            s,
+            st: HwndState::default(),
+        }
     }
 }
 
@@ -195,7 +218,13 @@ struct ToastSlot {
 }
 
 /// Show one surface as an immediate viewport; resolve its HWND once.
-fn drive(ctx: &egui::Context, shared: &mut Shared, surf: &mut dyn Surface, st: &mut HwndState, focus: bool) -> SurfaceStatus {
+fn drive(
+    ctx: &egui::Context,
+    shared: &mut Shared,
+    surf: &mut dyn Surface,
+    st: &mut HwndState,
+    focus: bool,
+) -> SurfaceStatus {
     let title = surf.title();
     let id = egui::ViewportId::from_hash_of(&title);
     let builder = surf.viewport_builder(shared).with_title(title.clone());
@@ -217,7 +246,12 @@ fn drive(ctx: &egui::Context, shared: &mut Shared, surf: &mut dyn Surface, st: &
 }
 
 /// Returns true if the surface closed this frame.
-fn drive_opt<T: Surface>(ctx: &egui::Context, shared: &mut Shared, slot: &mut Option<Slot<T>>, focus: bool) -> bool {
+fn drive_opt<T: Surface>(
+    ctx: &egui::Context,
+    shared: &mut Shared,
+    slot: &mut Option<Slot<T>>,
+    focus: bool,
+) -> bool {
     let Some(sl) = slot else { return false };
     if drive(ctx, shared, &mut sl.s, &mut sl.st, focus) == SurfaceStatus::Close {
         *slot = None;
@@ -238,11 +272,20 @@ enum Rec {
     Idle,
     Countdown(PendingRecord),
     /// Recorder is being created on a worker.
-    Starting { pending: PendingRecord, cancel: bool },
-    Active { rec: Box<Recorder>, pending: PendingRecord },
+    Starting {
+        pending: PendingRecord,
+        cancel: bool,
+    },
+    Active {
+        rec: Box<Recorder>,
+        pending: PendingRecord,
+    },
     /// `stop()` is running on a worker.
     Stopping(PendingRecord),
-    Trim { source: PathBuf, done_issued: bool },
+    Trim {
+        source: PathBuf,
+        done_issued: bool,
+    },
 }
 
 struct ScrollFlow {
@@ -316,12 +359,20 @@ fn accent_color(a: [u8; 4]) -> Color32 {
 
 fn fmt_duration(d: Duration) -> String {
     let s = d.as_secs();
-    if s >= 3600 { format!("{}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60) } else { format!("{}:{:02}", s / 60, s % 60) }
+    if s >= 3600 {
+        format!("{}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
+    } else {
+        format!("{}:{:02}", s / 60, s % 60)
+    }
 }
 
 fn fmt_bytes(b: u64) -> String {
     const MB: f64 = 1024.0 * 1024.0;
-    if b as f64 >= MB { format!("{:.1} MB", b as f64 / MB) } else { format!("{} KB", (b / 1024).max(1)) }
+    if b as f64 >= MB {
+        format!("{:.1} MB", b as f64 / MB)
+    } else {
+        format!("{} KB", (b / 1024).max(1))
+    }
 }
 
 impl Shell {
@@ -329,9 +380,21 @@ impl Shell {
         let ctx = cc.egui_ctx.clone();
         wake::set_context(ctx.clone());
 
-        let Boot { config, fonts, history, ocr, initial, guard } = boot;
+        let Boot {
+            config,
+            fonts,
+            history,
+            ocr,
+            initial,
+            guard,
+        } = boot;
         let resolved_theme = resolve_theme(&config);
-        theme::install(&ctx, &fonts, resolved_theme.0, accent_color(resolved_theme.1));
+        theme::install(
+            &ctx,
+            &fonts,
+            resolved_theme.0,
+            accent_color(resolved_theme.1),
+        );
 
         // IPC: args forwarded by later launches.
         let (ipc_tx, ipc_inner_rx) = channel::<Vec<String>>();
@@ -363,7 +426,11 @@ impl Shell {
         let (hotkeys, hotkey_errors) = Hotkeys::new(&config.hotkeys);
 
         let (worker_tx, worker_rx) = channel();
-        let bg_cfg = Arc::new(Mutex::new(BgConfig::from(&config, history.clone(), ocr.clone())));
+        let bg_cfg = Arc::new(Mutex::new(BgConfig::from(
+            &config,
+            history.clone(),
+            ocr.clone(),
+        )));
         let bg_kick = workers::start_background(bg_cfg.clone(), worker_tx.clone());
 
         let mut shell = Shell {
@@ -420,7 +487,11 @@ impl Shell {
         shell.apply_autostart();
         if !shell.hotkey_errors.is_empty() {
             let body = shell.hotkey_errors.join("\n");
-            shell.pending.push_back(Command::Notify { title: "Some hotkeys are not active".into(), body, error: true });
+            shell.pending.push_back(Command::Notify {
+                title: "Some hotkeys are not active".into(),
+                body,
+                error: true,
+            });
         }
         if shell.tray.is_none() {
             shell.pending.push_back(Command::Notify {
@@ -463,7 +534,11 @@ impl Shell {
     }
 
     fn notify(&mut self, title: &str, body: impl Into<String>, error: bool) {
-        self.pending.push_back(Command::Notify { title: title.to_string(), body: body.into(), error });
+        self.pending.push_back(Command::Notify {
+            title: title.to_string(),
+            body: body.into(),
+            error,
+        });
     }
 
     fn push_toast(&mut self, kind: ToastKind) {
@@ -475,13 +550,17 @@ impl Shell {
             index += 1;
         }
         let id = self.new_id();
-        self.toasts.push(ToastSlot { slot: Slot::new(Toast::new(kind, id, index)), index });
+        self.toasts.push(ToastSlot {
+            slot: Slot::new(Toast::new(kind, id, index)),
+            index,
+        });
         self.touch();
     }
 
     fn add_pin(&mut self, image: Rgba, title: String, item: Option<ItemId>, at: Option<PxRect>) {
         let id = self.new_id();
-        self.pins.push(Slot::new(Pin::new(image, title, item, at, id)));
+        self.pins
+            .push(Slot::new(Pin::new(image, title, item, at, id)));
         self.touch();
     }
 
@@ -523,10 +602,16 @@ impl Shell {
             Command::CaptureRegion => self.begin_overlay(OverlayMode::Capture),
             Command::CaptureWindow => self.capture_window(),
             Command::CaptureFullscreen => self.capture_fullscreen(),
-            Command::CaptureScrolling => self.begin_overlay(OverlayMode::SelectRegion(RegionPurpose::Scrolling)),
+            Command::CaptureScrolling => {
+                self.begin_overlay(OverlayMode::SelectRegion(RegionPurpose::Scrolling))
+            }
             Command::OcrRegion => {
                 if self.shared.ocr.is_none() {
-                    self.notify("No OCR language installed", "Add a language in Windows Settings > Time & language > Language & region.", true);
+                    self.notify(
+                        "No OCR language installed",
+                        "Add a language in Windows Settings > Time & language > Language & region.",
+                        true,
+                    );
                 } else {
                     self.begin_overlay(OverlayMode::SelectRegion(RegionPurpose::Ocr));
                 }
@@ -540,7 +625,11 @@ impl Shell {
             Command::PinItem(id) => workers::pin_item(&self.env(), id),
             Command::PinImage { image, title } => self.add_pin(image, title, None, None),
             Command::CaptureDone(out) => self.capture_done(out),
-            Command::RegionChosen { purpose, rect, source } => self.region_chosen(purpose, rect, source),
+            Command::RegionChosen {
+                purpose,
+                rect,
+                source,
+            } => self.region_chosen(purpose, rect, source),
             Command::Cancelled => {
                 self.freeze_cache = None;
             }
@@ -556,7 +645,13 @@ impl Shell {
             }
             Command::RecordStop => self.record_stop(),
             Command::RecordCancel => self.record_cancel(),
-            Command::TrimDone { start, end, as_gif, as_mp4, .. } => self.trim_done(start, end, as_gif, as_mp4),
+            Command::TrimDone {
+                start,
+                end,
+                as_gif,
+                as_mp4,
+                ..
+            } => self.trim_done(start, end, as_gif, as_mp4),
             Command::ScrollStop => {
                 if let Some(s) = &self.scroll {
                     s.control.store(SCROLL_STOP, Ordering::Relaxed);
@@ -569,7 +664,9 @@ impl Shell {
             }
             Command::CopyItemImage(id) => workers::copy_item_image(&self.env(), id),
             Command::CopyItemText(id) => workers::copy_item_text(&self.env(), id),
-            Command::RevealItem(id) => self.with_item(id, |meta| system::reveal_in_explorer(&meta.path)),
+            Command::RevealItem(id) => {
+                self.with_item(id, |meta| system::reveal_in_explorer(&meta.path))
+            }
             Command::OpenItem(id) => self.with_item(id, |meta| system::open_path(&meta.path)),
             Command::DeleteItem(id) => workers::delete_item(&self.env(), id),
             Command::StarItem(id, starred) => {
@@ -578,7 +675,9 @@ impl Shell {
                 }
                 self.invalidate_history();
             }
-            Command::Notify { title, body, error } => self.push_toast(ToastKind::Message { title, body, error }),
+            Command::Notify { title, body, error } => {
+                self.push_toast(ToastKind::Message { title, body, error })
+            }
             Command::CheckForUpdates => self.maybe_check_updates(true),
             Command::Quit => self.quit(),
             Command::OpenUrl(url) => {
@@ -592,7 +691,11 @@ impl Shell {
         }
     }
 
-    fn with_item(&mut self, id: ItemId, f: impl FnOnce(&stinkshot_history::ItemMeta) -> anyhow::Result<()>) {
+    fn with_item(
+        &mut self,
+        id: ItemId,
+        f: impl FnOnce(&stinkshot_history::ItemMeta) -> anyhow::Result<()>,
+    ) {
         match self.shared.history.get(id) {
             Ok(Some(meta)) => {
                 if let Err(e) = f(&meta) {
@@ -616,7 +719,11 @@ impl Shell {
             return true;
         }
         if self.busy_with_recording() {
-            self.notify("Recording in progress", "Stop or finish the recording before taking a capture.", false);
+            self.notify(
+                "Recording in progress",
+                "Stop or finish the recording before taking a capture.",
+                false,
+            );
             return true;
         }
         false
@@ -634,8 +741,18 @@ impl Shell {
         }
     }
 
-    fn open_overlay(&mut self, mode: OverlayMode, frozen: Frozen, windows: Vec<stinkshot_platform::windows_enum::WinInfo>) {
-        let req = OverlayRequest { mode, frozen, windows, last_region: self.shared.config.capture.last_region };
+    fn open_overlay(
+        &mut self,
+        mode: OverlayMode,
+        frozen: Frozen,
+        windows: Vec<stinkshot_platform::windows_enum::WinInfo>,
+    ) {
+        let req = OverlayRequest {
+            mode,
+            frozen,
+            windows,
+            last_region: self.shared.config.capture.last_region,
+        };
         self.overlay = Some(Slot::new(Overlay::new(req, &self.shared)));
         self.touch();
     }
@@ -644,8 +761,11 @@ impl Shell {
         if self.capture_blocked() {
             return;
         }
-        let Some((frozen, windows)) = self.freeze() else { return };
-        self.freeze_cache = matches!(mode, OverlayMode::SelectRegion(RegionPurpose::Ocr)).then(|| frozen.clone());
+        let Some((frozen, windows)) = self.freeze() else {
+            return;
+        };
+        self.freeze_cache =
+            matches!(mode, OverlayMode::SelectRegion(RegionPurpose::Ocr)).then(|| frozen.clone());
         self.open_overlay(mode, frozen, windows);
     }
 
@@ -654,10 +774,16 @@ impl Shell {
             return;
         }
         let Some(win) = capture_ops::target_window() else {
-            self.notify("No window to capture", "There is no foreground window.", true);
+            self.notify(
+                "No window to capture",
+                "There is no foreground window.",
+                true,
+            );
             return;
         };
-        let Some((frozen, windows)) = self.freeze() else { return };
+        let Some((frozen, windows)) = self.freeze() else {
+            return;
+        };
         self.window_capture_pending = true;
         workers::capture_window(&self.env(), frozen, windows, win);
     }
@@ -666,16 +792,34 @@ impl Shell {
         if self.capture_blocked() {
             return;
         }
-        let source = windows_enum::foreground().map(|w| capture_ops::source_of(&w)).unwrap_or_default();
-        let Some((frozen, windows)) = self.freeze() else { return };
+        let source = windows_enum::foreground()
+            .map(|w| capture_ops::source_of(&w))
+            .unwrap_or_default();
+        let Some((frozen, windows)) = self.freeze() else {
+            return;
+        };
         let mon = capture_ops::monitor_rect_at(frozen.cursor, frozen.bounds);
         let base = capture_ops::crop_frozen(&frozen, mon);
         if base.width == 0 || base.height == 0 {
-            self.notify("Could not capture the screen", "The monitor is outside the captured area.", true);
+            self.notify(
+                "Could not capture the screen",
+                "The monitor is outside the captured area.",
+                true,
+            );
             return;
         }
         let doc = Doc::new(base.width, base.height);
-        self.open_overlay(OverlayMode::Annotate { base, doc, mode: "fullscreen", editing: None, source }, frozen, windows);
+        self.open_overlay(
+            OverlayMode::Annotate {
+                base,
+                doc,
+                mode: "fullscreen",
+                editing: None,
+                source,
+            },
+            frozen,
+            windows,
+        );
     }
 
     fn repeat_last_region(&mut self) {
@@ -683,11 +827,17 @@ impl Shell {
             return;
         }
         let Some(rect) = self.shared.config.capture.last_region else {
-            self.notify("No previous region", "Select a region first; it will be remembered.", false);
+            self.notify(
+                "No previous region",
+                "Select a region first; it will be remembered.",
+                false,
+            );
             self.begin_overlay(OverlayMode::Capture);
             return;
         };
-        let Some((frozen, windows)) = self.freeze() else { return };
+        let Some((frozen, windows)) = self.freeze() else {
+            return;
+        };
         let img = capture_ops::crop_frozen(&frozen, rect);
         if img.width == 0 || img.height == 0 {
             self.notify("Last region is off screen", "Select a new region.", false);
@@ -777,26 +927,43 @@ impl Shell {
                             workers::ocr_image(&self.env(), img);
                         }
                     }
-                    None => self.notify("Could not read the selection", "The screen snapshot was lost; try again.", true),
+                    None => self.notify(
+                        "Could not read the selection",
+                        "The screen snapshot was lost; try again.",
+                        true,
+                    ),
                 }
             }
             RegionPurpose::Scrolling => {
                 if rect.w < 16 || rect.h < 16 {
-                    self.notify("Selection too small", "Select a larger area to scroll-capture.", false);
+                    self.notify(
+                        "Selection too small",
+                        "Select a larger area to scroll-capture.",
+                        false,
+                    );
                     return;
                 }
                 let control = Arc::new(AtomicU8::new(SCROLL_RUN));
-                self.scroll = Some(ScrollFlow { control: control.clone() });
+                self.scroll = Some(ScrollFlow {
+                    control: control.clone(),
+                });
                 self.scroll_hud = Some(Slot::new(ScrollHud::new(rect)));
                 workers::scroll_capture(&self.env(), rect, source, control);
                 self.touch();
             }
             RegionPurpose::RecordMp4 | RegionPurpose::RecordGif => {
                 if rect.w < 16 || rect.h < 16 {
-                    self.notify("Selection too small", "Select a larger area to record.", false);
+                    self.notify(
+                        "Selection too small",
+                        "Select a larger area to record.",
+                        false,
+                    );
                     return;
                 }
-                let pending = PendingRecord { rect, gif: purpose == RegionPurpose::RecordGif };
+                let pending = PendingRecord {
+                    rect,
+                    gif: purpose == RegionPurpose::RecordGif,
+                };
                 let secs = self.shared.config.recording.countdown_seconds;
                 if secs > 0 {
                     self.countdown = Some(Slot::new(Countdown::new(secs, rect)));
@@ -818,12 +985,20 @@ impl Shell {
                 if self.overlay.is_some() || self.window_capture_pending || self.scroll.is_some() {
                     return;
                 }
-                let purpose = if gif { RegionPurpose::RecordGif } else { RegionPurpose::RecordMp4 };
+                let purpose = if gif {
+                    RegionPurpose::RecordGif
+                } else {
+                    RegionPurpose::RecordMp4
+                };
                 self.begin_overlay(OverlayMode::SelectRegion(purpose));
             }
             Rec::Countdown(_) => self.record_cancel(),
             Rec::Active { .. } => self.record_stop(),
-            _ => self.notify("Recording in progress", "Finish the current recording first.", false),
+            _ => self.notify(
+                "Recording in progress",
+                "Finish the current recording first.",
+                false,
+            ),
         }
     }
 
@@ -855,7 +1030,10 @@ impl Shell {
             include_cursor: self.shared.config.capture.include_cursor,
             accent: self.shared.accent,
         };
-        self.rec = Rec::Starting { pending, cancel: false };
+        self.rec = Rec::Starting {
+            pending,
+            cancel: false,
+        };
         workers::start_recorder(&self.env(), opts);
     }
 
@@ -867,7 +1045,12 @@ impl Shell {
             (false, true) => "system audio",
             (false, false) => "no audio",
         };
-        format!("{} \u{b7} H.264 \u{b7} {} fps \u{b7} {}", if gif { "GIF" } else { "MP4" }, rc.fps, audio)
+        format!(
+            "{} \u{b7} H.264 \u{b7} {} fps \u{b7} {}",
+            if gif { "GIF" } else { "MP4" },
+            rc.fps,
+            audio
+        )
     }
 
     fn record_stop(&mut self) {
@@ -890,7 +1073,10 @@ impl Shell {
                 self.touch();
             }
             Rec::Starting { pending, .. } => {
-                self.rec = Rec::Starting { pending, cancel: true };
+                self.rec = Rec::Starting {
+                    pending,
+                    cancel: true,
+                };
             }
             Rec::Active { rec, .. } => {
                 self.record_frame = None;
@@ -911,7 +1097,13 @@ impl Shell {
     }
 
     fn trim_done(&mut self, start: Duration, end: Duration, as_gif: bool, as_mp4: bool) {
-        let Rec::Trim { source, done_issued } = &mut self.rec else { return };
+        let Rec::Trim {
+            source,
+            done_issued,
+        } = &mut self.rec
+        else {
+            return;
+        };
         let source = source.clone();
         *done_issued = true;
         if !as_gif && !as_mp4 {
@@ -933,7 +1125,11 @@ impl Shell {
     fn tick_recording(&mut self) {
         // Countdown -> start.
         if let Rec::Countdown(p) = &self.rec {
-            let done = self.countdown.as_ref().map(|c| c.s.finished()).unwrap_or(true);
+            let done = self
+                .countdown
+                .as_ref()
+                .map(|c| c.s.finished())
+                .unwrap_or(true);
             if done {
                 let pending = p.clone();
                 self.countdown = None;
@@ -963,18 +1159,32 @@ impl Shell {
         }
         if let Some(err) = stop_with_error {
             log::error!("recorder reported an error: {err}");
-            self.notify("Recording problem", format!("{err}\nStopping and keeping what was recorded."), true);
+            self.notify(
+                "Recording problem",
+                format!("{err}\nStopping and keeping what was recorded."),
+                true,
+            );
             self.record_stop();
         }
         // Trim window closed without a choice: keep the untrimmed recording.
         if self.trim_closed_by_user {
             self.trim_closed_by_user = false;
-            if let Rec::Trim { source, done_issued: false } = &self.rec
+            if let Rec::Trim {
+                source,
+                done_issued: false,
+            } = &self.rec
                 && !self.exporting
             {
                 let source = source.clone();
                 self.exporting = true;
-                workers::export_recording(&self.env(), source, Duration::ZERO, Duration::ZERO, false, true);
+                workers::export_recording(
+                    &self.env(),
+                    source,
+                    Duration::ZERO,
+                    Duration::ZERO,
+                    false,
+                    true,
+                );
             }
         }
     }
@@ -986,32 +1196,73 @@ impl Shell {
             WorkerMsg::Cmd(cmd) => self.pending.push_back(cmd),
             WorkerMsg::HistoryChanged => self.invalidate_history(),
             WorkerMsg::CaptureSaved(saved) => self.capture_saved(*saved),
-            WorkerMsg::WindowCaptured { frozen, windows, result } => {
+            WorkerMsg::WindowCaptured {
+                frozen,
+                windows,
+                result,
+            } => {
                 self.window_capture_pending = false;
                 match result {
                     Ok((base, source)) => {
                         let doc = Doc::new(base.width, base.height);
-                        self.open_overlay(OverlayMode::Annotate { base, doc, mode: "window", editing: None, source }, frozen, windows);
+                        self.open_overlay(
+                            OverlayMode::Annotate {
+                                base,
+                                doc,
+                                mode: "window",
+                                editing: None,
+                                source,
+                            },
+                            frozen,
+                            windows,
+                        );
                     }
                     Err(e) => self.notify("Window capture failed", e, true),
                 }
             }
-            WorkerMsg::OpenAnnotate { base, doc, mode, editing, source } => {
+            WorkerMsg::OpenAnnotate {
+                base,
+                doc,
+                mode,
+                editing,
+                source,
+            } => {
                 if self.overlay.is_some() {
                     return;
                 }
                 if let Some((frozen, windows)) = self.freeze() {
-                    self.open_overlay(OverlayMode::Annotate { base, doc, mode, editing, source }, frozen, windows);
+                    self.open_overlay(
+                        OverlayMode::Annotate {
+                            base,
+                            doc,
+                            mode,
+                            editing,
+                            source,
+                        },
+                        frozen,
+                        windows,
+                    );
                 }
             }
-            WorkerMsg::PinReady { image, title, item } => self.add_pin(image, title, Some(item), None),
-            WorkerMsg::ScrollProgress { frames, width, height } => {
+            WorkerMsg::PinReady { image, title, item } => {
+                self.add_pin(image, title, Some(item), None)
+            }
+            WorkerMsg::ScrollProgress {
+                frames,
+                width,
+                height,
+            } => {
                 if let Some(h) = &mut self.scroll_hud {
                     h.s.update(frames, width, height);
                 }
                 self.touch();
             }
-            WorkerMsg::ScrollDone { result, cancelled, partial, source } => {
+            WorkerMsg::ScrollDone {
+                result,
+                cancelled,
+                partial,
+                source,
+            } => {
                 self.scroll = None;
                 self.scroll_hud = None;
                 self.touch();
@@ -1029,23 +1280,47 @@ impl Shell {
                         }
                         let doc = Doc::new(img.width, img.height);
                         if let Some((frozen, windows)) = self.freeze() {
-                            self.open_overlay(OverlayMode::Annotate { base: img, doc, mode: "scrolling", editing: None, source }, frozen, windows);
+                            self.open_overlay(
+                                OverlayMode::Annotate {
+                                    base: img,
+                                    doc,
+                                    mode: "scrolling",
+                                    editing: None,
+                                    source,
+                                },
+                                frozen,
+                                windows,
+                            );
                         }
                     }
                     Err(e) => self.notify("Scrolling capture failed", e, true),
                 }
             }
             WorkerMsg::RecorderStarted(result) => self.recorder_started(result),
-            WorkerMsg::RecordStopped(result) => match (std::mem::replace(&mut self.rec, Rec::Idle), result) {
-                (Rec::Stopping(pending), Ok((res, info))) => {
-                    log::info!("recording stopped: {} ({:?}, {})", res.path.display(), res.duration, res.encoder);
-                    self.trim = Some(Slot::new(TrimWindow::new(res.path.clone(), info, pending.gif)));
-                    self.rec = Rec::Trim { source: res.path, done_issued: false };
-                    self.touch();
+            WorkerMsg::RecordStopped(result) => {
+                match (std::mem::replace(&mut self.rec, Rec::Idle), result) {
+                    (Rec::Stopping(pending), Ok((res, info))) => {
+                        log::info!(
+                            "recording stopped: {} ({:?}, {})",
+                            res.path.display(),
+                            res.duration,
+                            res.encoder
+                        );
+                        self.trim = Some(Slot::new(TrimWindow::new(
+                            res.path.clone(),
+                            info,
+                            pending.gif,
+                        )));
+                        self.rec = Rec::Trim {
+                            source: res.path,
+                            done_issued: false,
+                        };
+                        self.touch();
+                    }
+                    (_, Err(e)) => self.notify("Could not finish the recording", e, true),
+                    (other, Ok(_)) => self.rec = other,
                 }
-                (_, Err(e)) => self.notify("Could not finish the recording", e, true),
-                (other, Ok(_)) => self.rec = other,
-            },
+            }
             WorkerMsg::ExportProgress(p) => {
                 if let Some(t) = &mut self.trim {
                     t.s.set_progress(Some(p));
@@ -1068,11 +1343,19 @@ impl Shell {
             Ok(rec) if cancel => workers::cancel_recorder(&self.env(), rec),
             Ok(rec) => {
                 let rc = &self.shared.config.recording;
-                let toggles = HudToggles { mic: rc.microphone, system: rc.system_audio, webcam: rc.webcam, overlays: rc.show_clicks || rc.show_keys };
+                let toggles = HudToggles {
+                    mic: rc.microphone,
+                    system: rc.system_audio,
+                    webcam: rc.webcam,
+                    overlays: rc.show_clicks || rc.show_keys,
+                };
                 let summary = self.record_summary(pending.gif);
                 self.record_frame = Some(Slot::new(RecordFrame::new(pending.rect)));
                 self.record_hud = Some(Slot::new(RecordHud::new(pending.rect, summary, toggles)));
-                self.rec = Rec::Active { rec: Box::new(rec), pending };
+                self.rec = Rec::Active {
+                    rec: Box::new(rec),
+                    pending,
+                };
                 self.touch();
             }
             Err(e) => {
@@ -1092,7 +1375,9 @@ impl Shell {
         if let Some(err) = &x.error {
             self.notify("Export problem", err.clone(), true);
         }
-        let Some((id, path, kind)) = x.items.first().cloned() else { return };
+        let Some((id, path, kind)) = x.items.first().cloned() else {
+            return;
+        };
         if !self.shared.config.general.show_toast {
             return;
         }
@@ -1104,29 +1389,54 @@ impl Shell {
         } else {
             "Recording saved".to_string()
         };
-        let body = format!("{} \u{b7} {} x {} \u{b7} {}", fmt_duration(x.duration), x.width, x.height, fmt_bytes(x.bytes));
+        let body = format!(
+            "{} \u{b7} {} x {} \u{b7} {}",
+            fmt_duration(x.duration),
+            x.width,
+            x.height,
+            fmt_bytes(x.bytes)
+        );
         let _ = (path, kind);
-        self.push_toast(ToastKind::Recording { thumb: x.thumb.map(|t| t.thumbnail(360, 220)), title, body, item: Some(id) });
+        self.push_toast(ToastKind::Recording {
+            thumb: x.thumb.map(|t| t.thumbnail(360, 220)),
+            title,
+            body,
+            item: Some(id),
+        });
     }
 
     fn capture_saved(&mut self, s: workers::CaptureSaved) {
         if s.action == FinishAction::Pin
             && let Some(img) = s.pin_image
         {
-            let title = s.path.as_ref().and_then(|p| p.file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Pinned capture".into());
+            let title = s
+                .path
+                .as_ref()
+                .and_then(|p| p.file_stem())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Pinned capture".into());
             self.add_pin(img, title, s.item, Some(s.rect));
         }
         if !self.shared.config.general.show_toast {
             return;
         }
-        let detail = if !s.source.app.is_empty() { s.source.app.clone() } else { s.mode.to_string() };
+        let detail = if !s.source.app.is_empty() {
+            s.source.app.clone()
+        } else {
+            s.mode.to_string()
+        };
         let (title, body) = if let Some(text) = &s.copied_text {
             ("Text copied".to_string(), workers::preview(text, 120))
         } else if s.action == FinishAction::CopyText {
             return; // the worker already explained why nothing was copied
         } else {
             let title = if let Some(p) = &s.saved_as {
-                format!("Saved {}", p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
+                format!(
+                    "Saved {}",
+                    p.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                )
             } else if s.editing {
                 "Capture updated".to_string()
             } else if s.action == FinishAction::Pin {
@@ -1136,9 +1446,18 @@ impl Shell {
             } else {
                 "Saved to history".to_string()
             };
-            (title, format!("{} x {} \u{b7} {}", s.width, s.height, detail))
+            (
+                title,
+                format!("{} x {} \u{b7} {}", s.width, s.height, detail),
+            )
         };
-        self.push_toast(ToastKind::Capture { thumb: s.thumb, title, body, item: s.item, can_edit: s.item.is_some() });
+        self.push_toast(ToastKind::Capture {
+            thumb: s.thumb,
+            title,
+            body,
+            item: s.item,
+            can_edit: s.item.is_some(),
+        });
     }
 
     // -------------------------------------------------------------------- updates
@@ -1146,7 +1465,11 @@ impl Shell {
     fn maybe_check_updates(&mut self, force: bool) {
         if !self.shared.config.privacy.check_for_updates {
             if force {
-                self.notify("Update checks are off", "Turn them on in Settings > Privacy. They are the only network feature.", false);
+                self.notify(
+                    "Update checks are off",
+                    "Turn them on in Settings > Privacy. They are the only network feature.",
+                    false,
+                );
             }
             return;
         }
@@ -1171,9 +1494,17 @@ impl Shell {
                 self.shared.config.privacy.last_update_check = Some(chrono::Utc::now());
                 self.shared.config_dirty = true;
                 if let Some(r) = release {
-                    let first = self.update_release.as_ref().map(|u| u.tag != r.tag).unwrap_or(true);
+                    let first = self
+                        .update_release
+                        .as_ref()
+                        .map(|u| u.tag != r.tag)
+                        .unwrap_or(true);
                     if first {
-                        self.notify(&format!("StinkShot {} is available", r.tag), "Open the tray menu to see the release page.", false);
+                        self.notify(
+                            &format!("StinkShot {} is available", r.tag),
+                            "Open the tray menu to see the release page.",
+                            false,
+                        );
                     }
                     if let Some(t) = &mut self.tray {
                         t.set_update(Some(&r));
@@ -1216,7 +1547,8 @@ impl Shell {
             if let Some(t) = &mut self.tray {
                 t.update_labels(&new);
             }
-        } else if (old.general.accent != new.general.accent || old.privacy.check_for_updates != new.privacy.check_for_updates)
+        } else if (old.general.accent != new.general.accent
+            || old.privacy.check_for_updates != new.privacy.check_for_updates)
             && let Some(t) = &mut self.tray
         {
             t.update_labels(&new);
@@ -1241,7 +1573,10 @@ impl Shell {
         if let Ok(mut g) = self.bg_cfg.lock() {
             *g = BgConfig::from(&new, self.shared.history.clone(), self.shared.ocr.clone());
         }
-        if old.history.ocr_index != new.history.ocr_index || old.history.keep_days != new.history.keep_days || old.history.max_gb != new.history.max_gb {
+        if old.history.ocr_index != new.history.ocr_index
+            || old.history.keep_days != new.history.keep_days
+            || old.history.max_gb != new.history.max_gb
+        {
             let _ = self.bg_kick.send(BgKick::Full);
         }
         if !old.privacy.check_for_updates && new.privacy.check_for_updates {
@@ -1259,7 +1594,12 @@ impl Shell {
         let resolved = resolve_theme(&self.shared.config);
         if force || resolved != self.resolved_theme {
             self.resolved_theme = resolved;
-            theme::install(&self.ctx, &self.shared.fonts, resolved.0, accent_color(resolved.1));
+            theme::install(
+                &self.ctx,
+                &self.shared.fonts,
+                resolved.0,
+                accent_color(resolved.1),
+            );
             self.touch();
         }
         self.shared.dark = resolved.0;
@@ -1303,7 +1643,10 @@ impl Shell {
             self.handle(cmd);
             guard += 1;
             if guard > 200 {
-                log::error!("command loop did not settle; dropping {} commands", self.pending.len());
+                log::error!(
+                    "command loop did not settle; dropping {} commands",
+                    self.pending.len()
+                );
                 self.pending.clear();
                 break;
             }
@@ -1311,7 +1654,9 @@ impl Shell {
     }
 
     fn housekeeping(&mut self) {
-        if self.last_theme_check.elapsed() >= Duration::from_secs(3) && self.shared.config.general.theme == "system" {
+        if self.last_theme_check.elapsed() >= Duration::from_secs(3)
+            && self.shared.config.general.theme == "system"
+        {
             self.last_theme_check = Instant::now();
             self.refresh_theme(false);
         }
@@ -1337,10 +1682,13 @@ impl Shell {
             closed = true;
         }
         let before = self.toasts.len();
-        self.toasts.retain_mut(|t| drive(ctx, shared, &mut t.slot.s, &mut t.slot.st, false) == SurfaceStatus::Open);
+        self.toasts.retain_mut(|t| {
+            drive(ctx, shared, &mut t.slot.s, &mut t.slot.st, false) == SurfaceStatus::Open
+        });
         closed |= self.toasts.len() != before;
         let before = self.pins.len();
-        self.pins.retain_mut(|p| drive(ctx, shared, &mut p.s, &mut p.st, false) == SurfaceStatus::Open);
+        self.pins
+            .retain_mut(|p| drive(ctx, shared, &mut p.s, &mut p.st, false) == SurfaceStatus::Open);
         closed |= self.pins.len() != before;
         if closed {
             // One more pass so egui destroys the windows of surfaces that just closed.

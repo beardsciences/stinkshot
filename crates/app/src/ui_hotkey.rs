@@ -114,14 +114,26 @@ fn is_modifier_key(key: Key) -> bool {
     use Key::*;
     matches!(
         key,
-        ShiftLeft | ShiftRight | ControlLeft | ControlRight | AltLeft | AltRight | SuperLeft | SuperRight
+        ShiftLeft
+            | ShiftRight
+            | ControlLeft
+            | ControlRight
+            | AltLeft
+            | AltRight
+            | SuperLeft
+            | SuperRight
     )
 }
 
 /// Canonical string: modifiers in the order Control, Shift, Alt, Super, then the key.
 pub fn build_hotkey(ctrl: bool, shift: bool, alt: bool, win: bool, code: &str) -> String {
     let mut s = String::new();
-    for (on, name) in [(ctrl, "Control"), (shift, "Shift"), (alt, "Alt"), (win, "Super")] {
+    for (on, name) in [
+        (ctrl, "Control"),
+        (shift, "Shift"),
+        (alt, "Alt"),
+        (win, "Super"),
+    ] {
         if on {
             s.push_str(name);
             s.push('+');
@@ -145,7 +157,12 @@ pub enum Captured {
 /// Look at this frame's events. `win` is the Windows key state (egui has no modifier flag for
 /// it); `polled_main` is a main key detected outside egui (PrintScreen may only produce a key
 /// release on Windows, so the widget also polls it).
-pub fn scan(events: &[Event], modifiers: Modifiers, win: bool, polled_main: Option<&'static str>) -> Captured {
+pub fn scan(
+    events: &[Event],
+    modifiers: Modifiers,
+    win: bool,
+    polled_main: Option<&'static str>,
+) -> Captured {
     for e in events {
         match e {
             Event::Key {
@@ -176,14 +193,44 @@ pub fn scan(events: &[Event], modifiers: Modifiers, win: bool, polled_main: Opti
                 }
             }
             // egui turns Ctrl+C/X/V into clipboard events and may not report the key itself.
-            Event::Copy => return Captured::Combo(build_hotkey(modifiers.ctrl, modifiers.shift, modifiers.alt, win, "KeyC")),
-            Event::Cut => return Captured::Combo(build_hotkey(modifiers.ctrl, modifiers.shift, modifiers.alt, win, "KeyX")),
-            Event::Paste(_) => return Captured::Combo(build_hotkey(modifiers.ctrl, modifiers.shift, modifiers.alt, win, "KeyV")),
+            Event::Copy => {
+                return Captured::Combo(build_hotkey(
+                    modifiers.ctrl,
+                    modifiers.shift,
+                    modifiers.alt,
+                    win,
+                    "KeyC",
+                ));
+            }
+            Event::Cut => {
+                return Captured::Combo(build_hotkey(
+                    modifiers.ctrl,
+                    modifiers.shift,
+                    modifiers.alt,
+                    win,
+                    "KeyX",
+                ));
+            }
+            Event::Paste(_) => {
+                return Captured::Combo(build_hotkey(
+                    modifiers.ctrl,
+                    modifiers.shift,
+                    modifiers.alt,
+                    win,
+                    "KeyV",
+                ));
+            }
             _ => {}
         }
     }
     if let Some(code) = polled_main {
-        return Captured::Combo(build_hotkey(modifiers.ctrl, modifiers.shift, modifiers.alt, win, code));
+        return Captured::Combo(build_hotkey(
+            modifiers.ctrl,
+            modifiers.shift,
+            modifiers.alt,
+            win,
+            code,
+        ));
     }
     Captured::Nothing
 }
@@ -234,7 +281,10 @@ pub fn display(hotkey: &str) -> String {
     if t.is_empty() {
         return "Not set".into();
     }
-    t.split('+').map(|p| friendly_part(p.trim())).collect::<Vec<_>>().join("+")
+    t.split('+')
+        .map(|p| friendly_part(p.trim()))
+        .collect::<Vec<_>>()
+        .join("+")
 }
 
 /// Two hotkey strings that bind the same combination (case-insensitive, modifier-order
@@ -291,23 +341,46 @@ mod tests {
 
     #[test]
     fn builds_default_style_strings() {
-        assert_eq!(build_hotkey(true, true, false, false, "KeyS"), "Control+Shift+KeyS");
-        assert_eq!(build_hotkey(false, false, true, false, "PrintScreen"), "Alt+PrintScreen");
-        assert_eq!(build_hotkey(false, false, false, false, "PrintScreen"), "PrintScreen");
-        assert_eq!(build_hotkey(true, true, true, true, "F5"), "Control+Shift+Alt+Super+F5");
+        assert_eq!(
+            build_hotkey(true, true, false, false, "KeyS"),
+            "Control+Shift+KeyS"
+        );
+        assert_eq!(
+            build_hotkey(false, false, true, false, "PrintScreen"),
+            "Alt+PrintScreen"
+        );
+        assert_eq!(
+            build_hotkey(false, false, false, false, "PrintScreen"),
+            "PrintScreen"
+        );
+        assert_eq!(
+            build_hotkey(true, true, true, true, "F5"),
+            "Control+Shift+Alt+Super+F5"
+        );
     }
 
     #[test]
     fn captures_combo_from_key_event() {
         let ev = [key_event(Key::S, Some(Key::S), true, ctrl_shift())];
-        assert_eq!(scan(&ev, ctrl_shift(), false, None), Captured::Combo("Control+Shift+KeyS".into()));
+        assert_eq!(
+            scan(&ev, ctrl_shift(), false, None),
+            Captured::Combo("Control+Shift+KeyS".into())
+        );
     }
 
     #[test]
     fn prefers_the_physical_key() {
         // Dvorak: logical 'Semicolon' sits on the physical 'Z' key.
-        let ev = [key_event(Key::Semicolon, Some(Key::Z), true, Modifiers::default())];
-        assert_eq!(scan(&ev, Modifiers::default(), false, None), Captured::Combo("KeyZ".into()));
+        let ev = [key_event(
+            Key::Semicolon,
+            Some(Key::Z),
+            true,
+            Modifiers::default(),
+        )];
+        assert_eq!(
+            scan(&ev, Modifiers::default(), false, None),
+            Captured::Combo("KeyZ".into())
+        );
     }
 
     #[test]
@@ -322,22 +395,40 @@ mod tests {
                 ..Default::default()
             },
         )];
-        assert_eq!(scan(&ev, Modifiers::default(), false, None), Captured::Nothing);
+        assert_eq!(
+            scan(&ev, Modifiers::default(), false, None),
+            Captured::Nothing
+        );
     }
 
     #[test]
     fn escape_cancels_and_backspace_clears_only_bare() {
         let none = Modifiers::default();
         assert_eq!(
-            scan(&[key_event(Key::Escape, None, true, none)], none, false, None),
+            scan(
+                &[key_event(Key::Escape, None, true, none)],
+                none,
+                false,
+                None
+            ),
             Captured::Cancel
         );
         assert_eq!(
-            scan(&[key_event(Key::Backspace, None, true, none)], none, false, None),
+            scan(
+                &[key_event(Key::Backspace, None, true, none)],
+                none,
+                false,
+                None
+            ),
             Captured::Clear
         );
         assert_eq!(
-            scan(&[key_event(Key::Delete, None, true, none)], none, false, None),
+            scan(
+                &[key_event(Key::Delete, None, true, none)],
+                none,
+                false,
+                None
+            ),
             Captured::Clear
         );
         let ctrl = Modifiers {
@@ -346,7 +437,12 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            scan(&[key_event(Key::Escape, None, true, ctrl)], ctrl, false, None),
+            scan(
+                &[key_event(Key::Escape, None, true, ctrl)],
+                ctrl,
+                false,
+                None
+            ),
             Captured::Combo("Control+Escape".into())
         );
     }
@@ -354,7 +450,10 @@ mod tests {
     #[test]
     fn key_release_and_repeat_are_ignored_except_print_screen() {
         let none = Modifiers::default();
-        assert_eq!(scan(&[key_event(Key::A, None, false, none)], none, false, None), Captured::Nothing);
+        assert_eq!(
+            scan(&[key_event(Key::A, None, false, none)], none, false, None),
+            Captured::Nothing
+        );
         let repeat = Event::Key {
             key: Key::A,
             physical_key: None,
@@ -364,7 +463,12 @@ mod tests {
         };
         assert_eq!(scan(&[repeat], none, false, None), Captured::Nothing);
         assert_eq!(
-            scan(&[key_event(Key::PrintScreen, None, false, none)], none, false, None),
+            scan(
+                &[key_event(Key::PrintScreen, None, false, none)],
+                none,
+                false,
+                None
+            ),
             Captured::Combo("PrintScreen".into())
         );
     }
@@ -376,8 +480,14 @@ mod tests {
             command: true,
             ..Default::default()
         };
-        assert_eq!(scan(&[Event::Copy], ctrl, false, None), Captured::Combo("Control+KeyC".into()));
-        assert_eq!(scan(&[Event::Cut], ctrl, false, None), Captured::Combo("Control+KeyX".into()));
+        assert_eq!(
+            scan(&[Event::Copy], ctrl, false, None),
+            Captured::Combo("Control+KeyC".into())
+        );
+        assert_eq!(
+            scan(&[Event::Cut], ctrl, false, None),
+            Captured::Combo("Control+KeyX".into())
+        );
         assert_eq!(
             scan(&[Event::Paste(String::new())], ctrl, false, None),
             Captured::Combo("Control+KeyV".into())
@@ -388,7 +498,10 @@ mod tests {
     fn windows_key_and_polled_main_key() {
         let none = Modifiers::default();
         let ev = [key_event(Key::E, Some(Key::E), true, none)];
-        assert_eq!(scan(&ev, none, true, None), Captured::Combo("Super+KeyE".into()));
+        assert_eq!(
+            scan(&ev, none, true, None),
+            Captured::Combo("Super+KeyE".into())
+        );
         assert_eq!(
             scan(
                 &[],
@@ -429,7 +542,10 @@ mod tests {
         for key in Key::ALL {
             if let Some(code) = code_name(*key) {
                 for s in [code.to_string(), build_hotkey(true, true, true, true, code)] {
-                    assert!(HotKey::try_from(s.as_str()).is_ok(), "{key:?} -> {s} does not parse");
+                    assert!(
+                        HotKey::try_from(s.as_str()).is_ok(),
+                        "{key:?} -> {s} does not parse"
+                    );
                 }
             }
         }

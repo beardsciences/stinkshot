@@ -5,15 +5,17 @@
 //! `install` along with sizes: body 13, caption 12, title 14 semibold, h1 28 semibold.
 //! Radii: windows 8, controls 6, toolbars 10. Toolbar buttons 34x34, touch targets >= 32.
 
-use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Id, Stroke, TextStyle};
+use egui::{
+    Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Id, Stroke, TextStyle,
+};
 
 pub struct Palette {
-    pub bg: Color32,          // window background (Mica fallback)
-    pub layer: Color32,       // content layer / main pane
-    pub card: Color32,        // cards and settings rows
-    pub flyout: Color32,      // menus, toasts, toolbars
-    pub control: Color32,     // secondary button fill
-    pub stroke: Color32,      // 1px hairline
+    pub bg: Color32,      // window background (Mica fallback)
+    pub layer: Color32,   // content layer / main pane
+    pub card: Color32,    // cards and settings rows
+    pub flyout: Color32,  // menus, toasts, toolbars
+    pub control: Color32, // secondary button fill
+    pub stroke: Color32,  // 1px hairline
     pub text: Color32,
     pub text_secondary: Color32,
     pub text_tertiary: Color32,
@@ -95,7 +97,9 @@ fn theme_id() -> Id {
 
 /// The dark flag and accent last passed to `install` for this context.
 pub fn current(ctx: &egui::Context) -> (bool, Color32) {
-    ctx.data(|d| d.get_temp::<ThemeState>(theme_id())).map(|s| (s.dark, s.accent)).unwrap_or((true, DEFAULT_ACCENT))
+    ctx.data(|d| d.get_temp::<ThemeState>(theme_id()))
+        .map(|s| (s.dark, s.accent))
+        .unwrap_or((true, DEFAULT_ACCENT))
 }
 
 fn hover_tint(base: Color32, dark: bool, amount: f32) -> Color32 {
@@ -103,7 +107,12 @@ fn hover_tint(base: Color32, dark: bool, amount: f32) -> Color32 {
     base.lerp_to_gamma(target, amount)
 }
 
-fn widget_visuals(fill: Color32, stroke: Color32, fg: Color32, radius: u8) -> egui::style::WidgetVisuals {
+fn widget_visuals(
+    fill: Color32,
+    stroke: Color32,
+    fg: Color32,
+    radius: u8,
+) -> egui::style::WidgetVisuals {
     egui::style::WidgetVisuals {
         bg_fill: fill,
         weak_bg_fill: fill,
@@ -116,39 +125,82 @@ fn widget_visuals(fill: Color32, stroke: Color32, fg: Color32, radius: u8) -> eg
 
 /// Register fonts and set egui Style/Visuals from the palette + accent for `ctx`.
 /// Called by the shell once per context and whenever theme/accent changes.
-pub fn install(ctx: &egui::Context, fonts: &stinkshot_core::fonts::Fonts, dark: bool, accent: Color32) {
+pub fn install(
+    ctx: &egui::Context,
+    fonts: &stinkshot_core::fonts::Fonts,
+    dark: bool,
+    accent: Color32,
+) {
     let fonts_id = Id::unique("stinkshot.theme.fonts");
     let have_fonts = ctx.data(|d| d.get_temp::<bool>(fonts_id)).unwrap_or(false);
     if !have_fonts {
         let mut defs = FontDefinitions::default();
-        defs.font_data.insert("SegoeUIVariable".into(), std::sync::Arc::new(FontData::from_owned(fonts.regular_bytes.as_ref().clone())));
-        defs.font_data.insert("SegoeUISemibold".into(), std::sync::Arc::new(FontData::from_owned(fonts.bold_bytes.as_ref().clone())));
+        defs.font_data.insert(
+            "SegoeUIVariable".into(),
+            std::sync::Arc::new(FontData::from_owned(fonts.regular_bytes.as_ref().clone())),
+        );
+        defs.font_data.insert(
+            "SegoeUISemibold".into(),
+            std::sync::Arc::new(FontData::from_owned(fonts.bold_bytes.as_ref().clone())),
+        );
         let proportional = defs.families.entry(FontFamily::Proportional).or_default();
         proportional.insert(0, "SegoeUIVariable".into());
         let mut semi = vec!["SegoeUISemibold".to_string()];
         if let Some(fallbacks) = defs.families.get(&FontFamily::Proportional) {
-            semi.extend(fallbacks.iter().filter(|n| *n != "SegoeUIVariable").cloned());
+            semi.extend(
+                fallbacks
+                    .iter()
+                    .filter(|n| *n != "SegoeUIVariable")
+                    .cloned(),
+            );
         }
-        defs.families.insert(FontFamily::Name(SEMIBOLD.into()), semi);
+        defs.families
+            .insert(FontFamily::Name(SEMIBOLD.into()), semi);
         ctx.set_fonts(defs);
         ctx.data_mut(|d| d.insert_temp(fonts_id, true));
     }
 
     let p = palette(dark);
-    let theme = if dark { egui::Theme::Dark } else { egui::Theme::Light };
-    ctx.set_theme(if dark { egui::ThemePreference::Dark } else { egui::ThemePreference::Light });
+    let theme = if dark {
+        egui::Theme::Dark
+    } else {
+        egui::Theme::Light
+    };
+    ctx.set_theme(if dark {
+        egui::ThemePreference::Dark
+    } else {
+        egui::ThemePreference::Light
+    });
 
-    let mut visuals = if dark { egui::Visuals::dark() } else { egui::Visuals::light() };
+    let mut visuals = if dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
     visuals.window_fill = p.bg;
     visuals.panel_fill = p.layer;
     visuals.faint_bg_color = p.card;
-    visuals.extreme_bg_color = if dark { Color32::from_rgb(0x1c, 0x1c, 0x1c) } else { Color32::WHITE };
+    visuals.extreme_bg_color = if dark {
+        Color32::from_rgb(0x1c, 0x1c, 0x1c)
+    } else {
+        Color32::WHITE
+    };
     visuals.code_bg_color = p.card;
     visuals.window_stroke = Stroke::new(1.0, p.stroke);
     visuals.window_corner_radius = CornerRadius::same(8);
     visuals.menu_corner_radius = CornerRadius::same(8);
-    visuals.window_shadow = egui::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(100) };
-    visuals.popup_shadow = egui::Shadow { offset: [0, 6], blur: 18, spread: 0, color: Color32::from_black_alpha(90) };
+    visuals.window_shadow = egui::Shadow {
+        offset: [0, 8],
+        blur: 24,
+        spread: 0,
+        color: Color32::from_black_alpha(100),
+    };
+    visuals.popup_shadow = egui::Shadow {
+        offset: [0, 6],
+        blur: 18,
+        spread: 0,
+        color: Color32::from_black_alpha(90),
+    };
     visuals.hyperlink_color = accent;
     visuals.error_fg_color = p.danger;
     visuals.warn_fg_color = Color32::from_rgb(0xff, 0xb4, 0x54);
@@ -158,11 +210,15 @@ pub fn install(ctx: &egui::Context, fonts: &stinkshot_core::fonts::Fonts, dark: 
 
     visuals.widgets.noninteractive = widget_visuals(p.card, p.stroke, p.text_secondary, 6);
     visuals.widgets.inactive = widget_visuals(p.control, p.stroke, p.text, 6);
-    visuals.widgets.hovered = widget_visuals(hover_tint(p.control, dark, 0.07), p.stroke, p.text, 6);
+    visuals.widgets.hovered =
+        widget_visuals(hover_tint(p.control, dark, 0.07), p.stroke, p.text, 6);
     visuals.widgets.active = widget_visuals(hover_tint(p.control, dark, 0.12), p.stroke, p.text, 6);
     visuals.widgets.open = widget_visuals(hover_tint(p.control, dark, 0.09), p.stroke, p.text, 6);
 
-    let mut style = egui::Style { visuals, ..Default::default() };
+    let mut style = egui::Style {
+        visuals,
+        ..Default::default()
+    };
     style.spacing.item_spacing = egui::vec2(8.0, 8.0);
     style.spacing.button_padding = egui::vec2(12.0, 6.0);
     style.spacing.interact_size = egui::vec2(32.0, 32.0);
@@ -173,9 +229,18 @@ pub fn install(ctx: &egui::Context, fonts: &stinkshot_core::fonts::Fonts, dark: 
         (TextStyle::Heading, semibold(28.0)),
         (title_style(), semibold(14.0)),
         (TextStyle::Body, FontId::new(13.0, FontFamily::Proportional)),
-        (TextStyle::Button, FontId::new(13.0, FontFamily::Proportional)),
-        (TextStyle::Small, FontId::new(12.0, FontFamily::Proportional)),
-        (TextStyle::Monospace, FontId::new(12.5, FontFamily::Monospace)),
+        (
+            TextStyle::Button,
+            FontId::new(13.0, FontFamily::Proportional),
+        ),
+        (
+            TextStyle::Small,
+            FontId::new(12.0, FontFamily::Proportional),
+        ),
+        (
+            TextStyle::Monospace,
+            FontId::new(12.5, FontFamily::Monospace),
+        ),
     ]
     .into();
     ctx.set_style_of(theme, style);
@@ -200,8 +265,14 @@ pub mod widgets {
     }
 
     fn paint_button(ui: &mut Ui, text: &str, look: ButtonLook) -> Response {
-        let font = if look.bold { semibold(13.0) } else { egui::FontId::proportional(13.0) };
-        let galley = ui.painter().layout_no_wrap(text.to_owned(), font, look.text);
+        let font = if look.bold {
+            semibold(13.0)
+        } else {
+            egui::FontId::proportional(13.0)
+        };
+        let galley = ui
+            .painter()
+            .layout_no_wrap(text.to_owned(), font, look.text);
         let size = vec2(galley.size().x + 24.0, 32.0f32.max(galley.size().y + 12.0));
         let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
         if ui.is_rect_visible(rect) {
@@ -217,13 +288,26 @@ pub mod widgets {
             };
             let radius = CornerRadius::same(6);
             ui.painter().rect_filled(rect, radius, fill);
-            ui.painter().rect_stroke(rect, radius, look.stroke, StrokeKind::Inside);
+            ui.painter()
+                .rect_stroke(rect, radius, look.stroke, StrokeKind::Inside);
             if resp.has_focus() {
                 let (_, accent) = current(ui.ctx());
-                ui.painter().rect_stroke(rect.expand(1.0), CornerRadius::same(7), Stroke::new(2.0, accent), StrokeKind::Outside);
+                ui.painter().rect_stroke(
+                    rect.expand(1.0),
+                    CornerRadius::same(7),
+                    Stroke::new(2.0, accent),
+                    StrokeKind::Outside,
+                );
             }
-            let pos = Pos2::new(rect.center().x - galley.size().x / 2.0, rect.center().y - galley.size().y / 2.0);
-            let color = if enabled { look.text } else { look.text.gamma_multiply(0.5) };
+            let pos = Pos2::new(
+                rect.center().x - galley.size().x / 2.0,
+                rect.center().y - galley.size().y / 2.0,
+            );
+            let color = if enabled {
+                look.text
+            } else {
+                look.text.gamma_multiply(0.5)
+            };
             ui.painter().galley(pos, galley, color);
         }
         if resp.hovered() && ui.is_enabled() {
@@ -262,7 +346,14 @@ pub mod widgets {
                 fill_hover: hover_tint(p.control, dark, 0.07),
                 fill_active: hover_tint(p.control, dark, 0.12),
                 text: p.text,
-                stroke: Stroke::new(1.0, if dark { Color32::from_white_alpha(20) } else { Color32::from_black_alpha(26) }),
+                stroke: Stroke::new(
+                    1.0,
+                    if dark {
+                        Color32::from_white_alpha(20)
+                    } else {
+                        Color32::from_black_alpha(26)
+                    },
+                ),
                 bold: false,
             },
         )
@@ -278,18 +369,36 @@ pub mod widgets {
             let bg = if selected {
                 accent_soft(accent, if resp.hovered() { 80 } else { 60 })
             } else if resp.is_pointer_button_down_on() {
-                if dark { Color32::from_white_alpha(32) } else { Color32::from_black_alpha(36) }
+                if dark {
+                    Color32::from_white_alpha(32)
+                } else {
+                    Color32::from_black_alpha(36)
+                }
             } else if resp.hovered() {
-                if dark { Color32::from_white_alpha(20) } else { Color32::from_black_alpha(20) }
+                if dark {
+                    Color32::from_white_alpha(20)
+                } else {
+                    Color32::from_black_alpha(20)
+                }
             } else {
                 Color32::TRANSPARENT
             };
             ui.painter().rect_filled(rect, CornerRadius::same(6), bg);
             if selected {
-                ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, accent_soft(accent, 140)), StrokeKind::Inside);
+                ui.painter().rect_stroke(
+                    rect,
+                    CornerRadius::same(6),
+                    Stroke::new(1.0, accent_soft(accent, 140)),
+                    StrokeKind::Inside,
+                );
             }
             if resp.has_focus() {
-                ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(2.0, accent), StrokeKind::Inside);
+                ui.painter().rect_stroke(
+                    rect,
+                    CornerRadius::same(6),
+                    Stroke::new(2.0, accent),
+                    StrokeKind::Inside,
+                );
             }
             let color = if !enabled {
                 p.text_tertiary.gamma_multiply(0.6)
@@ -298,7 +407,12 @@ pub mod widgets {
             } else {
                 p.text
             };
-            paint_icon(ui.painter(), Rect::from_center_size(rect.center(), vec2(18.0, 18.0)), icon, color);
+            paint_icon(
+                ui.painter(),
+                Rect::from_center_size(rect.center(), vec2(18.0, 18.0)),
+                icon,
+                color,
+            );
         }
         if ui.is_enabled() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -311,7 +425,11 @@ pub mod widgets {
         let (dark, accent) = current(ui.ctx());
         let p = palette(dark);
         let label = if *on { "On" } else { "Off" };
-        let galley = ui.painter().layout_no_wrap(label.to_owned(), egui::FontId::proportional(13.0), p.text_secondary);
+        let galley = ui.painter().layout_no_wrap(
+            label.to_owned(),
+            egui::FontId::proportional(13.0),
+            p.text_secondary,
+        );
         let switch = vec2(40.0, 20.0);
         let gap = 10.0;
         let size = vec2(galley.size().x.max(22.0) + gap + switch.x, 24.0);
@@ -322,26 +440,43 @@ pub mod widgets {
         }
         if ui.is_rect_visible(rect) {
             let t = ui.ctx().animate_bool_responsive(resp.id, *on);
-            let sw = Rect::from_min_size(Pos2::new(rect.right() - switch.x, rect.center().y - switch.y / 2.0), switch);
+            let sw = Rect::from_min_size(
+                Pos2::new(rect.right() - switch.x, rect.center().y - switch.y / 2.0),
+                switch,
+            );
             let pill = CornerRadius::same(10);
             let off_color = Color32::from_rgb(0xa0, 0xa0, 0xa0);
             if t > 0.0 {
                 ui.painter().rect_filled(sw, pill, accent.gamma_multiply(t));
             }
             if t < 1.0 {
-                ui.painter().rect_stroke(sw, pill, Stroke::new(1.0, off_color.gamma_multiply(1.0 - t)), StrokeKind::Inside);
+                ui.painter().rect_stroke(
+                    sw,
+                    pill,
+                    Stroke::new(1.0, off_color.gamma_multiply(1.0 - t)),
+                    StrokeKind::Inside,
+                );
             }
             let x0 = sw.left() + 10.0;
             let x1 = sw.right() - 10.0;
             let thumb_x = x0 + (x1 - x0) * t;
             let thumb_r = if resp.hovered() { 7.0 } else { 6.0 };
             let thumb_color = Color32::from_rgb(0xd0, 0xd0, 0xd0).lerp_to_gamma(p.on_accent, t);
-            ui.painter().circle_filled(Pos2::new(thumb_x, sw.center().y), thumb_r, thumb_color);
+            ui.painter()
+                .circle_filled(Pos2::new(thumb_x, sw.center().y), thumb_r, thumb_color);
             if resp.has_focus() {
-                ui.painter().rect_stroke(sw.expand(2.0), CornerRadius::same(12), Stroke::new(2.0, accent), StrokeKind::Outside);
+                ui.painter().rect_stroke(
+                    sw.expand(2.0),
+                    CornerRadius::same(12),
+                    Stroke::new(2.0, accent),
+                    StrokeKind::Outside,
+                );
             }
             ui.painter().galley(
-                Pos2::new(sw.left() - gap - galley.size().x, rect.center().y - galley.size().y / 2.0),
+                Pos2::new(
+                    sw.left() - gap - galley.size().x,
+                    rect.center().y - galley.size().y / 2.0,
+                ),
                 galley,
                 p.text_secondary,
             );
@@ -379,7 +514,12 @@ pub mod widgets {
     }
 
     /// Paint an icon centered in `rect` with stroke color.
-    pub fn paint_icon(painter: &egui::Painter, rect: egui::Rect, icon: super::Icon, color: egui::Color32) {
+    pub fn paint_icon(
+        painter: &egui::Painter,
+        rect: egui::Rect,
+        icon: super::Icon,
+        color: egui::Color32,
+    ) {
         super::icons::paint(painter, rect, icon, color);
     }
 }
@@ -481,17 +621,29 @@ mod icons {
             Icon::Copy => &[Rect(8.0, 8.0, 12.0, 12.0, 2.0), Path("M4 16V4h12")],
             Icon::Undo => &[Path("M9 5L4 10l5 5M4 10h10a5 5 0 010 10h-4")],
             Icon::Redo => &[Path("M15 5l5 5-5 5M20 10H10a5 5 0 000 10h4")],
-            Icon::Pause => &[FillRect(6.0, 5.0, 4.0, 14.0, 1.0), FillRect(14.0, 5.0, 4.0, 14.0, 1.0)],
+            Icon::Pause => &[
+                FillRect(6.0, 5.0, 4.0, 14.0, 1.0),
+                FillRect(14.0, 5.0, 4.0, 14.0, 1.0),
+            ],
             Icon::Play => &[Fill("M7 4l13 8-13 8z")],
             Icon::Stop => &[FillRect(6.0, 6.0, 12.0, 12.0, 2.0)],
-            Icon::Mic => &[Rect(9.0, 3.0, 6.0, 11.0, 3.0), Path("M5 11a7 7 0 0014 0M12 18v3")],
+            Icon::Mic => &[
+                Rect(9.0, 3.0, 6.0, 11.0, 3.0),
+                Path("M5 11a7 7 0 0014 0M12 18v3"),
+            ],
             Icon::Speaker => &[Path("M4 9h4l5-4v14l-5-4H4z M17 9a4 4 0 010 6")],
             Icon::Webcam => &[Rect(3.0, 7.0, 13.0, 10.0, 2.0), Path("M16 11l5-3v8l-5-3z")],
             Icon::Clicks => &[Circle(12.0, 12.0, 3.0), Circle(12.0, 12.0, 8.0)],
             Icon::Search => &[Circle(11.0, 11.0, 6.0), Path("M16 16l4 4")],
-            Icon::Star => &[Path("M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z")],
-            Icon::StarFilled => &[Fill("M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z")],
-            Icon::Folder => &[Path("M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z")],
+            Icon::Star => &[Path(
+                "M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z",
+            )],
+            Icon::StarFilled => &[Fill(
+                "M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z",
+            )],
+            Icon::Folder => &[Path(
+                "M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z",
+            )],
             Icon::Trash => &[Path("M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13M10 11v6M14 11v6")],
             Icon::Settings => &[
                 Path("M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1"),
@@ -500,7 +652,10 @@ mod icons {
                 Circle(17.0, 17.0, 2.0),
             ],
             Icon::History => &[Circle(12.0, 12.0, 8.0), Path("M12 7v5l3 2")],
-            Icon::Shield => &[Path("M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"), Path("M8.5 12l2.5 2.5 4.5-5")],
+            Icon::Shield => &[
+                Path("M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"),
+                Path("M8.5 12l2.5 2.5 4.5-5"),
+            ],
         }
     }
 
@@ -535,7 +690,10 @@ mod icons {
                         let pts: Vec<Pos2> = sp.points.iter().map(|p| t(p.0, p.1)).collect();
                         fill_fan(painter, &pts, color);
                         if pts.len() > 2 {
-                            painter.add(Shape::closed_line(pts, Stroke::new((sw * 0.6).max(1.0), color)));
+                            painter.add(Shape::closed_line(
+                                pts,
+                                Stroke::new((sw * 0.6).max(1.0), color),
+                            ));
                         }
                     }
                 }
@@ -556,11 +714,20 @@ mod icons {
                 }
                 Rect(x, y, w, h, r) => {
                     let rr = Rect::from_min_max(t(x, y), t(x + w, y + h));
-                    painter.rect_stroke(rr, CornerRadius::same((r * scale).round().clamp(0.0, 255.0) as u8), stroke, StrokeKind::Middle);
+                    painter.rect_stroke(
+                        rr,
+                        CornerRadius::same((r * scale).round().clamp(0.0, 255.0) as u8),
+                        stroke,
+                        StrokeKind::Middle,
+                    );
                 }
                 FillRect(x, y, w, h, r) => {
                     let rr = Rect::from_min_max(t(x, y), t(x + w, y + h));
-                    painter.rect_filled(rr, CornerRadius::same((r * scale).round().clamp(0.0, 255.0) as u8), color);
+                    painter.rect_filled(
+                        rr,
+                        CornerRadius::same((r * scale).round().clamp(0.0, 255.0) as u8),
+                        color,
+                    );
                 }
                 SoftRect(x, y, w, h, r) => {
                     let rr = Rect::from_min_max(t(x, y), t(x + w, y + h));
@@ -587,7 +754,10 @@ mod icons {
             return;
         }
         let n = pts.len() as f32;
-        let c = pos2(pts.iter().map(|p| p.x).sum::<f32>() / n, pts.iter().map(|p| p.y).sum::<f32>() / n);
+        let c = pos2(
+            pts.iter().map(|p| p.x).sum::<f32>() / n,
+            pts.iter().map(|p| p.y).sum::<f32>() / n,
+        );
         let mut mesh = Mesh::default();
         let uv = egui::epaint::WHITE_UV;
         mesh.vertices.push(Vertex { pos: c, uv, color });
@@ -616,13 +786,19 @@ mod icons {
 
     impl Lexer<'_> {
         fn skip_sep(&mut self) {
-            while self.i < self.s.len() && (self.s[self.i] == b' ' || self.s[self.i] == b',' || self.s[self.i] == b'\n' || self.s[self.i] == b'\t') {
+            while self.i < self.s.len()
+                && (self.s[self.i] == b' '
+                    || self.s[self.i] == b','
+                    || self.s[self.i] == b'\n'
+                    || self.s[self.i] == b'\t')
+            {
                 self.i += 1;
             }
         }
         fn peek_is_number(&mut self) -> bool {
             self.skip_sep();
-            self.i < self.s.len() && (self.s[self.i].is_ascii_digit() || matches!(self.s[self.i], b'-' | b'+' | b'.'))
+            self.i < self.s.len()
+                && (self.s[self.i].is_ascii_digit() || matches!(self.s[self.i], b'-' | b'+' | b'.'))
         }
         fn number(&mut self) -> Option<f32> {
             self.skip_sep();
@@ -642,7 +818,10 @@ mod icons {
                     break;
                 }
             }
-            std::str::from_utf8(&self.s[start..self.i]).ok()?.parse().ok()
+            std::str::from_utf8(&self.s[start..self.i])
+                .ok()?
+                .parse()
+                .ok()
         }
         fn flag(&mut self) -> Option<bool> {
             self.skip_sep();
@@ -657,7 +836,10 @@ mod icons {
     }
 
     pub fn parse_path(d: &str) -> Vec<SubPath> {
-        let mut lx = Lexer { s: d.as_bytes(), i: 0 };
+        let mut lx = Lexer {
+            s: d.as_bytes(),
+            i: 0,
+        };
         let mut out: Vec<SubPath> = Vec::new();
         let mut cur = (0.0f32, 0.0f32);
         let mut start = (0.0f32, 0.0f32);
@@ -689,7 +871,10 @@ mod icons {
                         let (x, y) = (lx.number()? + ox, lx.number()? + oy);
                         cur = (x, y);
                         start = cur;
-                        out.push(SubPath { points: vec![cur], closed: false });
+                        out.push(SubPath {
+                            points: vec![cur],
+                            closed: false,
+                        });
                         // Subsequent pairs are implicit line-tos.
                         cmd = if rel { b'l' } else { b'L' };
                     }
@@ -715,8 +900,14 @@ mod icons {
                         for i in 1..=14 {
                             let t = i as f32 / 14.0;
                             let u = 1.0 - t;
-                            let x = u * u * u * cur.0 + 3.0 * u * u * t * p1.0 + 3.0 * u * t * t * p2.0 + t * t * t * p3.0;
-                            let y = u * u * u * cur.1 + 3.0 * u * u * t * p1.1 + 3.0 * u * t * t * p2.1 + t * t * t * p3.1;
+                            let x = u * u * u * cur.0
+                                + 3.0 * u * u * t * p1.0
+                                + 3.0 * u * t * t * p2.0
+                                + t * t * t * p3.0;
+                            let y = u * u * u * cur.1
+                                + 3.0 * u * u * t * p1.1
+                                + 3.0 * u * t * t * p2.1
+                                + t * t * t * p3.1;
                             push(&mut out, (x, y), start);
                         }
                         cur = p3;
@@ -746,7 +937,10 @@ mod icons {
 
     fn push(out: &mut Vec<SubPath>, p: (f32, f32), start: (f32, f32)) {
         if out.is_empty() {
-            out.push(SubPath { points: vec![start], closed: false });
+            out.push(SubPath {
+                points: vec![start],
+                closed: false,
+            });
         }
         if let Some(sp) = out.last_mut() {
             sp.points.push(p);
@@ -754,7 +948,15 @@ mod icons {
     }
 
     /// SVG endpoint arc -> polyline (spec F.6.5).
-    fn arc_points(from: (f32, f32), rx: f32, ry: f32, rot_deg: f32, large: bool, sweep: bool, to: (f32, f32)) -> Vec<(f32, f32)> {
+    fn arc_points(
+        from: (f32, f32),
+        rx: f32,
+        ry: f32,
+        rot_deg: f32,
+        large: bool,
+        sweep: bool,
+        to: (f32, f32),
+    ) -> Vec<(f32, f32)> {
         let (mut rx, mut ry) = (rx.abs(), ry.abs());
         if rx == 0.0 || ry == 0.0 || from == to {
             return vec![to];
@@ -773,7 +975,11 @@ mod icons {
         }
         let num = rx * rx * ry * ry - rx * rx * y1p * y1p - ry * ry * x1p * x1p;
         let den = rx * rx * y1p * y1p + ry * ry * x1p * x1p;
-        let mut coef = if den == 0.0 { 0.0 } else { (num / den).max(0.0).sqrt() };
+        let mut coef = if den == 0.0 {
+            0.0
+        } else {
+            (num / den).max(0.0).sqrt()
+        };
         if large == sweep {
             coef = -coef;
         }
@@ -791,7 +997,12 @@ mod icons {
             a
         };
         let theta1 = angle(1.0, 0.0, (x1p - cxp) / rx, (y1p - cyp) / ry);
-        let mut dtheta = angle((x1p - cxp) / rx, (y1p - cyp) / ry, (-x1p - cxp) / rx, (-y1p - cyp) / ry);
+        let mut dtheta = angle(
+            (x1p - cxp) / rx,
+            (y1p - cyp) / ry,
+            (-x1p - cxp) / rx,
+            (-y1p - cyp) / ry,
+        );
         if !sweep && dtheta > 0.0 {
             dtheta -= std::f32::consts::TAU;
         } else if sweep && dtheta < 0.0 {
@@ -802,7 +1013,10 @@ mod icons {
         for i in 1..=steps {
             let a = theta1 + dtheta * i as f32 / steps as f32;
             let (ca, sa) = (a.cos(), a.sin());
-            pts.push((cos_p * rx * ca - sin_p * ry * sa + cx, sin_p * rx * ca + cos_p * ry * sa + cy));
+            pts.push((
+                cos_p * rx * ca - sin_p * ry * sa + cx,
+                sin_p * rx * ca + cos_p * ry * sa + cy,
+            ));
         }
         if let Some(last) = pts.last_mut() {
             *last = to;
@@ -819,7 +1033,10 @@ mod icons {
             let sp = parse_path("M5 3l14 8-6 2-3 6z");
             assert_eq!(sp.len(), 1);
             assert!(sp[0].closed);
-            assert_eq!(sp[0].points, vec![(5.0, 3.0), (19.0, 11.0), (13.0, 13.0), (10.0, 19.0)]);
+            assert_eq!(
+                sp[0].points,
+                vec![(5.0, 3.0), (19.0, 11.0), (13.0, 13.0), (10.0, 19.0)]
+            );
         }
 
         #[test]
@@ -854,14 +1071,52 @@ mod icons {
         fn every_icon_has_geometry() {
             use Icon::*;
             for icon in [
-                Select, Arrow, Line, Rect, Ellipse, Pen, Highlighter, Text, Step, Blur, Pixelate, Redact, Magnifier, Callout, Spotlight, Ocr, Pin, Save,
-                Close, Copy, Undo, Redo, Pause, Play, Stop, Mic, Speaker, Webcam, Clicks, Search, Star, StarFilled, Folder, Trash, Settings, History, Shield,
+                Select,
+                Arrow,
+                Line,
+                Rect,
+                Ellipse,
+                Pen,
+                Highlighter,
+                Text,
+                Step,
+                Blur,
+                Pixelate,
+                Redact,
+                Magnifier,
+                Callout,
+                Spotlight,
+                Ocr,
+                Pin,
+                Save,
+                Close,
+                Copy,
+                Undo,
+                Redo,
+                Pause,
+                Play,
+                Stop,
+                Mic,
+                Speaker,
+                Webcam,
+                Clicks,
+                Search,
+                Star,
+                StarFilled,
+                Folder,
+                Trash,
+                Settings,
+                History,
+                Shield,
             ] {
                 assert!(!prims(icon).is_empty(), "{icon:?}");
                 for p in prims(icon) {
                     if let Path(d) | Fill(d) = p {
                         let sp = parse_path(d);
-                        assert!(!sp.is_empty() && sp.iter().all(|s| s.points.len() >= 2), "{icon:?}: {d}");
+                        assert!(
+                            !sp.is_empty() && sp.iter().all(|s| s.points.len() >= 2),
+                            "{icon:?}: {d}"
+                        );
                     }
                 }
             }

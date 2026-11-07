@@ -145,7 +145,14 @@ pub fn centered_in(work: PxRect, w: i32, h: i32) -> PxRect {
 /// Toast slot: bottom-right of the work area, `margin` from the edges, stacked upward by
 /// `stack_index` using a fixed `slot_h` pitch (`gap` between slots). The toast is bottom
 /// aligned inside its slot so short message toasts line up with tall capture toasts.
-pub fn toast_rect(work: PxRect, size: (i32, i32), slot_h: i32, stack_index: usize, margin: i32, gap: i32) -> PxRect {
+pub fn toast_rect(
+    work: PxRect,
+    size: (i32, i32),
+    slot_h: i32,
+    stack_index: usize,
+    margin: i32,
+    gap: i32,
+) -> PxRect {
     let (w, h) = size;
     let x = work.right() - margin - w;
     let bottom = work.bottom() - margin - stack_index as i32 * (slot_h + gap);
@@ -182,7 +189,10 @@ pub struct Debounce<T> {
 
 impl<T> Debounce<T> {
     pub fn new(delay: Duration) -> Self {
-        Self { delay, pending: None }
+        Self {
+            delay,
+            pending: None,
+        }
     }
     pub fn push(&mut self, value: T, now: Instant) {
         self.pending = Some((value, now));
@@ -190,7 +200,9 @@ impl<T> Debounce<T> {
     /// The value, once `delay` has passed since the last push.
     pub fn poll(&mut self, now: Instant) -> Option<T> {
         match &self.pending {
-            Some((_, at)) if now.duration_since(*at) >= self.delay => self.pending.take().map(|(v, _)| v),
+            Some((_, at)) if now.duration_since(*at) >= self.delay => {
+                self.pending.take().map(|(v, _)| v)
+            }
             _ => None,
         }
     }
@@ -217,7 +229,10 @@ pub struct Throttle {
 
 impl Throttle {
     pub fn new(interval: Duration) -> Self {
-        Self { interval, last: None }
+        Self {
+            interval,
+            last: None,
+        }
     }
     /// True (and records `now`) if the action may run.
     pub fn ready(&mut self, now: Instant) -> bool {
@@ -272,7 +287,11 @@ impl<K: Eq + Hash + Clone, V> Lru<K, V> {
         if self.map.len() <= self.cap {
             return None;
         }
-        let stalest = self.map.iter().min_by_key(|(_, (_, t))| *t).map(|(k, _)| k.clone())?;
+        let stalest = self
+            .map
+            .iter()
+            .min_by_key(|(_, (_, t))| *t)
+            .map(|(k, _)| k.clone())?;
         self.map.remove(&stalest).map(|(v, _)| (stalest, v))
     }
     pub fn clear(&mut self) {
@@ -330,7 +349,11 @@ pub fn fmt_thousands(n: u64) -> String {
 
 /// "1280 × 720".
 pub fn fmt_dims(w: u32, h: u32) -> String {
-    format!("{} \u{d7} {}", fmt_thousands(w as u64), fmt_thousands(h as u64))
+    format!(
+        "{} \u{d7} {}",
+        fmt_thousands(w as u64),
+        fmt_thousands(h as u64)
+    )
 }
 
 // ---------------------------------------------------------------------------------------
@@ -407,7 +430,11 @@ pub fn rect_button(
     p: &Palette,
     accent: Color32,
 ) -> egui::Response {
-    let sense = if enabled { Sense::click() } else { Sense::hover() };
+    let sense = if enabled {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
     let resp = ui.interact(rect, ui.scope_id().with(id), sense);
     let hovered = enabled && resp.hovered();
     let pressed = enabled && resp.is_pointer_button_down_on();
@@ -432,7 +459,13 @@ pub fn rect_button(
     if stroke != Stroke::NONE {
         painter.rect_stroke(rect, CornerRadius::same(6), stroke, StrokeKind::Inside);
     }
-    painter.text(rect.center(), Align2::CENTER_CENTER, text, font(13.0), text_col);
+    painter.text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        text,
+        font(13.0),
+        text_col,
+    );
     if enabled {
         resp.on_hover_cursor(egui::CursorIcon::PointingHand)
     } else {
@@ -458,9 +491,14 @@ pub fn root_ui(ctx: &egui::Context, fill: Color32, add: impl FnOnce(&mut Ui, Rec
 
 /// Paint a 1px hairline card border + fill (used for cards inside windows).
 pub fn card(ui: &Ui, rect: Rect, radius: u8, fill: Color32, stroke: Color32) {
-    ui.painter().rect_filled(rect, CornerRadius::same(radius), fill);
     ui.painter()
-        .rect_stroke(rect, CornerRadius::same(radius), Stroke::new(1.0, stroke), StrokeKind::Inside);
+        .rect_filled(rect, CornerRadius::same(radius), fill);
+    ui.painter().rect_stroke(
+        rect,
+        CornerRadius::same(radius),
+        Stroke::new(1.0, stroke),
+        StrokeKind::Inside,
+    );
 }
 
 /// Wheel notches from a raw egui mouse wheel event (lines = 1 notch, points ~ 50 px/notch).
@@ -481,7 +519,10 @@ pub fn frame_wheel(ctx: &egui::Context) -> (f32, bool) {
         let mut ctrl = i.modifiers.ctrl;
         for e in &i.raw.events {
             if let egui::Event::MouseWheel {
-                unit, delta, modifiers, ..
+                unit,
+                delta,
+                modifiers,
+                ..
             } = e
             {
                 n += wheel_notches(*unit, delta.y);
@@ -515,7 +556,9 @@ pub fn spawn_worker(name: &str, f: impl FnOnce() + Send + 'static) -> bool {
 mod sys {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
-    use windows::Win32::UI::WindowsAndMessaging::{GWL_EXSTYLE, GetWindowLongPtrW, SetWindowLongPtrW, WS_EX_NOACTIVATE};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GWL_EXSTYLE, GetWindowLongPtrW, SetWindowLongPtrW, WS_EX_NOACTIVATE,
+    };
 
     pub fn key_down(vk: u16) -> bool {
         // High bit set = currently down.
@@ -534,13 +577,17 @@ mod sys {
         }
     }
 
-    pub fn pick_folder(owner: Option<isize>, start: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
+    pub fn pick_folder(
+        owner: Option<isize>,
+        start: Option<&std::path::Path>,
+    ) -> Option<std::path::PathBuf> {
         use windows::Win32::System::Com::{
-            CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize,
+            CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+            CoTaskMemFree, CoUninitialize,
         };
         use windows::Win32::UI::Shell::{
-            FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, IShellItem, SHCreateItemFromParsingName,
-            SIGDN_FILESYSPATH,
+            FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, IShellItem,
+            SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
         };
         use windows::core::HSTRING;
 
@@ -548,11 +595,15 @@ mod sys {
             let init = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let inited = init.is_ok();
             let result = (|| -> windows::core::Result<Option<std::path::PathBuf>> {
-                let dlg: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
+                let dlg: IFileOpenDialog =
+                    CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
                 let opts = dlg.GetOptions()?;
                 dlg.SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM)?;
                 if let Some(dir) = start.filter(|d| d.is_dir())
-                    && let Ok(item) = SHCreateItemFromParsingName::<_, _, IShellItem>(&HSTRING::from(dir.as_os_str()), None)
+                    && let Ok(item) = SHCreateItemFromParsingName::<_, _, IShellItem>(
+                        &HSTRING::from(dir.as_os_str()),
+                        None,
+                    )
                 {
                     let _ = dlg.SetFolder(&item);
                 }
@@ -587,7 +638,10 @@ mod sys {
         false
     }
     pub fn set_no_activate(_hwnd: isize, _on: bool) {}
-    pub fn pick_folder(_owner: Option<isize>, _start: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
+    pub fn pick_folder(
+        _owner: Option<isize>,
+        _start: Option<&std::path::Path>,
+    ) -> Option<std::path::PathBuf> {
         None
     }
 }
@@ -686,8 +740,14 @@ mod tests {
     #[test]
     fn clamp_into_keeps_size() {
         let b = PxRect::new(0, 0, 1000, 800);
-        assert_eq!(clamp_into(PxRect::new(900, 700, 300, 300), b), PxRect::new(700, 500, 300, 300));
-        assert_eq!(clamp_into(PxRect::new(-50, -50, 100, 100), b), PxRect::new(0, 0, 100, 100));
+        assert_eq!(
+            clamp_into(PxRect::new(900, 700, 300, 300), b),
+            PxRect::new(700, 500, 300, 300)
+        );
+        assert_eq!(
+            clamp_into(PxRect::new(-50, -50, 100, 100), b),
+            PxRect::new(0, 0, 100, 100)
+        );
         assert_eq!(clamp_into(PxRect::new(0, 0, 2000, 100), b).w, 1000);
     }
 
@@ -700,8 +760,14 @@ mod tests {
         // A newer push restarts the timer.
         d.push("ab".to_string(), t0 + Duration::from_millis(120));
         assert_eq!(d.poll(t0 + Duration::from_millis(200)), None);
-        assert_eq!(d.remaining(t0 + Duration::from_millis(200)), Some(Duration::from_millis(70)));
-        assert_eq!(d.poll(t0 + Duration::from_millis(271)), Some("ab".to_string()));
+        assert_eq!(
+            d.remaining(t0 + Duration::from_millis(200)),
+            Some(Duration::from_millis(70))
+        );
+        assert_eq!(
+            d.poll(t0 + Duration::from_millis(271)),
+            Some("ab".to_string())
+        );
         assert_eq!(d.poll(t0 + Duration::from_secs(5)), None);
         assert!(!d.is_pending());
     }

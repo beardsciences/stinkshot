@@ -87,7 +87,9 @@ impl ToastAction {
 pub fn actions_for(kind: &ToastKind) -> Vec<ToastAction> {
     match kind {
         ToastKind::Capture {
-            item: Some(_), can_edit, ..
+            item: Some(_),
+            can_edit,
+            ..
         } => {
             let mut v = Vec::new();
             if *can_edit {
@@ -114,7 +116,11 @@ pub fn logical_size(kind: &ToastKind) -> Vec2 {
     match kind {
         ToastKind::Message { .. } => vec2(CARD_W, PAD + 16.0 + 3.0 + 20.0 + 3.0 + 30.0 + PAD),
         _ => {
-            let h = if has_actions { SLOT_H } else { PAD + THUMB_H + PAD };
+            let h = if has_actions {
+                SLOT_H
+            } else {
+                PAD + THUMB_H + PAD
+            };
             vec2(CARD_W, h)
         }
     }
@@ -132,7 +138,11 @@ pub fn lifetime(kind: &ToastKind, configured_secs: u32) -> Duration {
 
 /// Tick the dismiss timer: time only counts down while not hovered.
 pub fn tick_remaining(remaining: Duration, dt: Duration, hovered: bool) -> Duration {
-    if hovered { remaining } else { remaining.saturating_sub(dt) }
+    if hovered {
+        remaining
+    } else {
+        remaining.saturating_sub(dt)
+    }
 }
 
 pub struct Toast {
@@ -273,7 +283,9 @@ impl Surface for Toast {
         let can_edit = matches!(self.kind, ToastKind::Capture { can_edit: true, .. });
 
         let (title, body, error) = match &self.kind {
-            ToastKind::Capture { title, body, .. } | ToastKind::Recording { title, body, .. } => (title.clone(), body.clone(), false),
+            ToastKind::Capture { title, body, .. } | ToastKind::Recording { title, body, .. } => {
+                (title.clone(), body.clone(), false)
+            }
             ToastKind::Message { title, body, error } => (title.clone(), body.clone(), *error),
         };
         let is_message = matches!(self.kind, ToastKind::Message { .. });
@@ -282,8 +294,12 @@ impl Surface for Toast {
         let mut command: Option<Command> = None;
 
         uc::root_ui(ctx, p.flyout, |ui, rect| {
-            ui.painter()
-                .rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.0, p.stroke), StrokeKind::Inside);
+            ui.painter().rect_stroke(
+                rect,
+                CornerRadius::ZERO,
+                Stroke::new(1.0, p.stroke),
+                StrokeKind::Inside,
+            );
             let inner = rect.shrink(PAD);
 
             // Thumbnail.
@@ -294,10 +310,19 @@ impl Surface for Toast {
                 let painter = ui.painter();
                 painter.rect_filled(thumb_rect, CornerRadius::same(6), p.layer);
                 painter.add(
-                    egui::epaint::RectShape::filled(thumb_rect, CornerRadius::same(6), Color32::WHITE)
-                        .with_texture(tex_id, Rect::from_min_max(pos2(u0, v0), pos2(u1, v1))),
+                    egui::epaint::RectShape::filled(
+                        thumb_rect,
+                        CornerRadius::same(6),
+                        Color32::WHITE,
+                    )
+                    .with_texture(tex_id, Rect::from_min_max(pos2(u0, v0), pos2(u1, v1))),
                 );
-                painter.rect_stroke(thumb_rect, CornerRadius::same(6), Stroke::new(1.0, p.stroke), StrokeKind::Inside);
+                painter.rect_stroke(
+                    thumb_rect,
+                    CornerRadius::same(6),
+                    Stroke::new(1.0, p.stroke),
+                    StrokeKind::Inside,
+                );
                 let r = ui.interact(thumb_rect, ui.scope_id().with("thumb"), Sense::click());
                 if r.clicked()
                     && let Some(id) = item
@@ -316,10 +341,14 @@ impl Surface for Toast {
             }
 
             // Dismiss.
-            let dismiss_rect = Rect::from_min_size(pos2(inner.right() - DISMISS + 4.0, inner.top() - 4.0), vec2(DISMISS, DISMISS));
+            let dismiss_rect = Rect::from_min_size(
+                pos2(inner.right() - DISMISS + 4.0, inner.top() - 4.0),
+                vec2(DISMISS, DISMISS),
+            );
             let dr = ui.interact(dismiss_rect, ui.scope_id().with("dismiss"), Sense::click());
             if dr.hovered() {
-                ui.painter().rect_filled(dismiss_rect, CornerRadius::same(6), p.control);
+                ui.painter()
+                    .rect_filled(dismiss_rect, CornerRadius::same(6), p.control);
             }
             theme::widgets::paint_icon(
                 ui.painter(),
@@ -352,8 +381,10 @@ impl Surface for Toast {
             let title_g = painter.layout(title, uc::font(14.0), p.text, text_w);
             // Single-line title with ellipsis.
             let title_g = if title_g.rows.len() > 1 {
-                let mut job =
-                    egui::text::LayoutJob::single_section(title_g.text().to_string(), egui::TextFormat::simple(uc::font(14.0), p.text));
+                let mut job = egui::text::LayoutJob::single_section(
+                    title_g.text().to_string(),
+                    egui::TextFormat::simple(uc::font(14.0), p.text),
+                );
                 job.wrap = egui::text::TextWrapping {
                     max_width: text_w,
                     max_rows: 1,
@@ -366,7 +397,10 @@ impl Surface for Toast {
             };
             painter.galley(pos2(text_x, top + 20.0), title_g, p.text);
             let body_rows = if is_message { 2 } else { 1 };
-            let mut job = egui::text::LayoutJob::single_section(body, egui::TextFormat::simple(uc::font(12.0), p.text_tertiary));
+            let mut job = egui::text::LayoutJob::single_section(
+                body,
+                egui::TextFormat::simple(uc::font(12.0), p.text_tertiary),
+            );
             job.wrap = egui::text::TextWrapping {
                 max_width: text_w,
                 max_rows: body_rows,
@@ -388,7 +422,16 @@ impl Surface for Toast {
                         ToastAction::CopyText => ocr_available,
                         _ => true,
                     };
-                    let resp = uc::rect_button(ui, a.label(), r, a.label(), uc::BtnKind::Neutral, enabled, p, accent);
+                    let resp = uc::rect_button(
+                        ui,
+                        a.label(),
+                        r,
+                        a.label(),
+                        uc::BtnKind::Neutral,
+                        enabled,
+                        p,
+                        accent,
+                    );
                     let resp = if !enabled {
                         resp.on_hover_text("No OCR language is installed")
                     } else {
@@ -407,7 +450,11 @@ impl Surface for Toast {
         if let Some(c) = command {
             shared.outbox.push(c);
         }
-        if close { SurfaceStatus::Close } else { SurfaceStatus::Open }
+        if close {
+            SurfaceStatus::Close
+        } else {
+            SurfaceStatus::Open
+        }
     }
 }
 
@@ -429,7 +476,12 @@ mod tests {
     fn actions_follow_design_order() {
         assert_eq!(
             actions_for(&cap(Some(1), true)),
-            vec![ToastAction::Edit, ToastAction::Pin, ToastAction::CopyText, ToastAction::Folder]
+            vec![
+                ToastAction::Edit,
+                ToastAction::Pin,
+                ToastAction::CopyText,
+                ToastAction::Folder
+            ]
         );
         assert_eq!(
             actions_for(&cap(Some(1), false)),
@@ -442,7 +494,10 @@ mod tests {
             body: String::new(),
             item: Some(3),
         };
-        assert_eq!(actions_for(&rec), vec![ToastAction::Play, ToastAction::Folder]);
+        assert_eq!(
+            actions_for(&rec),
+            vec![ToastAction::Play, ToastAction::Folder]
+        );
         let msg = ToastKind::Message {
             title: String::new(),
             body: String::new(),
@@ -455,8 +510,14 @@ mod tests {
     fn actions_push_expected_commands() {
         assert!(matches!(ToastAction::Edit.command(7), Command::EditItem(7)));
         assert!(matches!(ToastAction::Pin.command(7), Command::PinItem(7)));
-        assert!(matches!(ToastAction::CopyText.command(7), Command::CopyItemText(7)));
-        assert!(matches!(ToastAction::Folder.command(7), Command::RevealItem(7)));
+        assert!(matches!(
+            ToastAction::CopyText.command(7),
+            Command::CopyItemText(7)
+        ));
+        assert!(matches!(
+            ToastAction::Folder.command(7),
+            Command::RevealItem(7)
+        ));
         assert!(matches!(ToastAction::Play.command(7), Command::OpenItem(7)));
     }
 
@@ -464,7 +525,10 @@ mod tests {
     fn timer_pauses_while_hovered() {
         let r = Duration::from_secs(6);
         assert_eq!(tick_remaining(r, Duration::from_secs(1), true), r);
-        assert_eq!(tick_remaining(r, Duration::from_secs(1), false), Duration::from_secs(5));
+        assert_eq!(
+            tick_remaining(r, Duration::from_secs(1), false),
+            Duration::from_secs(5)
+        );
         assert_eq!(
             tick_remaining(Duration::from_millis(100), Duration::from_secs(1), false),
             Duration::ZERO

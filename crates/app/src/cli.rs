@@ -21,15 +21,27 @@ use crate::state::Command;
 #[derive(Debug)]
 pub enum CliAction {
     /// Start (or forward to) the app; optionally run a command right away.
-    RunApp { initial: Option<Command>, forward_args: Vec<String> },
+    RunApp {
+        initial: Option<Command>,
+        forward_args: Vec<String>,
+    },
     Headless(HeadlessJob),
 }
 
 #[derive(Debug)]
 pub enum HeadlessJob {
-    Full { out: PathBuf, monitor: Option<usize>, cursor: bool },
-    Window { out: PathBuf, cursor: bool },
-    OcrFile { file: PathBuf },
+    Full {
+        out: PathBuf,
+        monitor: Option<usize>,
+        cursor: bool,
+    },
+    Window {
+        out: PathBuf,
+        cursor: bool,
+    },
+    OcrFile {
+        file: PathBuf,
+    },
 }
 
 #[derive(Parser, Debug)]
@@ -108,10 +120,22 @@ fn command_of(sub: &Sub) -> Command {
 
 fn headless_of(sub: &Sub) -> Option<HeadlessJob> {
     match sub {
-        Sub::Window { out: Some(out), cursor } => Some(HeadlessJob::Window { out: out.clone(), cursor: *cursor }),
-        Sub::Full { out: Some(out), monitor, cursor } => {
-            Some(HeadlessJob::Full { out: out.clone(), monitor: monitor.map(|m| m.saturating_sub(1)), cursor: *cursor })
-        }
+        Sub::Window {
+            out: Some(out),
+            cursor,
+        } => Some(HeadlessJob::Window {
+            out: out.clone(),
+            cursor: *cursor,
+        }),
+        Sub::Full {
+            out: Some(out),
+            monitor,
+            cursor,
+        } => Some(HeadlessJob::Full {
+            out: out.clone(),
+            monitor: monitor.map(|m| m.saturating_sub(1)),
+            cursor: *cursor,
+        }),
         Sub::Ocr { file: Some(file) } => Some(HeadlessJob::OcrFile { file: file.clone() }),
         _ => None,
     }
@@ -122,12 +146,22 @@ fn into_action(cli: Cli, raw_args: Vec<String>) -> CliAction {
         if let Some(job) = headless_of(sub) {
             return CliAction::Headless(job);
         }
-        return CliAction::RunApp { initial: Some(command_of(sub)), forward_args: raw_args };
+        return CliAction::RunApp {
+            initial: Some(command_of(sub)),
+            forward_args: raw_args,
+        };
     }
     // Plain `stinkshot` (not `--tray`) launched again by the user: open History in the
     // running instance instead of silently doing nothing.
-    let forward_args = if cli.tray { Vec::new() } else { vec!["history".to_string()] };
-    CliAction::RunApp { initial: None, forward_args }
+    let forward_args = if cli.tray {
+        Vec::new()
+    } else {
+        vec!["history".to_string()]
+    };
+    CliAction::RunApp {
+        initial: None,
+        forward_args,
+    }
 }
 
 /// Parse the process arguments. Prints help/version/usage errors and exits as clap does.
@@ -145,7 +179,12 @@ pub fn command_from_args(args: &[String]) -> Option<Command> {
 }
 
 fn format_for(path: &std::path::Path) -> ImageFormat {
-    match path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref() {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
         Some("jpg") | Some("jpeg") => ImageFormat::Jpeg,
         Some("webp") => ImageFormat::Webp,
         _ => ImageFormat::Png,
@@ -158,18 +197,31 @@ fn save_to(img: &Rgba, out: &std::path::Path) -> anyhow::Result<()> {
     {
         std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
-    img.save(out, format_for(out), 90).with_context(|| format!("write {}", out.display()))
+    img.save(out, format_for(out), 90)
+        .with_context(|| format!("write {}", out.display()))
 }
 
 pub fn run_headless(job: HeadlessJob) -> anyhow::Result<()> {
     use stinkshot_platform::{capture, input, monitors, windows_enum};
     match job {
-        HeadlessJob::Full { out, monitor, cursor } => {
+        HeadlessJob::Full {
+            out,
+            monitor,
+            cursor,
+        } => {
             let frozen = capture::freeze_all(cursor)?;
             let mons = monitors::list();
             let rect = match monitor {
-                Some(i) => mons.get(i).ok_or_else(|| anyhow!("monitor {} not found ({} connected)", i + 1, mons.len()))?.rect,
-                None => monitors::at_point(input::cursor_pos()).map(|m| m.rect).unwrap_or(frozen.bounds),
+                Some(i) => {
+                    mons.get(i)
+                        .ok_or_else(|| {
+                            anyhow!("monitor {} not found ({} connected)", i + 1, mons.len())
+                        })?
+                        .rect
+                }
+                None => monitors::at_point(input::cursor_pos())
+                    .map(|m| m.rect)
+                    .unwrap_or(frozen.bounds),
             };
             let local = rect.translate(-frozen.bounds.x, -frozen.bounds.y);
             let img = frozen.image.crop(local);
@@ -186,7 +238,8 @@ pub fn run_headless(job: HeadlessJob) -> anyhow::Result<()> {
         }
         HeadlessJob::OcrFile { file } => {
             let img = Rgba::load(&file).with_context(|| format!("read {}", file.display()))?;
-            let engine = stinkshot_platform::ocr::WindowsOcr::new().context("no OCR language installed")?;
+            let engine =
+                stinkshot_platform::ocr::WindowsOcr::new().context("no OCR language installed")?;
             use stinkshot_platform::ocr::OcrEngine;
             let result = engine.recognize(&img)?;
             println!("{}", result.text);
@@ -209,16 +262,46 @@ mod tests {
 
     #[test]
     fn maps_simple_commands() {
-        assert!(matches!(command_from_args(&args(&["region"])), Some(Command::CaptureRegion)));
-        assert!(matches!(command_from_args(&args(&["scroll"])), Some(Command::CaptureScrolling)));
-        assert!(matches!(command_from_args(&args(&["repeat"])), Some(Command::RepeatLastRegion)));
-        assert!(matches!(command_from_args(&args(&["record"])), Some(Command::RecordMp4)));
-        assert!(matches!(command_from_args(&args(&["gif"])), Some(Command::RecordGif)));
-        assert!(matches!(command_from_args(&args(&["history"])), Some(Command::OpenHistory)));
-        assert!(matches!(command_from_args(&args(&["settings"])), Some(Command::OpenSettings)));
-        assert!(matches!(command_from_args(&args(&["ocr"])), Some(Command::OcrRegion)));
-        assert!(matches!(command_from_args(&args(&["full"])), Some(Command::CaptureFullscreen)));
-        assert!(matches!(command_from_args(&args(&["window"])), Some(Command::CaptureWindow)));
+        assert!(matches!(
+            command_from_args(&args(&["region"])),
+            Some(Command::CaptureRegion)
+        ));
+        assert!(matches!(
+            command_from_args(&args(&["scroll"])),
+            Some(Command::CaptureScrolling)
+        ));
+        assert!(matches!(
+            command_from_args(&args(&["repeat"])),
+            Some(Command::RepeatLastRegion)
+        ));
+        assert!(matches!(
+            command_from_args(&args(&["record"])),
+            Some(Command::RecordMp4)
+        ));
+        assert!(matches!(
+            command_from_args(&args(&["gif"])),
+            Some(Command::RecordGif)
+        ));
+        assert!(matches!(
+            command_from_args(&args(&["history"])),
+            Some(Command::OpenHistory)
+        ));
+        assert!(matches!(
+            command_from_args(&args(&["settings"])),
+            Some(Command::OpenSettings)
+        ));
+        assert!(matches!(
+            command_from_args(&args(&["ocr"])),
+            Some(Command::OcrRegion)
+        ));
+        assert!(matches!(
+            command_from_args(&args(&["full"])),
+            Some(Command::CaptureFullscreen)
+        ));
+        assert!(matches!(
+            command_from_args(&args(&["window"])),
+            Some(Command::CaptureWindow)
+        ));
     }
 
     #[test]
@@ -230,8 +313,15 @@ mod tests {
 
     #[test]
     fn headless_jobs() {
-        match into_action(cli(&["full", "--out", "a.png", "--monitor", "2", "--cursor"]), vec![]) {
-            CliAction::Headless(HeadlessJob::Full { out, monitor, cursor }) => {
+        match into_action(
+            cli(&["full", "--out", "a.png", "--monitor", "2", "--cursor"]),
+            vec![],
+        ) {
+            CliAction::Headless(HeadlessJob::Full {
+                out,
+                monitor,
+                cursor,
+            }) => {
                 assert_eq!(out, PathBuf::from("a.png"));
                 assert_eq!(monitor, Some(1));
                 assert!(cursor);
@@ -251,7 +341,10 @@ mod tests {
     #[test]
     fn trigger_without_out_runs_app_and_forwards() {
         match into_action(cli(&["full"]), args(&["full"])) {
-            CliAction::RunApp { initial: Some(Command::CaptureFullscreen), forward_args } => {
+            CliAction::RunApp {
+                initial: Some(Command::CaptureFullscreen),
+                forward_args,
+            } => {
                 assert_eq!(forward_args, args(&["full"]));
             }
             other => panic!("unexpected {other:?}"),
@@ -261,11 +354,17 @@ mod tests {
     #[test]
     fn bare_launch_forwards_history_but_tray_does_not() {
         match into_action(cli(&[]), vec![]) {
-            CliAction::RunApp { initial: None, forward_args } => assert_eq!(forward_args, args(&["history"])),
+            CliAction::RunApp {
+                initial: None,
+                forward_args,
+            } => assert_eq!(forward_args, args(&["history"])),
             other => panic!("unexpected {other:?}"),
         }
         match into_action(cli(&["--tray"]), args(&["--tray"])) {
-            CliAction::RunApp { initial: None, forward_args } => assert!(forward_args.is_empty()),
+            CliAction::RunApp {
+                initial: None,
+                forward_args,
+            } => assert!(forward_args.is_empty()),
             other => panic!("unexpected {other:?}"),
         }
     }
@@ -273,7 +372,10 @@ mod tests {
     #[test]
     fn extension_picks_format() {
         assert_eq!(format_for(std::path::Path::new("a.JPG")), ImageFormat::Jpeg);
-        assert_eq!(format_for(std::path::Path::new("a.webp")), ImageFormat::Webp);
+        assert_eq!(
+            format_for(std::path::Path::new("a.webp")),
+            ImageFormat::Webp
+        );
         assert_eq!(format_for(std::path::Path::new("a")), ImageFormat::Png);
     }
 }

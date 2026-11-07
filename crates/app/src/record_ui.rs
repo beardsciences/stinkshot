@@ -19,7 +19,10 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
-use egui::{Align, Align2, Color32, CornerRadius, Key, Layout, Rect, Sense, Shape, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
+use egui::{
+    Align, Align2, Color32, CornerRadius, Key, Layout, Rect, Sense, Shape, Stroke, StrokeKind, Ui,
+    UiBuilder, pos2, vec2,
+};
 use stinkshot_core::PxRect;
 use stinkshot_platform::Hwnd;
 use stinkshot_record::{MediaInfo, Status};
@@ -29,8 +32,13 @@ use crate::theme::{self, Icon};
 use crate::toast::ui_common as uc;
 
 fn place<R>(ui: &mut Ui, rect: Rect, add: impl FnOnce(&mut Ui) -> R) -> R {
-    ui.scope_builder(UiBuilder::new().max_rect(rect).layout(Layout::left_to_right(Align::Center)), add)
-        .inner
+    ui.scope_builder(
+        UiBuilder::new()
+            .max_rect(rect)
+            .layout(Layout::left_to_right(Align::Center)),
+        add,
+    )
+    .inner
 }
 
 // ---------------------------------------------------------------------------------------
@@ -139,7 +147,10 @@ impl Countdown {
         let side = uc::px(COUNTDOWN_WIN, area.scale);
         let cx = region.x + region.w / 2;
         let cy = region.y + region.h / 2;
-        let rect = uc::clamp_into(PxRect::new(cx - side / 2, cy - side / 2, side, side), area.work);
+        let rect = uc::clamp_into(
+            PxRect::new(cx - side / 2, cy - side / 2, side, side),
+            area.work,
+        );
         Self {
             region,
             seconds,
@@ -164,8 +175,14 @@ impl Surface for Countdown {
     fn viewport_builder(&self, _shared: &Shared) -> egui::ViewportBuilder {
         egui::ViewportBuilder::default()
             .with_title(self.title())
-            .with_inner_size(vec2(uc::pts(self.rect.w, self.scale), uc::pts(self.rect.h, self.scale)))
-            .with_position(pos2(uc::pts(self.rect.x, self.scale), uc::pts(self.rect.y, self.scale)))
+            .with_inner_size(vec2(
+                uc::pts(self.rect.w, self.scale),
+                uc::pts(self.rect.h, self.scale),
+            ))
+            .with_position(pos2(
+                uc::pts(self.rect.x, self.scale),
+                uc::pts(self.rect.y, self.scale),
+            ))
             .with_decorations(false)
             .with_transparent(true)
             .with_resizable(false)
@@ -209,9 +226,19 @@ impl Surface for Countdown {
                 COUNTDOWN_R + 4.0 + 18.0 * t,
                 Stroke::new(2.0, uc::with_alpha(accent, ((1.0 - t) * 110.0) as u8)),
             );
-            painter.circle_filled(center, COUNTDOWN_R, Color32::from_rgba_unmultiplied(20, 20, 20, 191));
+            painter.circle_filled(
+                center,
+                COUNTDOWN_R,
+                Color32::from_rgba_unmultiplied(20, 20, 20, 191),
+            );
             painter.circle_stroke(center, COUNTDOWN_R - 1.5, Stroke::new(3.0, accent));
-            painter.text(center, Align2::CENTER_CENTER, n.to_string(), uc::font(84.0), Color32::WHITE);
+            painter.text(
+                center,
+                Align2::CENTER_CENTER,
+                n.to_string(),
+                uc::font(84.0),
+                Color32::WHITE,
+            );
             painter.text(
                 pos2(rect.center().x, rect.bottom() - 14.0),
                 Align2::CENTER_CENTER,
@@ -240,8 +267,17 @@ impl RecordFrame {
     pub fn new(region: PxRect) -> Self {
         let scale = uc::area_of_rect(region).scale;
         let m = uc::px(FRAME_MARGIN, scale);
-        let rect = PxRect::new(region.x - m, region.y - m, region.w + 2 * m, region.h + 2 * m);
-        Self { region, scale, rect }
+        let rect = PxRect::new(
+            region.x - m,
+            region.y - m,
+            region.w + 2 * m,
+            region.h + 2 * m,
+        );
+        Self {
+            region,
+            scale,
+            rect,
+        }
     }
 }
 
@@ -253,8 +289,14 @@ impl Surface for RecordFrame {
     fn viewport_builder(&self, _shared: &Shared) -> egui::ViewportBuilder {
         egui::ViewportBuilder::default()
             .with_title(self.title())
-            .with_inner_size(vec2(uc::pts(self.rect.w, self.scale), uc::pts(self.rect.h, self.scale)))
-            .with_position(pos2(uc::pts(self.rect.x, self.scale), uc::pts(self.rect.y, self.scale)))
+            .with_inner_size(vec2(
+                uc::pts(self.rect.w, self.scale),
+                uc::pts(self.rect.h, self.scale),
+            ))
+            .with_position(pos2(
+                uc::pts(self.rect.x, self.scale),
+                uc::pts(self.rect.y, self.scale),
+            ))
             .with_decorations(false)
             .with_transparent(true)
             .with_resizable(false)
@@ -275,7 +317,13 @@ impl Surface for RecordFrame {
             // The window is the region plus a small margin, so the dashed line hugs the
             // outside of the captured pixels.
             let r = rect.shrink(FRAME_MARGIN / 2.0);
-            let pts = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
+            let pts = [
+                r.left_top(),
+                r.right_top(),
+                r.right_bottom(),
+                r.left_bottom(),
+                r.left_top(),
+            ];
             let shapes = Shape::dashed_line(&pts, Stroke::new(2.0, p.danger), 8.0, 6.0);
             ui.painter().extend(shapes);
         });
@@ -352,7 +400,10 @@ impl Surface for RecordHud {
         egui::ViewportBuilder::default()
             .with_title(self.title())
             .with_inner_size(vec2(HUD_W, HUD_H))
-            .with_position(pos2(uc::pts(self.rect.x, self.scale), uc::pts(self.rect.y, self.scale)))
+            .with_position(pos2(
+                uc::pts(self.rect.x, self.scale),
+                uc::pts(self.rect.y, self.scale),
+            ))
             .with_decorations(false)
             .with_resizable(false)
             .with_always_on_top()
@@ -382,15 +433,22 @@ impl Surface for RecordHud {
         let summary = self.summary.clone();
 
         uc::root_ui(ctx, p.flyout, |ui, rect| {
-            ui.painter()
-                .rect_stroke(rect, CornerRadius::same(10), Stroke::new(1.0, p.stroke), StrokeKind::Inside);
+            ui.painter().rect_stroke(
+                rect,
+                CornerRadius::same(10),
+                Stroke::new(1.0, p.stroke),
+                StrokeKind::Inside,
+            );
             // Drag anywhere on the bar background to move it out of the way.
             let bg = ui.interact(rect, ui.scope_id().with("hud_bg"), Sense::click_and_drag());
             if bg.drag_started_by(egui::PointerButton::Primary) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
 
-            let row = Rect::from_min_size(rect.min + vec2(HUD_PAD, HUD_PAD), vec2(rect.width() - 2.0 * HUD_PAD, HUD_BTN));
+            let row = Rect::from_min_size(
+                rect.min + vec2(HUD_PAD, HUD_PAD),
+                vec2(rect.width() - 2.0 * HUD_PAD, HUD_BTN),
+            );
             let mid_y = row.center().y;
             let mut x = row.left();
 
@@ -416,16 +474,29 @@ impl Surface for RecordHud {
                 if paused { p.text_secondary } else { p.text },
             );
             let tw = galley.size().x.max(40.0);
-            ui.painter().galley(pos2(x, mid_y - galley.size().y / 2.0), galley, p.text);
+            ui.painter()
+                .galley(pos2(x, mid_y - galley.size().y / 2.0), galley, p.text);
             x += tw + 10.0;
 
             let btn = |x: f32| Rect::from_min_size(pos2(x, row.top()), vec2(HUD_BTN, HUD_BTN));
 
             // Pause / resume.
             let r = btn(x);
-            let (icon, tip) = if paused { (Icon::Play, "Resume") } else { (Icon::Pause, "Pause") };
-            if place(ui, r, |ui| theme::widgets::icon_button(ui, icon, tip, false)).clicked() {
-                outbox.push(if paused { Command::RecordResume } else { Command::RecordPause });
+            let (icon, tip) = if paused {
+                (Icon::Play, "Resume")
+            } else {
+                (Icon::Pause, "Pause")
+            };
+            if place(ui, r, |ui| {
+                theme::widgets::icon_button(ui, icon, tip, false)
+            })
+            .clicked()
+            {
+                outbox.push(if paused {
+                    Command::RecordResume
+                } else {
+                    Command::RecordPause
+                });
             }
             x += HUD_BTN + HUD_GAP;
 
@@ -442,8 +513,10 @@ impl Surface for RecordHud {
                 let resp = place(ui, r, |ui| theme::widgets::icon_button(ui, icon, &tip, *on));
                 if !*on {
                     let c = r.center();
-                    ui.painter()
-                        .line_segment([c + vec2(-7.0, 7.0), c + vec2(7.0, -7.0)], Stroke::new(1.8, p.text_tertiary));
+                    ui.painter().line_segment(
+                        [c + vec2(-7.0, 7.0), c + vec2(7.0, -7.0)],
+                        Stroke::new(1.8, p.text_tertiary),
+                    );
                 }
                 if resp.clicked() {
                     *on = !*on;
@@ -452,8 +525,20 @@ impl Surface for RecordHud {
             }
 
             // Stop.
-            let stop = Rect::from_min_max(pos2(x + 2.0, row.top()), pos2(row.right(), row.bottom()));
-            if uc::rect_button(ui, "stop", stop, "Stop", uc::BtnKind::Danger, true, p, accent).clicked() {
+            let stop =
+                Rect::from_min_max(pos2(x + 2.0, row.top()), pos2(row.right(), row.bottom()));
+            if uc::rect_button(
+                ui,
+                "stop",
+                stop,
+                "Stop",
+                uc::BtnKind::Danger,
+                true,
+                p,
+                accent,
+            )
+            .clicked()
+            {
                 outbox.push(Command::RecordStop);
             }
 
@@ -461,10 +546,16 @@ impl Surface for RecordHud {
             let line_y = row.bottom() + 8.0;
             let (text, col) = match &error {
                 Some(e) => (format!("Recording error: {e}"), p.danger),
-                None if dropped > 0 => (format!("{summary} \u{b7} {dropped} dropped"), p.text_secondary),
+                None if dropped > 0 => (
+                    format!("{summary} \u{b7} {dropped} dropped"),
+                    p.text_secondary,
+                ),
                 None => (summary, p.text_secondary),
             };
-            let mut job = egui::text::LayoutJob::single_section(text, egui::TextFormat::simple(uc::font(12.0), col));
+            let mut job = egui::text::LayoutJob::single_section(
+                text,
+                egui::TextFormat::simple(uc::font(12.0), col),
+            );
             job.wrap = egui::text::TextWrapping {
                 max_width: row.width() - 6.0,
                 max_rows: 1,
@@ -572,7 +663,10 @@ impl TrimWindow {
         } else {
             16.0 / 9.0
         };
-        self.preview_dims = (self.info.width.max(1) as f32, self.info.height.max(1) as f32);
+        self.preview_dims = (
+            self.info.width.max(1) as f32,
+            self.info.height.max(1) as f32,
+        );
         let count = filmstrip_count(TRIM_W - 2.0 * TRIM_MARGIN, STRIP_H, aspect);
 
         let (ttx, trx) = channel();
@@ -654,7 +748,10 @@ impl TrimWindow {
                 let ci = uc::rgba_to_color_image(&img);
                 match &mut self.preview {
                     Some(t) => t.set(ci, egui::TextureOptions::LINEAR),
-                    None => self.preview = Some(ctx.load_texture("trim_preview", ci, egui::TextureOptions::LINEAR)),
+                    None => {
+                        self.preview =
+                            Some(ctx.load_texture("trim_preview", ci, egui::TextureOptions::LINEAR))
+                    }
                 }
             }
         }
@@ -694,7 +791,10 @@ impl Surface for TrimWindow {
             .with_title(self.title())
             .with_inner_size(vec2(TRIM_W, TRIM_H))
             .with_min_inner_size(vec2(460.0, 470.0))
-            .with_position(pos2(uc::pts(self.rect.x, self.scale), uc::pts(self.rect.y, self.scale)))
+            .with_position(pos2(
+                uc::pts(self.rect.x, self.scale),
+                uc::pts(self.rect.y, self.scale),
+            ))
             .with_resizable(true)
     }
 
@@ -745,9 +845,27 @@ impl Surface for TrimWindow {
             };
             if delta != 0.0 {
                 match self.active {
-                    Handle::In => (self.start, self.end) = drag_handle(Handle::In, self.start + delta, self.start, self.end, self.dur),
-                    Handle::Out => (self.start, self.end) = drag_handle(Handle::Out, self.end + delta, self.start, self.end, self.dur),
-                    Handle::Playhead => self.playhead = (self.playhead + delta).clamp(self.start, self.end),
+                    Handle::In => {
+                        (self.start, self.end) = drag_handle(
+                            Handle::In,
+                            self.start + delta,
+                            self.start,
+                            self.end,
+                            self.dur,
+                        )
+                    }
+                    Handle::Out => {
+                        (self.start, self.end) = drag_handle(
+                            Handle::Out,
+                            self.end + delta,
+                            self.start,
+                            self.end,
+                            self.dur,
+                        )
+                    }
+                    Handle::Playhead => {
+                        self.playhead = (self.playhead + delta).clamp(self.start, self.end)
+                    }
                 }
             }
         }
@@ -756,13 +874,19 @@ impl Surface for TrimWindow {
         let mut save_gif = false;
         let mut save_mp4 = false;
         let mut ask_discard = false;
-        let file_name = self.source.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let file_name = self
+            .source
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
         let dur = self.dur;
-        let (mut start, mut end, mut playhead, mut active) = (self.start, self.end, self.playhead, self.active);
+        let (mut start, mut end, mut playhead, mut active) =
+            (self.start, self.end, self.playhead, self.active);
         let mut dragging = self.dragging;
         let preview_tex = self.preview.as_ref().map(|t| t.id());
         let preview_dims = self.preview_dims;
-        let thumbs: Vec<(egui::TextureId, [usize; 2])> = self.thumbs.iter().map(|t| (t.id(), t.size())).collect();
+        let thumbs: Vec<(egui::TextureId, [usize; 2])> =
+            self.thumbs.iter().map(|t| (t.id(), t.size())).collect();
         let progress = self.progress;
         let prefer_gif = self.prefer_gif;
         let time = ctx.input(|i| i.time);
@@ -791,17 +915,41 @@ impl Surface for TrimWindow {
             );
 
             // Bottom stack, measured from the bottom edge.
-            let buttons = Rect::from_min_size(pos2(inner.left(), inner.bottom() - 34.0), vec2(inner.width(), 34.0));
-            let status_row = Rect::from_min_size(pos2(inner.left(), buttons.top() - 10.0 - 18.0), vec2(inner.width(), 18.0));
-            let labels = Rect::from_min_size(pos2(inner.left(), status_row.top() - 6.0 - 16.0), vec2(inner.width(), 16.0));
-            let strip = Rect::from_min_size(pos2(inner.left(), labels.top() - 8.0 - STRIP_H), vec2(inner.width(), STRIP_H));
-            let preview_area = Rect::from_min_max(pos2(inner.left(), inner.top() + 28.0), pos2(inner.right(), strip.top() - 14.0));
+            let buttons = Rect::from_min_size(
+                pos2(inner.left(), inner.bottom() - 34.0),
+                vec2(inner.width(), 34.0),
+            );
+            let status_row = Rect::from_min_size(
+                pos2(inner.left(), buttons.top() - 10.0 - 18.0),
+                vec2(inner.width(), 18.0),
+            );
+            let labels = Rect::from_min_size(
+                pos2(inner.left(), status_row.top() - 6.0 - 16.0),
+                vec2(inner.width(), 16.0),
+            );
+            let strip = Rect::from_min_size(
+                pos2(inner.left(), labels.top() - 8.0 - STRIP_H),
+                vec2(inner.width(), STRIP_H),
+            );
+            let preview_area = Rect::from_min_max(
+                pos2(inner.left(), inner.top() + 28.0),
+                pos2(inner.right(), strip.top() - 14.0),
+            );
 
             // Preview.
-            painter.rect_filled(preview_area, CornerRadius::same(8), Color32::from_rgb(0x14, 0x14, 0x14));
+            painter.rect_filled(
+                preview_area,
+                CornerRadius::same(8),
+                Color32::from_rgb(0x14, 0x14, 0x14),
+            );
             if let Some(id) = preview_tex {
                 let r = uc::contain_rect(preview_area.shrink(1.0), preview_dims.0, preview_dims.1);
-                painter.image(id, r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                painter.image(
+                    id,
+                    r,
+                    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
             } else {
                 painter.text(
                     preview_area.center(),
@@ -811,7 +959,12 @@ impl Surface for TrimWindow {
                     p.text_tertiary,
                 );
             }
-            painter.rect_stroke(preview_area, CornerRadius::same(8), Stroke::new(1.0, p.stroke), StrokeKind::Inside);
+            painter.rect_stroke(
+                preview_area,
+                CornerRadius::same(8),
+                Stroke::new(1.0, p.stroke),
+                StrokeKind::Inside,
+            );
             let shown = preview_time(active, start, end, playhead, dur);
             let tag = uc::fmt_tenths(secs(shown));
             let tg = painter.layout_no_wrap(tag, uc::font(12.0), Color32::WHITE);
@@ -819,11 +972,19 @@ impl Surface for TrimWindow {
                 preview_area.left_bottom() + vec2(8.0, -8.0 - tg.size().y - 6.0),
                 tg.size() + vec2(12.0, 6.0),
             );
-            painter.rect_filled(tr, CornerRadius::same(4), Color32::from_rgba_unmultiplied(0, 0, 0, 170));
+            painter.rect_filled(
+                tr,
+                CornerRadius::same(4),
+                Color32::from_rgba_unmultiplied(0, 0, 0, 170),
+            );
             painter.galley(tr.min + vec2(6.0, 3.0), tg, Color32::WHITE);
 
             // Filmstrip.
-            painter.rect_filled(strip, CornerRadius::same(6), Color32::from_rgb(0x1e, 0x1e, 0x1e));
+            painter.rect_filled(
+                strip,
+                CornerRadius::same(6),
+                Color32::from_rgb(0x1e, 0x1e, 0x1e),
+            );
             if !thumbs.is_empty() {
                 let n = thumbs.len() as f32;
                 let cell_w = strip.width() / n;
@@ -832,8 +993,17 @@ impl Surface for TrimWindow {
                         pos2(strip.left() + i as f32 * cell_w, strip.top()),
                         vec2(cell_w - 1.0, strip.height()),
                     );
-                    let (u0, v0, u1, v1) = uc::cover_uv((size[0] as f32, size[1] as f32), cell.width(), cell.height());
-                    painter.image(*id, cell, Rect::from_min_max(pos2(u0, v0), pos2(u1, v1)), Color32::WHITE);
+                    let (u0, v0, u1, v1) = uc::cover_uv(
+                        (size[0] as f32, size[1] as f32),
+                        cell.width(),
+                        cell.height(),
+                    );
+                    painter.image(
+                        *id,
+                        cell,
+                        Rect::from_min_max(pos2(u0, v0), pos2(u1, v1)),
+                        Color32::WHITE,
+                    );
                 }
             } else {
                 painter.text(
@@ -877,7 +1047,11 @@ impl Surface for TrimWindow {
             );
 
             // Interaction: strip scrub, then handles on top.
-            let scrub = ui.interact(strip, ui.scope_id().with("trim_scrub"), Sense::click_and_drag());
+            let scrub = ui.interact(
+                strip,
+                ui.scope_id().with("trim_scrub"),
+                Sense::click_and_drag(),
+            );
             if (scrub.clicked() || scrub.dragged())
                 && dragging.is_none()
                 && let Some(pos) = scrub.interact_pointer_pos()
@@ -886,18 +1060,32 @@ impl Surface for TrimWindow {
                 active = Handle::Playhead;
             }
             for (handle, x) in [(Handle::In, xs), (Handle::Out, xe)] {
-                let hr = Rect::from_center_size(pos2(x, strip.center().y), vec2(HANDLE_W, strip.height()));
+                let hr = Rect::from_center_size(
+                    pos2(x, strip.center().y),
+                    vec2(HANDLE_W, strip.height()),
+                );
                 let hit = hr.expand2(vec2(6.0, 0.0));
-                let resp = ui.interact(hit, ui.scope_id().with(("trim_handle", handle as u8)), Sense::drag());
+                let resp = ui.interact(
+                    hit,
+                    ui.scope_id().with(("trim_handle", handle as u8)),
+                    Sense::drag(),
+                );
                 let lit = resp.hovered() || resp.dragged();
                 painter.rect_filled(
                     hr,
                     CornerRadius::same(3),
-                    if lit { accent.lerp_to_gamma(Color32::WHITE, 0.25) } else { accent },
+                    if lit {
+                        accent.lerp_to_gamma(Color32::WHITE, 0.25)
+                    } else {
+                        accent
+                    },
                 );
                 // Grip notch.
                 painter.line_segment(
-                    [pos2(x, strip.center().y - 7.0), pos2(x, strip.center().y + 7.0)],
+                    [
+                        pos2(x, strip.center().y - 7.0),
+                        pos2(x, strip.center().y + 7.0),
+                    ],
                     Stroke::new(1.5, p.on_accent),
                 );
                 if resp.hovered() || resp.dragged() {
@@ -944,8 +1132,15 @@ impl Surface for TrimWindow {
 
             // Status / progress row.
             if let Some(pr) = progress {
-                let bar = Rect::from_min_size(status_row.left_center() + vec2(0.0, -2.0), vec2(status_row.width() - 64.0, 4.0));
-                painter.rect_filled(bar, CornerRadius::same(2), Color32::from_rgb(0x3a, 0x3a, 0x3a));
+                let bar = Rect::from_min_size(
+                    status_row.left_center() + vec2(0.0, -2.0),
+                    vec2(status_row.width() - 64.0, 4.0),
+                );
+                painter.rect_filled(
+                    bar,
+                    CornerRadius::same(2),
+                    Color32::from_rgb(0x3a, 0x3a, 0x3a),
+                );
                 painter.rect_filled(
                     Rect::from_min_size(bar.min, vec2(bar.width() * pr, 4.0)),
                     CornerRadius::same(2),
@@ -960,12 +1155,22 @@ impl Surface for TrimWindow {
                 );
             } else if busy {
                 // Waiting for the first progress report: indeterminate sweep.
-                let bar = Rect::from_min_size(status_row.left_center() + vec2(0.0, -2.0), vec2(status_row.width(), 4.0));
-                painter.rect_filled(bar, CornerRadius::same(2), Color32::from_rgb(0x3a, 0x3a, 0x3a));
+                let bar = Rect::from_min_size(
+                    status_row.left_center() + vec2(0.0, -2.0),
+                    vec2(status_row.width(), 4.0),
+                );
+                painter.rect_filled(
+                    bar,
+                    CornerRadius::same(2),
+                    Color32::from_rgb(0x3a, 0x3a, 0x3a),
+                );
                 let t = ((time * 0.8) % 1.0) as f32;
                 let w = bar.width() * 0.25;
                 let x0 = bar.left() + (bar.width() + w) * t - w;
-                let seg = Rect::from_min_max(pos2(x0.max(bar.left()), bar.top()), pos2((x0 + w).min(bar.right()), bar.bottom()));
+                let seg = Rect::from_min_max(
+                    pos2(x0.max(bar.left()), bar.top()),
+                    pos2((x0 + w).min(bar.right()), bar.bottom()),
+                );
                 if seg.width() > 0.0 {
                     painter.rect_filled(seg, CornerRadius::same(2), accent);
                 }
@@ -981,19 +1186,39 @@ impl Surface for TrimWindow {
 
             // Buttons.
             let w = (buttons.width() - 12.0) / 3.0;
-            let cell = |i: f32| Rect::from_min_size(pos2(buttons.left() + i * (w + 6.0), buttons.top()), vec2(w, 34.0));
+            let cell = |i: f32| {
+                Rect::from_min_size(
+                    pos2(buttons.left() + i * (w + 6.0), buttons.top()),
+                    vec2(w, 34.0),
+                )
+            };
             let (gif_kind, mp4_kind) = if prefer_gif {
                 (uc::BtnKind::Accent, uc::BtnKind::Neutral)
             } else {
                 (uc::BtnKind::Neutral, uc::BtnKind::Accent)
             };
-            if uc::rect_button(ui, "discard", cell(0.0), "Discard", uc::BtnKind::Neutral, !busy, p, accent).clicked() {
+            if uc::rect_button(
+                ui,
+                "discard",
+                cell(0.0),
+                "Discard",
+                uc::BtnKind::Neutral,
+                !busy,
+                p,
+                accent,
+            )
+            .clicked()
+            {
                 ask_discard = true;
             }
-            if uc::rect_button(ui, "gif", cell(1.0), "Save GIF", gif_kind, !busy, p, accent).clicked() {
+            if uc::rect_button(ui, "gif", cell(1.0), "Save GIF", gif_kind, !busy, p, accent)
+                .clicked()
+            {
                 save_gif = true;
             }
-            if uc::rect_button(ui, "mp4", cell(2.0), "Save MP4", mp4_kind, !busy, p, accent).clicked() {
+            if uc::rect_button(ui, "mp4", cell(2.0), "Save MP4", mp4_kind, !busy, p, accent)
+                .clicked()
+            {
                 save_mp4 = true;
             }
         });
@@ -1003,7 +1228,13 @@ impl Surface for TrimWindow {
         self.playhead = playhead;
         self.active = active;
         self.dragging = dragging;
-        self.wanted = secs(preview_time(self.active, self.start, self.end, self.playhead, self.dur));
+        self.wanted = secs(preview_time(
+            self.active,
+            self.start,
+            self.end,
+            self.playhead,
+            self.dur,
+        ));
 
         if ask_discard {
             self.confirm_discard = true;
@@ -1019,7 +1250,11 @@ impl Surface for TrimWindow {
         if self.confirm_discard {
             let modal = egui::Modal::new(egui::Id::unique("trim_discard_modal")).show(ctx, |ui| {
                 ui.set_width(340.0);
-                ui.label(egui::RichText::new("Discard this recording?").size(15.0).color(p.text));
+                ui.label(
+                    egui::RichText::new("Discard this recording?")
+                        .size(15.0)
+                        .color(p.text),
+                );
                 ui.add_space(4.0);
                 ui.label(
                     egui::RichText::new("It has not been saved yet. This cannot be undone.")
@@ -1031,9 +1266,29 @@ impl Surface for TrimWindow {
                 let mut discard = false;
                 ui.horizontal(|ui| {
                     let (r1, _) = ui.allocate_exact_size(vec2(160.0, 34.0), Sense::hover());
-                    keep = uc::rect_button(ui, "keep", r1, "Keep editing", uc::BtnKind::Neutral, true, p, accent).clicked();
+                    keep = uc::rect_button(
+                        ui,
+                        "keep",
+                        r1,
+                        "Keep editing",
+                        uc::BtnKind::Neutral,
+                        true,
+                        p,
+                        accent,
+                    )
+                    .clicked();
                     let (r2, _) = ui.allocate_exact_size(vec2(160.0, 34.0), Sense::hover());
-                    discard = uc::rect_button(ui, "really_discard", r2, "Discard", uc::BtnKind::Danger, true, p, accent).clicked();
+                    discard = uc::rect_button(
+                        ui,
+                        "really_discard",
+                        r2,
+                        "Discard",
+                        uc::BtnKind::Danger,
+                        true,
+                        p,
+                        accent,
+                    )
+                    .clicked();
                 });
                 (keep, discard)
             });
@@ -1099,7 +1354,10 @@ impl Surface for ScrollHud {
         egui::ViewportBuilder::default()
             .with_title(self.title())
             .with_inner_size(vec2(SCROLL_W, SCROLL_H))
-            .with_position(pos2(uc::pts(self.rect.x, self.scale), uc::pts(self.rect.y, self.scale)))
+            .with_position(pos2(
+                uc::pts(self.rect.x, self.scale),
+                uc::pts(self.rect.y, self.scale),
+            ))
             .with_decorations(false)
             .with_resizable(false)
             .with_always_on_top()
@@ -1131,8 +1389,12 @@ impl Surface for ScrollHud {
         ctx.request_repaint_after(Duration::from_millis(100));
 
         uc::root_ui(ctx, p.flyout, |ui, rect| {
-            ui.painter()
-                .rect_stroke(rect, CornerRadius::same(10), Stroke::new(1.0, p.stroke), StrokeKind::Inside);
+            ui.painter().rect_stroke(
+                rect,
+                CornerRadius::same(10),
+                Stroke::new(1.0, p.stroke),
+                StrokeKind::Inside,
+            );
             let inner = rect.shrink(12.0);
             let painter = ui.painter().clone();
             painter.text(
@@ -1149,8 +1411,15 @@ impl Surface for ScrollHud {
                 uc::font(13.0),
                 p.text_tertiary,
             );
-            let bar = Rect::from_min_size(pos2(inner.left(), inner.top() + 28.0), vec2(inner.width(), 4.0));
-            painter.rect_filled(bar, CornerRadius::same(2), Color32::from_rgb(0x3a, 0x3a, 0x3a));
+            let bar = Rect::from_min_size(
+                pos2(inner.left(), inner.top() + 28.0),
+                vec2(inner.width(), 4.0),
+            );
+            painter.rect_filled(
+                bar,
+                CornerRadius::same(2),
+                Color32::from_rgb(0x3a, 0x3a, 0x3a),
+            );
             painter.rect_filled(
                 Rect::from_min_size(bar.min, vec2(bar.width() * progress, 4.0)),
                 CornerRadius::same(2),
@@ -1160,10 +1429,32 @@ impl Surface for ScrollHud {
             let w = (inner.width() - 6.0) / 2.0;
             let b1 = Rect::from_min_size(pos2(inner.left(), row_top), vec2(w, 32.0));
             let b2 = Rect::from_min_size(pos2(inner.left() + w + 6.0, row_top), vec2(w, 32.0));
-            if uc::rect_button(ui, "scroll_cancel", b1, "Cancel", uc::BtnKind::Neutral, true, p, accent).clicked() {
+            if uc::rect_button(
+                ui,
+                "scroll_cancel",
+                b1,
+                "Cancel",
+                uc::BtnKind::Neutral,
+                true,
+                p,
+                accent,
+            )
+            .clicked()
+            {
                 cancel = true;
             }
-            if uc::rect_button(ui, "scroll_stop", b2, "Stop here", uc::BtnKind::Accent, true, p, accent).clicked() {
+            if uc::rect_button(
+                ui,
+                "scroll_stop",
+                b2,
+                "Stop here",
+                uc::BtnKind::Accent,
+                true,
+                p,
+                accent,
+            )
+            .clicked()
+            {
                 stop = true;
             }
         });
@@ -1244,7 +1535,10 @@ mod tests {
         assert_eq!(drag_handle(Handle::In, -3.0, 1.0, 5.0, dur), (0.0, 5.0));
         assert_eq!(drag_handle(Handle::Out, 99.0, 1.0, 5.0, dur), (1.0, 10.0));
         // Playhead drag leaves the range alone.
-        assert_eq!(drag_handle(Handle::Playhead, 3.0, 1.0, 5.0, dur), (1.0, 5.0));
+        assert_eq!(
+            drag_handle(Handle::Playhead, 3.0, 1.0, 5.0, dur),
+            (1.0, 5.0)
+        );
     }
 
     #[test]

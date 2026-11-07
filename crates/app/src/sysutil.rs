@@ -3,7 +3,8 @@
 //! system DPI.
 
 use windows::Win32::System::Console::{
-    ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle,
+    ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
+    SetStdHandle,
 };
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MessageBoxW};
@@ -14,8 +15,12 @@ use windows::core::PCWSTR;
 pub fn attach_parent_console() {
     // SAFETY: plain Win32 calls with no pointers into our memory except handles we own.
     unsafe {
-        let out_ok = GetStdHandle(STD_OUTPUT_HANDLE).map(|h| !h.is_invalid() && !h.0.is_null()).unwrap_or(false);
-        let err_ok = GetStdHandle(STD_ERROR_HANDLE).map(|h| !h.is_invalid() && !h.0.is_null()).unwrap_or(false);
+        let out_ok = GetStdHandle(STD_OUTPUT_HANDLE)
+            .map(|h| !h.is_invalid() && !h.0.is_null())
+            .unwrap_or(false);
+        let err_ok = GetStdHandle(STD_ERROR_HANDLE)
+            .map(|h| !h.is_invalid() && !h.0.is_null())
+            .unwrap_or(false);
         if out_ok && err_ok {
             return;
         }
@@ -23,16 +28,17 @@ pub fn attach_parent_console() {
             return;
         }
         use std::os::windows::io::IntoRawHandle;
-        let open = |name: &str| std::fs::OpenOptions::new().write(true).read(true).open(name);
-        if !out_ok
-            && let Ok(f) = open("CONOUT$")
-        {
+        let open = |name: &str| {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .read(true)
+                .open(name)
+        };
+        if !out_ok && let Ok(f) = open("CONOUT$") {
             let h = windows::Win32::Foundation::HANDLE(f.into_raw_handle());
             let _ = SetStdHandle(STD_OUTPUT_HANDLE, h);
         }
-        if !err_ok
-            && let Ok(f) = open("CONOUT$")
-        {
+        if !err_ok && let Ok(f) = open("CONOUT$") {
             let h = windows::Win32::Foundation::HANDLE(f.into_raw_handle());
             let _ = SetStdHandle(STD_ERROR_HANDLE, h);
         }
@@ -45,7 +51,12 @@ pub fn fatal_box(title: &str, message: &str) {
     let m: Vec<u16> = message.encode_utf16().chain(std::iter::once(0)).collect();
     // SAFETY: both buffers are NUL-terminated and outlive the call.
     unsafe {
-        MessageBoxW(None, PCWSTR(m.as_ptr()), PCWSTR(t.as_ptr()), MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+        MessageBoxW(
+            None,
+            PCWSTR(m.as_ptr()),
+            PCWSTR(t.as_ptr()),
+            MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
+        );
     }
 }
 

@@ -12,7 +12,10 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
-use egui::{Align2, Color32, CornerRadius, Event, Key, PointerButton, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{
+    Align2, Color32, CornerRadius, Event, Key, PointerButton, Rect, Sense, Stroke, StrokeKind,
+    pos2, vec2,
+};
 use stinkshot_core::{PxRect, Rgba};
 use stinkshot_history::ItemId;
 use stinkshot_platform::Hwnd;
@@ -39,14 +42,22 @@ pub fn opacity_step(opacity: f32, notches: f32) -> f32 {
 /// Toolbar opacity button: 100 -> 80 -> 60 -> 40 -> 20 -> 100.
 pub fn cycle_opacity(opacity: f32) -> f32 {
     let next = ((opacity * 100.0).round() as i32 - 20).max(0) as f32 / 100.0;
-    if next < OPACITY_MIN - 0.001 { OPACITY_MAX } else { next }
+    if next < OPACITY_MIN - 0.001 {
+        OPACITY_MAX
+    } else {
+        next
+    }
 }
 
 /// 1:1 unless the image would not fit the work area, then the largest zoom that fits.
 pub fn initial_zoom(img: (u32, u32), work: PxRect) -> f32 {
     let (w, h) = (img.0.max(1) as f32, img.1.max(1) as f32);
     let fit = (work.w as f32 / w).min(work.h as f32 / h);
-    if fit >= 1.0 { 1.0 } else { fit.clamp(ZOOM_MIN, 1.0) }
+    if fit >= 1.0 {
+        1.0
+    } else {
+        fit.clamp(ZOOM_MIN, 1.0)
+    }
 }
 
 /// Physical window size for an image at `zoom`.
@@ -59,9 +70,22 @@ pub fn window_size_px(img: (u32, u32), zoom: f32) -> (i32, i32) {
 
 /// New window origin after resizing so the image point under the cursor stays put.
 /// `cursor_off` is the cursor offset from the window origin in physical px.
-pub fn zoom_anchor(pos: (i32, i32), old: (i32, i32), new: (i32, i32), cursor_off: (f32, f32)) -> (i32, i32) {
-    let fx = if old.0 > 0 { new.0 as f32 / old.0 as f32 } else { 1.0 };
-    let fy = if old.1 > 0 { new.1 as f32 / old.1 as f32 } else { 1.0 };
+pub fn zoom_anchor(
+    pos: (i32, i32),
+    old: (i32, i32),
+    new: (i32, i32),
+    cursor_off: (f32, f32),
+) -> (i32, i32) {
+    let fx = if old.0 > 0 {
+        new.0 as f32 / old.0 as f32
+    } else {
+        1.0
+    };
+    let fy = if old.1 > 0 {
+        new.1 as f32 / old.1 as f32
+    } else {
+        1.0
+    };
     (
         pos.0 + (cursor_off.0 * (1.0 - fx)).round() as i32,
         pos.1 + (cursor_off.1 * (1.0 - fy)).round() as i32,
@@ -91,7 +115,13 @@ pub struct Pin {
 impl Pin {
     /// `at`: initial physical rect (e.g. where the region was captured); None = centered
     /// on the monitor with the cursor.
-    pub fn new(image: Rgba, title: String, item: Option<ItemId>, at: Option<PxRect>, id: u64) -> Self {
+    pub fn new(
+        image: Rgba,
+        title: String,
+        item: Option<ItemId>,
+        at: Option<PxRect>,
+        id: u64,
+    ) -> Self {
         let area = match at {
             Some(r) => uc::area_of_rect(r),
             None => uc::area_under_cursor(),
@@ -135,7 +165,11 @@ impl Pin {
             } else {
                 uc::rgba_to_color_image(&self.image.thumbnail(w, h))
             };
-            self.texture = Some(ctx.load_texture(format!("pin_{}", self.id), ci, egui::TextureOptions::LINEAR));
+            self.texture = Some(ctx.load_texture(
+                format!("pin_{}", self.id),
+                ci,
+                egui::TextureOptions::LINEAR,
+            ));
         }
         self.texture.as_ref().map(|t| t.id())
     }
@@ -161,8 +195,14 @@ impl Pin {
             Some(h) => stinkshot_platform::window_util::set_rect(h, rect),
             None => {
                 let s = self.area.scale;
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(vec2(uc::pts(rect.w, s), uc::pts(rect.h, s))));
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos2(uc::pts(rect.x, s), uc::pts(rect.y, s))));
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(vec2(
+                    uc::pts(rect.w, s),
+                    uc::pts(rect.h, s),
+                )));
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos2(
+                    uc::pts(rect.x, s),
+                    uc::pts(rect.y, s),
+                )));
             }
         }
     }
@@ -273,7 +313,8 @@ impl Surface for Pin {
         // Keys.
         let (esc, copy) = ctx.input(|i| {
             let esc = i.key_pressed(Key::Escape);
-            let copy = i.events.iter().any(|e| matches!(e, Event::Copy)) || (i.modifiers.command && i.key_pressed(Key::C));
+            let copy = i.events.iter().any(|e| matches!(e, Event::Copy))
+                || (i.modifiers.command && i.key_pressed(Key::C));
             (esc, copy)
         });
         let mut close = esc;
@@ -292,7 +333,11 @@ impl Surface for Pin {
             .as_ref()
             .filter(|(_, t)| t.elapsed() < Duration::from_millis(900))
             .map(|(s, _)| s.clone());
-        if self.chip.as_ref().is_some_and(|(_, t)| t.elapsed() >= Duration::from_millis(900)) {
+        if self
+            .chip
+            .as_ref()
+            .is_some_and(|(_, t)| t.elapsed() >= Duration::from_millis(900))
+        {
             self.chip = None;
         }
         if chip.is_some() {
@@ -308,7 +353,8 @@ impl Surface for Pin {
                         .with_texture(id, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))),
                 );
             } else {
-                ui.painter().rect_filled(rect, radius, p.layer.gamma_multiply(opacity));
+                ui.painter()
+                    .rect_filled(rect, radius, p.layer.gamma_multiply(opacity));
             }
 
             let bg = ui.interact(rect, ui.scope_id().with("pin_bg"), Sense::click_and_drag());
@@ -339,25 +385,42 @@ impl Surface for Pin {
 
             let hovered = bg.hovered() || ui.rect_contains_pointer(rect);
             if hovered {
-                ui.painter().rect_stroke(rect, radius, Stroke::new(1.5, accent), StrokeKind::Inside);
+                ui.painter().rect_stroke(
+                    rect,
+                    radius,
+                    Stroke::new(1.5, accent),
+                    StrokeKind::Inside,
+                );
 
                 // Mini toolbar, top right.
                 let tb_w = TOOL_PAD * 2.0 + TOOL_BTN * 3.0 + TOOL_GAP * 2.0;
                 let tb_h = TOOL_PAD * 2.0 + TOOL_BTN;
                 let tb = Rect::from_min_size(
-                    pos2((rect.right() - 6.0 - tb_w).max(rect.left()), rect.top() + 6.0),
+                    pos2(
+                        (rect.right() - 6.0 - tb_w).max(rect.left()),
+                        rect.top() + 6.0,
+                    ),
                     vec2(tb_w, tb_h),
                 );
                 if rect.width() >= tb_w + 12.0 && rect.height() >= tb_h + 12.0 {
                     let bar_fill = Color32::from_rgba_unmultiplied(32, 32, 32, 230);
-                    ui.painter().rect_filled(tb, CornerRadius::same(6), bar_fill);
+                    ui.painter()
+                        .rect_filled(tb, CornerRadius::same(6), bar_fill);
                     let mut x = tb.left() + TOOL_PAD;
                     for slot in 0..3 {
-                        let r = Rect::from_min_size(pos2(x, tb.top() + TOOL_PAD), vec2(TOOL_BTN, TOOL_BTN));
+                        let r = Rect::from_min_size(
+                            pos2(x, tb.top() + TOOL_PAD),
+                            vec2(TOOL_BTN, TOOL_BTN),
+                        );
                         x += TOOL_BTN + TOOL_GAP;
-                        let resp = ui.interact(r, ui.scope_id().with(("pin_tool", slot)), Sense::click());
+                        let resp =
+                            ui.interact(r, ui.scope_id().with(("pin_tool", slot)), Sense::click());
                         if resp.hovered() {
-                            ui.painter().rect_filled(r, CornerRadius::same(4), Color32::from_white_alpha(28));
+                            ui.painter().rect_filled(
+                                r,
+                                CornerRadius::same(4),
+                                Color32::from_white_alpha(28),
+                            );
                         }
                         let icon_col = Color32::from_rgb(0xe6, 0xe6, 0xe6);
                         match slot {
@@ -401,19 +464,34 @@ impl Surface for Pin {
             }
 
             if let Some(text) = &chip {
-                let galley = ui.painter().layout_no_wrap(text.clone(), uc::font(12.0), Color32::WHITE);
+                let galley =
+                    ui.painter()
+                        .layout_no_wrap(text.clone(), uc::font(12.0), Color32::WHITE);
                 let size = galley.size() + vec2(16.0, 8.0);
-                let r = Rect::from_min_size(pos2(rect.left() + 8.0, (rect.bottom() - 8.0 - size.y).max(rect.top())), size);
+                let r = Rect::from_min_size(
+                    pos2(
+                        rect.left() + 8.0,
+                        (rect.bottom() - 8.0 - size.y).max(rect.top()),
+                    ),
+                    size,
+                );
+                ui.painter().rect_filled(
+                    r,
+                    CornerRadius::same(6),
+                    Color32::from_rgba_unmultiplied(20, 20, 20, 220),
+                );
                 ui.painter()
-                    .rect_filled(r, CornerRadius::same(6), Color32::from_rgba_unmultiplied(20, 20, 20, 220));
-                ui.painter().galley(r.min + vec2(8.0, 4.0), galley, Color32::WHITE);
+                    .galley(r.min + vec2(8.0, 4.0), galley, Color32::WHITE);
             }
         });
         let _ = zoom_pct;
 
         if cycle {
             self.opacity = cycle_opacity(self.opacity);
-            self.set_chip(format!("Opacity {}%", (self.opacity * 100.0).round() as i32));
+            self.set_chip(format!(
+                "Opacity {}%",
+                (self.opacity * 100.0).round() as i32
+            ));
         }
         if reset_zoom && (self.zoom - 1.0).abs() > f32::EPSILON {
             let old = (self.rect.w, self.rect.h);
@@ -430,7 +508,11 @@ impl Surface for Pin {
         if edit && let Some(id) = self.item {
             shared.outbox.push(Command::EditItem(id));
         }
-        if close { SurfaceStatus::Close } else { SurfaceStatus::Open }
+        if close {
+            SurfaceStatus::Close
+        } else {
+            SurfaceStatus::Open
+        }
     }
 }
 
@@ -486,10 +568,19 @@ mod tests {
     #[test]
     fn anchor_keeps_point_under_cursor() {
         // Cursor at the window center doubles size: origin moves up-left by half the old size.
-        assert_eq!(zoom_anchor((100, 100), (200, 100), (400, 200), (100.0, 50.0)), (0, 50));
+        assert_eq!(
+            zoom_anchor((100, 100), (200, 100), (400, 200), (100.0, 50.0)),
+            (0, 50)
+        );
         // Cursor at the origin: origin does not move.
-        assert_eq!(zoom_anchor((100, 100), (200, 100), (400, 200), (0.0, 0.0)), (100, 100));
+        assert_eq!(
+            zoom_anchor((100, 100), (200, 100), (400, 200), (0.0, 0.0)),
+            (100, 100)
+        );
         // Shrinking with cursor at the far corner moves origin toward it.
-        assert_eq!(zoom_anchor((0, 0), (400, 200), (200, 100), (400.0, 200.0)), (200, 100));
+        assert_eq!(
+            zoom_anchor((0, 0), (400, 200), (200, 100), (400.0, 200.0)),
+            (200, 100)
+        );
     }
 }

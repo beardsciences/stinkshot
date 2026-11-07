@@ -8,7 +8,8 @@ use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 
-pub const RELEASES_API: &str = "https://code.mccullough.dev/api/v1/repos/beard/stinkshot/releases/latest";
+pub const RELEASES_API: &str =
+    "https://code.mccullough.dev/api/v1/repos/beard/stinkshot/releases/latest";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Release {
@@ -28,9 +29,16 @@ pub fn check() -> anyhow::Result<Option<Release>> {
         .header("Accept", "application/json")
         .call()
         .context("update check request failed")?;
-    let body: serde_json::Value = resp.body_mut().read_json().context("update check response was not JSON")?;
+    let body: serde_json::Value = resp
+        .body_mut()
+        .read_json()
+        .context("update check response was not JSON")?;
     let release = parse_release(&body)?;
-    Ok(if is_newer(&release.tag, env!("CARGO_PKG_VERSION")) { Some(release) } else { None })
+    Ok(if is_newer(&release.tag, env!("CARGO_PKG_VERSION")) {
+        Some(release)
+    } else {
+        None
+    })
 }
 
 /// Pull `tag_name` and `html_url` out of a Forgejo/Gitea release object.
@@ -41,7 +49,11 @@ pub fn parse_release(v: &serde_json::Value) -> anyhow::Result<Release> {
         .filter(|t| !t.is_empty())
         .ok_or_else(|| anyhow!("release has no tag_name"))?
         .to_string();
-    let url = v.get("html_url").and_then(|u| u.as_str()).unwrap_or_default().to_string();
+    let url = v
+        .get("html_url")
+        .and_then(|u| u.as_str())
+        .unwrap_or_default()
+        .to_string();
     Ok(Release { tag, url })
 }
 
@@ -62,7 +74,10 @@ fn parse_version(s: &str) -> (Vec<u64>, bool) {
     let end = s.find(['-', '+']).unwrap_or(s.len());
     let core = &s[..end];
     let pre = s[end..].starts_with('-');
-    let mut nums: Vec<u64> = core.split('.').map(|p| p.trim().parse::<u64>().unwrap_or(0)).collect();
+    let mut nums: Vec<u64> = core
+        .split('.')
+        .map(|p| p.trim().parse::<u64>().unwrap_or(0))
+        .collect();
     while nums.len() < 3 {
         nums.push(0);
     }
@@ -107,7 +122,13 @@ mod tests {
     fn parses_release_json() {
         let v = serde_json::json!({"tag_name": "v0.2.0", "html_url": "https://example.test/r/v0.2.0", "id": 4});
         let r = parse_release(&v).unwrap();
-        assert_eq!(r, Release { tag: "v0.2.0".into(), url: "https://example.test/r/v0.2.0".into() });
+        assert_eq!(
+            r,
+            Release {
+                tag: "v0.2.0".into(),
+                url: "https://example.test/r/v0.2.0".into()
+            }
+        );
         assert!(parse_release(&serde_json::json!({"name": "x"})).is_err());
         assert!(parse_release(&serde_json::json!({"tag_name": ""})).is_err());
     }
