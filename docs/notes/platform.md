@@ -52,6 +52,26 @@ about 5 s here because of the WGC hang described below).
   conversion loops are unoptimized.
 - `draw_cursor` recovers straight alpha by rendering the cursor with `DrawIconEx` once over
   black and once over white, which handles both alpha and legacy mask cursors.
+- **One duplication per output per process** (measured Nov 7 2026): a second
+  `DuplicateOutput(1)` of an output this process already duplicates fails with
+  `E_INVALIDARG` (another process duplicating the same output is fine). The warm session
+  holds every output, so the recorder takes `capture::lend_duplication()` before
+  duplicating: the cached session is dropped, `freeze_all` / `capture_rect` use GDI for
+  every output while any `DuplicationLease` lives, `warm_up` does nothing, and dropping the
+  last lease discards the GDI-only session and warms a duplication session up again on a
+  worker thread (only if one was warm before).
+- **DPI awareness**: `DuplicateOutput1` returns `DXGI_ERROR_UNSUPPORTED` to a DPI-unaware
+  caller on a display scaled above 100% (the 4K HDR monitor at 125%); at 100% it works, which
+  is why the recorder tests passed earlier. Duplication runs inside
+  `dpi::ThreadPerMonitorAware` (a guard that sets Per-Monitor-V2 on the current thread and
+  restores it), so test binaries and tools without a manifest work too.
+- **Silent duplications**: while the displays are idle-off, DWM feeds no frames to any
+  duplication (0 frames in 2 s on both outputs with a window animating), but GDI still sees
+  windows repaint. A cached session then returns its last picture forever. `capture_rect`
+  (scrolling, "live") therefore uses GDI for the region unless the duplication delivered a
+  frame within the last 20 ms (`LIVE_MAX_AGE`, i.e. during this very call); `freeze_all`
+  keeps using the shadow. `examples/display_state` in the record crate prints the console
+  display state (0 off, 1 on).
 
 ### Window capture (WGC) and a hang found on this machine
 - `capture_window` runs `Windows.Graphics.Capture` on a private MTA thread with a 5 s timeout

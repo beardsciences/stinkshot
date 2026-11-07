@@ -40,15 +40,28 @@ fn main() -> anyhow::Result<()> {
         primary_monitor_rect().unwrap()
     };
     let out = std::env::temp_dir().join(format!("stinkshot-rec-probe-{}.mp4", std::process::id()));
+    // MIC=1: first microphone (seconds only; the file is deleted at the end).
+    // CAM=1: first webcam as a 160 px bubble, bottom right.
+    let mic = (std::env::var("MIC").as_deref() == Ok("1"))
+        .then(|| list_microphones().into_iter().next())
+        .flatten();
+    let cam = (std::env::var("CAM").as_deref() == Ok("1"))
+        .then(|| list_webcams().into_iter().next())
+        .flatten();
+    eprintln!("microphone {mic:?}, webcam {cam:?}");
     let rec = Recorder::start(RecordOptions {
         region,
         output: out.clone(),
         fps: 30,
         bitrate_kbps: 8000,
         system_audio: false,
-        microphone: false,
-        mic_device: None,
-        webcam: None,
+        microphone: mic.is_some(),
+        mic_device: mic.clone(),
+        webcam: cam.clone().map(|d| WebcamOptions {
+            device: Some(d),
+            diameter: 160,
+            corner: Corner::BottomRight,
+        }),
         show_clicks: false,
         show_keys: false,
         include_cursor: true,
@@ -61,6 +74,39 @@ fn main() -> anyhow::Result<()> {
     eprintln!("backend {}", rec.capture_backend());
     let r = rec.stop();
     eprintln!("stop: {r:?}");
+    if let Ok(res) = &r {
+        eprintln!("probe {:?}", probe(&res.path));
+        if mic.is_some() {
+            let (mut sum, mut n, mut peak) = (0f64, 0u64, 0i32);
+            let mut on_audio = |_pts: i64, pcm: &[i16]| {
+                for &s in pcm {
+                    sum += (s as f64).powi(2);
+                    n += 1;
+                    peak = peak.max((s as i32).abs());
+                }
+            };
+            decode_all(&res.path, None, Some(&mut on_audio))?;
+            let rms = (sum / n.max(1) as f64).sqrt();
+            eprintln!(
+                "audio track: {n} samples, RMS {:.1} dBFS, peak {:.1} dBFS",
+                20.0 * (rms / 32768.0).log10(),
+                20.0 * (peak.max(1) as f64 / 32768.0).log10()
+            );
+        }
+        if cam.is_some() {
+            let f = frame_at(&res.path, Duration::from_millis(1200), res.height)?;
+            let s = (res.height as f32 / 1080.0).clamp(0.8, 2.0);
+            let margin = (24.0 * s) as u32;
+            let (x, y) = (res.width - 160 - margin, res.height - 160 - margin);
+            eprintln!(
+                "bubble ring pixel {:?}, centre {:?}, outside {:?}",
+                f.pixel(x + 80, y + 1),
+                f.pixel(x + 80, y + 80),
+                f.pixel(x - 10, y + 80)
+            );
+        }
+    }
     let _ = std::fs::remove_file(&out);
+    eprintln!("deleted {}: {}", out.display(), !out.exists());
     Ok(())
 }

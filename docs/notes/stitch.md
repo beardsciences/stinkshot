@@ -35,9 +35,48 @@
 1920x1080 push with a 300 px scroll: about 8 ms in release (the test asserts < 30 ms in
 release builds only).
 
+## Driver loop (Nov 7 2026)
+
+`drive::drive(stitcher, params, capture, scroll, control, progress)` is the scroll loop that used
+to live in `app::workers::scroll_capture`: capture -> push -> scroll -> wait, until End, Failed,
+a capture error, Stop, Cancel or `max_steps`; first step `initial_notches` (about half the region
+in logical px / 220), fewer notches when a step moved > 85% of the frame, more when < 30%.
+The app passes `capture::capture_rect` and `input::scroll_at`; harnesses pass their own scroll.
+
+## Shakedown (Nov 7 2026, `cargo run -p stinkshot --example scroll_harness -- MODE DELAY_MS`)
+
+Own window: 800x600 popup with a real scrollbar (783 px client), sticky 60 px header and 40 px
+footer, 6000 px document of GDI text in several sizes, section rules, blank bands and gradient
+images with noise, 100 px per wheel notch. The harness runs `drive` with `capture_rect` on the
+window rect (scrollbar included) and posts WM_MOUSEWHEEL to that window only (no system input, the
+pointer never moves). Ground truth is header + document + footer (6100 rows), compared on the
+client columns.
+
+| Mode | Delay | Steps / appended | Result vs truth |
+|---|---|---|---|
+| Instant scroll | 120 ms (default) | 22 / 20, notches 3 then 4 | 6100 rows, all identical (max diff 0) |
+| Instant scroll | 30 ms (minimum) | 22 / 20 | identical |
+| Smooth scroll (250 ms ease-out) | 120 ms | 24 / 22 | identical |
+| Smooth scroll | 30 ms | 26 / 24, notches grow to 12 near the end | identical |
+| Lazy content (placeholder for 400 ms) | 120 ms | 20 / 19, Failed | 6000 rows, placeholder stripes stitched in, then no overlap |
+| Lazy content | 500 ms | 22 / 20 | identical |
+
+End detection: every run that completed ended through End (two Unchanged pushes after the last
+partial step), with the footer once at the bottom and the header once at the top. capture_rect
+median 16 to 22 ms per step, first call about 0.5 s (session creation).
+
+Defect found and fixed: with the displays idle-off the cached duplication session returned the
+same picture every step (duplications receive no frames then), so the capture ended after one
+frame (`Unchanged`, `Unchanged`, End). `capture_rect` now uses GDI unless the duplication
+delivered a frame during the call (platform.md, "Silent duplications").
+
+Not handled: lazy-loading content at the default delay. Placeholders look like content and are
+stitched in; the next frame then no longer overlaps. Raise Scroll Delay for such pages.
+
 ## Contract changes
 
-None. No public signatures changed.
+- Added `pub mod drive` (`drive`, `DriveParams`, `DriveControl`, `DriveOutcome`,
+  `initial_notches`). No existing signature changed.
 
 ## Contract requests
 

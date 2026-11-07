@@ -66,11 +66,100 @@ Modules (all private except the re-exports in `lib.rs`):
   duplication of an HDR monitor is clipped, not tone-mapped, and recorded blown out. Verified on
   the DXGI path only (WGC hangs here). See `docs/notes/hdr.md`.
 
+## Shakedown (Nov 7 2026)
+
+### Recording failed to start: root causes
+
+1. **DPI awareness.** `DuplicateOutput1` returns `DXGI_ERROR_UNSUPPORTED` (0x887A0004) to a
+   DPI-unaware caller on a display scaled above 100%. The 4K HDR monitor moved to 125%; the test
+   binaries have no manifest, so the HDR duplication failed (the 100% SDR monitor still worked).
+   `examples/dup_probe` shows it: unaware -> 0x887A0004, thread PMv2 context -> ok. Fix: every
+   duplication call and the whole video thread run inside `dpi::ThreadPerMonitorAware`.
+2. **The app's warm capture session.** A process may duplicate each output once; a second
+   `DuplicateOutput(1)` in the same process fails with `E_INVALIDARG` (0x80070057). Since the
+   start-up capture warm-up (76385a7) the app always held every output, so recording from the app
+   could not duplicate at all. Fix: `capture::lend_duplication()` (see platform.md); the lease
+   lives in the DXGI `Capturer`. Another process (the release build) duplicating the same
+   outputs is fine (two recorder processes ran concurrently, 249 and 59 frames, no errors).
+3. **Static screens recorded nothing.** Desktop Duplication delivers no frame until the screen
+   changes, so recording an idle desktop failed with "no video frames were captured". Monitors
+   without a frame after 150 ms are now seeded from GDI, and pointer-only updates
+   (`LastPresentTime == 0`, which also covers the placeholder first surface) are not copied.
+
+Transient duplication errors (`E_ACCESSDENIED`, `NOT_CURRENTLY_AVAILABLE`,
+`SESSION_DISCONNECTED`, `E_INVALIDARG`) are retried 4 times 150 ms apart; failures name the
+display and the cause ("this process already duplicates the display", "Desktop Duplication does
+not support this display mode or a DPI-unaware caller", ...).
+
+### Silent duplication and the GDI fallback
+
+During this shakedown the displays were idle-off (console display state 0, last input 2.6 h
+earlier, 15 min display timeout). DWM then feeds no frames to any duplication, while GDI still sees
+windows repaint. The recorder now cross-checks a duplication that has been silent for 1 s with a
+GDI grab every 500 ms; when two grabs differ it captures that monitor with GDI at the frame rate
+until the duplication delivers again (`GdiWatch` in `capture.rs`, counts logged at the end:
+"N pictures from the duplication, M from GDI"). On a static screen this costs one GDI grab of the
+monitor's part of the region every 500 ms. All recording numbers below went through this GDI path,
+not through duplication frames.
+
+### Late frames were lost
+
+A picture polled when no frame was due (between deadlines, or while paused) was never converted
+until the next new picture: a single update (one typed character) could be missing until something
+else changed, and resume showed the picture from before the pause. The new-picture flag is now
+sticky until converted. In the A/V test this took duplicate frames from 2927 to 102 of 5400.
+
+### A/V test (examples/av_window + av_harness)
+
+Test window (640x400, on the SDR monitor): barcode with its render clock, frame counter, moving bar,
+white flash locked to a 100 ms 1 kHz beep at -30 dBFS every 2 s; the beep is written into its own
+WASAPI stream and the flash is driven by that stream's clock, and the window logs the QPC time each
+beep actually played. The harness records it through `Recorder` (system audio on, 30 fps, 8 Mbps,
+3 min + a 5 s pause at 90 s), decodes the file with Media Foundation (`decode_all`) and compares.
+
+| Measure | Result |
+|---|---|
+| Encoder | NVIDIA H.264 Encoder MFT (hardware) |
+| Frames | 5401 written, 0 dropped; probe 180.03 s, 30.0 fps |
+| CFR | every pts step exactly 33.333 ms (0 off-grid), first pts 0 |
+| Content pacing | 102 duplicates (first 0.8 s before the GDI fallback engages), 22 steps > 70 ms (max 124 ms, all in one 13 s stretch of system load) |
+| A/V offset (audio minus video) | start -11.4 ms [-12.2..-10.5], middle -11.3 [-12.1..-10.8], end -11.4 [-12.5..-9.0], 90 beeps |
+| Drift | -3 ms/min fit; audio placement after 45 beeps returns to 0.0 / 0.5 ms of the first beep |
+| Transient | 10 beeps at 35 to 50 s had audio placed up to +24 ms late, then recovered (same stretch as the video hiccups) |
+| Pause 5 s | pts continuous across the pause (content jumps 5030 ms in one frame step), audio has no gaps, offset after resume equals before |
+| Trim 30..50 s | 1.5 to 1.7 s, 20.01 s output, same offset for the same beeps (0.0 ms change) |
+| GIF of the trim | 640x400, 15 fps, 298 frames, 20.00 s, 521 KB, 3.6 s, barcode blocks clean in every frame |
+
+A shorter run with sparser content updates gave -6.8 / -6.5 / -6.1 ms and 0.04 ms/min drift. The
+audio is placed by the mixer at the recording clock from the queue fill, not by device timestamps,
+so a stall of the capture or mixer thread can delay audio by a few tens of ms until the drift
+correction (max 0.5%) consumes the surplus. Device-timestamp placement
+(`IAudioCaptureClient::GetBuffer` QPC position) would remove that; not done.
+
+Other checks:
+- Microphone (C920), 3 s: audio track present, RMS -41 dBFS, peak -23 dBFS (room noise, not
+  digital silence). File deleted.
+- Webcam bubble (C920), 3 s: ring pixel (255,255,253), bubble drawn from live frames. File deleted.
+  Desktop test `webcam_overlay_records_when_a_camera_exists` passes.
+- HDR color check (`swatch_window` + `hdr_record_probe`): 132,227,108 / 128,128,128 / 255,255,253 on
+  the HDR and the SDR monitor, identical to hdr.md. With the displays off this went through GDI.
+- Click and key visualizer: unit tests only (`overlay::tests`). Driving it needs real input to a
+  foreground window, and this session could not make its own window foreground (foreground lock),
+  so no synthetic input was sent.
+- Desktop tests: all 5 pass (`cargo test -p stinkshot-record --test desktop -- --ignored
+  --test-threads=1`), including the new `records_while_the_capture_session_is_warm`.
+
 ## Contract changes (additive)
 
 - `Recorder::capture_backend(&self) -> &'static str` ("Windows Graphics Capture" or
   "DXGI Desktop Duplication").
 - `primary_monitor_rect() -> Option<PxRect>` free function (used by tests / tools).
+- `decode_all(path, on_video, on_audio)`, `DecodedFrame`, `AudioSink` (doc hidden): decode a
+  whole file for measurement tools.
+- Examples: `av_window`, `av_harness` (A/V sync shakedown), `swatch_window` (HDR check),
+  `rec_probe` (logged short recording; `MIC=1`, `CAM=1`), `dup_probe` (duplication errors per
+  DPI context and frame delivery), `display_state`, `wake_display` (guarded: only when its own
+  window is foreground under the pointer).
 - `Recorder` is now defined in `recorder.rs` and re-exported; its (private) field layout changed.
 - Cargo features added to `windows`: `Win32_Graphics_Gdi`, `Win32_Media`, `Win32_UI_HiDpi`.
   Dev-dependency `gif` for the GIF assertions in the desktop test.
