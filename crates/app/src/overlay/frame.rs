@@ -318,6 +318,13 @@ impl Overlay {
         if self.help_open {
             return vec![("F1", "Close Shortcuts"), ("Esc", "Close Shortcuts")];
         }
+        match self.smart_view() {
+            Some(smart_redact::PanelView::Review(_)) => {
+                return vec![("Enter", "Redact Selected"), ("Esc", "Close Panel"), help];
+            }
+            Some(smart_redact::PanelView::Scanning) => return vec![("Esc", "Close Panel"), help],
+            _ => {}
+        }
         let esc = if self.smart_active() {
             ("Esc", "Close Panel")
         } else if self.annotating()

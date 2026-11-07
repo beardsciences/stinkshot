@@ -126,6 +126,38 @@ fn scan(engine: &dyn OcrEngine, img: &Rgba) -> Result<Vec<Finding>, String> {
         .collect())
 }
 
+/// What Enter / Ctrl+C do while the panel is open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PanelKey {
+    /// Enter in the review list: the same as Redact Selected.
+    Apply,
+    /// Eaten so it cannot copy the unredacted image (Ctrl+C anywhere in the panel, Enter
+    /// while scanning or with nothing ticked).
+    Swallow,
+    /// No panel, or only the "No Sensitive Info Found" notice: the key does its usual job.
+    Pass,
+}
+
+/// The panel decides Enter and Ctrl+C before the editor's Copy shortcut does, so
+/// confirming the dialog never copies the findings in the clear. See smart-redact.md.
+pub fn panel_key(view: Option<&PanelView>, enter: bool) -> PanelKey {
+    match view {
+        None | Some(PanelView::Empty) => PanelKey::Pass,
+        Some(PanelView::Review(r)) if enter && r.on.iter().any(|o| *o) => PanelKey::Apply,
+        Some(_) => PanelKey::Swallow,
+    }
+}
+
+/// Smart Redact strength grows with the found text, so large text never stays readable
+/// (or brute-forceable from a known format) under the user's lighter tool setting:
+/// blur radius at least a third of the box height, pixel blocks at least half of it.
+fn strength(rect: PxRect, params: &ToolParams) -> (f32, u32) {
+    let h = rect.h.max(0) as f32;
+    let radius = params.blur_radius.max(h / 3.0).max(1.0);
+    let block = params.pixelate_block.max((h / 2.0).ceil() as u32).max(2);
+    (radius, block)
+}
+
 /// The shape that redacts `rect` (image px) in `style`.
 pub fn redaction_shape(
     style: RedactStyle,
@@ -133,22 +165,11 @@ pub fn redaction_shape(
     params: &ToolParams,
 ) -> (ShapeKind, Style) {
     let r = RectF::new(rect.x as f32, rect.y as f32, rect.w as f32, rect.h as f32);
+    let (radius, block) = strength(rect, params);
     let (tool, kind) = match style {
         RedactStyle::Box => (Tool::Redact, ShapeKind::Redact { rect: r }),
-        RedactStyle::Blur => (
-            Tool::Blur,
-            ShapeKind::Blur {
-                rect: r,
-                radius: params.blur_radius.max(1.0),
-            },
-        ),
-        RedactStyle::Pixelate => (
-            Tool::Pixelate,
-            ShapeKind::Pixelate {
-                rect: r,
-                block: params.pixelate_block.max(2),
-            },
-        ),
+        RedactStyle::Blur => (Tool::Blur, ShapeKind::Blur { rect: r, radius }),
+        RedactStyle::Pixelate => (Tool::Pixelate, ShapeKind::Pixelate { rect: r, block }),
     };
     let mut st = shapes::style_for_tool(tool, &params.style);
     if style == RedactStyle::Box {
@@ -242,6 +263,18 @@ impl Overlay {
             Phase::Empty(_) => PanelView::Empty,
             Phase::Review(r) => PanelView::Review(r),
         })
+    }
+
+    /// Enter / Ctrl+C while the panel is open; true when the panel handled the key.
+    pub(super) fn smart_key(&mut self, shared: &mut Shared, enter: bool) -> bool {
+        match panel_key(self.smart_view().as_ref(), enter) {
+            PanelKey::Pass => false,
+            PanelKey::Swallow => true,
+            PanelKey::Apply => {
+                self.redact_selected(shared);
+                true
+            }
+        }
     }
 
     pub(super) fn smart_active(&self) -> bool {
@@ -613,8 +646,64 @@ mod tests {
         assert_eq!(s.color, [0, 0, 0, 255]);
         assert!(!s.shadow);
         let (k, _) = redaction_shape(RedactStyle::Blur, r, &params);
-        assert!(matches!(k, ShapeKind::Blur { radius, .. } if radius == 12.0));
+        // 40 px tall: radius at least 40 / 3, more than the tool's 12.
+        assert!(matches!(k, ShapeKind::Blur { radius, .. } if (radius - 40.0 / 3.0).abs() < 1e-4));
         let (k, _) = redaction_shape(RedactStyle::Pixelate, r, &params);
-        assert!(matches!(k, ShapeKind::Pixelate { block: 10, .. }));
+        // 40 px tall: blocks at least 20 px, more than the tool's 10.
+        assert!(matches!(k, ShapeKind::Pixelate { block: 20, .. }));
+    }
+
+    #[test]
+    fn strength_scales_with_text_height() {
+        let params = ToolParams {
+            style: Style {
+                color: [255, 0, 0, 255],
+                width: 4.0,
+                fill: None,
+                shadow: false,
+            },
+            font_size: 20.0,
+            blur_radius: 4.0,
+            pixelate_block: 4,
+        };
+        // Small text keeps the tool setting; tall text gets coarser cells and a wider blur.
+        assert_eq!(strength(PxRect::new(0, 0, 80, 9), &params), (4.0, 5));
+        let (radius, block) = strength(PxRect::new(0, 0, 300, 42), &params);
+        assert_eq!(block, 21);
+        assert!((radius - 14.0).abs() < 1e-4);
+        let (k, _) = redaction_shape(RedactStyle::Blur, PxRect::new(0, 0, 300, 42), &params);
+        assert!(matches!(k, ShapeKind::Blur { radius, .. } if radius >= 14.0));
+    }
+
+    #[test]
+    fn enter_redacts_and_copy_is_held_while_the_panel_is_open() {
+        let finding = Finding {
+            kind: sensitive::SensitiveKind::Email,
+            preview: "masked".into(),
+            rect: PxRect::new(0, 0, 10, 10),
+        };
+        let review = |on: bool| Review {
+            findings: vec![finding.clone()],
+            on: vec![on],
+            hovered: None,
+            style: RedactStyle::Box,
+        };
+        let r = review(true);
+        let view = PanelView::Review(&r);
+        assert_eq!(panel_key(Some(&view), true), PanelKey::Apply);
+        assert_eq!(panel_key(Some(&view), false), PanelKey::Swallow);
+        let none = review(false);
+        let view = PanelView::Review(&none);
+        assert_eq!(panel_key(Some(&view), true), PanelKey::Swallow);
+        assert_eq!(
+            panel_key(Some(&PanelView::Scanning), true),
+            PanelKey::Swallow
+        );
+        assert_eq!(
+            panel_key(Some(&PanelView::Scanning), false),
+            PanelKey::Swallow
+        );
+        assert_eq!(panel_key(Some(&PanelView::Empty), true), PanelKey::Pass);
+        assert_eq!(panel_key(None, true), PanelKey::Pass);
     }
 }

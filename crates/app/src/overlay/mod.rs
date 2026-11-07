@@ -832,6 +832,9 @@ impl Overlay {
             self.on_escape(shared);
             return;
         }
+        if (k.enter || k.copy_event) && self.smart_key(shared, k.enter) {
+            return;
+        }
         if k.enter || k.copy_event {
             match self.kind {
                 Kind::Select(_) => {
