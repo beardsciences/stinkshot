@@ -74,7 +74,7 @@ pub fn freeze_all(include_cursor: bool) -> anyhow::Result<Frozen> {
         anyhow::bail!("no monitors found");
     }
     let cursor = crate::input::cursor_pos();
-    let mut image = capture_region(bounds)?;
+    let mut image = capture_region(bounds, false)?;
     if include_cursor {
         draw_cursor(
             &mut image,
@@ -97,7 +97,7 @@ pub fn capture_rect(rect: PxRect, include_cursor: bool) -> anyhow::Result<Rgba> 
     if rect.is_empty() {
         anyhow::bail!("capture rect is empty");
     }
-    let mut image = capture_region(rect)?;
+    let mut image = capture_region(rect, true)?;
     if include_cursor {
         draw_cursor(
             &mut image,
@@ -358,6 +358,8 @@ struct OutputDup {
     shadow: Option<ID3D11Texture2D>,
     staging: Option<ID3D11Texture2D>,
     has_image: bool,
+    /// When the shadow last received a new picture (duplication frame or GDI seed).
+    image_at: Option<std::time::Instant>,
     /// Whether the first (untrusted) duplication frame has been consumed.
     seen_first: bool,
     /// HDR state and SDR white level. With advanced color on, the duplication delivers FP16
@@ -400,6 +402,10 @@ static SESSION: Mutex<Option<Session>> = Mutex::new(None);
 const FIRST_FRAME_TIMEOUT_MS: u32 = 300;
 /// Cached sessions already hold the full image; only pick up a pending update.
 const CACHED_FRAME_TIMEOUT_MS: u32 = 2;
+/// Live captures (`capture_rect`) use GDI unless the shadow was updated this recently,
+/// i.e. the duplication delivered a frame for this very call. Scrolling waits at least
+/// 30 ms between steps, so an older picture may predate the last scroll.
+const LIVE_MAX_AGE: std::time::Duration = std::time::Duration::from_millis(20);
 
 fn current_layout() -> Vec<PxRect> {
     monitors::list().iter().map(|m| m.rect).collect()
@@ -479,6 +485,7 @@ impl Session {
                         shadow: None,
                         staging: None,
                         has_image: false,
+                        image_at: None,
                         seen_first: false,
                         color,
                     });
@@ -514,14 +521,16 @@ impl Session {
         true
     }
 
-    fn capture(&mut self, rect: PxRect, first: bool) -> anyhow::Result<Rgba> {
+    /// `live`: the caller needs the screen as it is now (scrolling capture), not the last
+    /// picture the duplication delivered; see `OutputDup::grab`.
+    fn capture(&mut self, rect: PxRect, first: bool, live: bool) -> anyhow::Result<Rgba> {
         let mut img = Rgba::filled(rect.w as u32, rect.h as u32, [0, 0, 0, 255]);
         for out in &mut self.outputs {
             let Some(inter) = out.rect.intersect(&rect) else {
                 continue;
             };
             let local = inter.translate(-out.rect.x, -out.rect.y);
-            let tile = out.grab(local, inter, first)?;
+            let tile = out.grab(local, inter, first, live)?;
             if inter == rect {
                 return Ok(tile);
             }
@@ -627,6 +636,7 @@ impl OutputDup {
                         // size and format.
                         unsafe { self.ctx.CopyResource(shadow, &tex) };
                         self.has_image = true;
+                        self.image_at = Some(std::time::Instant::now());
                     }
                     Ok(())
                 })();
@@ -700,7 +710,19 @@ impl OutputDup {
 
     /// Pixels of `local` (output-local px). `virt` is the same rect in virtual coords, used
     /// by the GDI fallback.
-    fn grab(&mut self, local: PxRect, virt: PxRect, first: bool) -> anyhow::Result<Rgba> {
+    ///
+    /// `live`: when the shadow has not been updated for `LIVE_MAX_AGE` the region is taken
+    /// with GDI instead. A duplication delivers nothing while the screen is static, which
+    /// is fine for a freeze, but it also stays silent while the screen changes when the
+    /// displays are idle-off (DWM stops feeding duplications; measured Nov 7 2026): a
+    /// scrolling capture then saw the same picture every step and ended after one frame.
+    fn grab(
+        &mut self,
+        local: PxRect,
+        virt: PxRect,
+        first: bool,
+        live: bool,
+    ) -> anyhow::Result<Rgba> {
         if self.dup.is_some() {
             let timeout = if first {
                 FIRST_FRAME_TIMEOUT_MS
@@ -710,12 +732,17 @@ impl OutputDup {
             let mut state = self.refresh(timeout);
             if matches!(state, Ok(false)) {
                 match self.seed_from_gdi() {
-                    Ok(true) => state = Ok(true),
+                    Ok(true) => {
+                        self.image_at = Some(std::time::Instant::now());
+                        state = Ok(true)
+                    }
                     Ok(false) => {}
                     Err(e) => log::debug!("seeding duplication shadow failed: {e}"),
                 }
             }
+            let stale = self.image_at.is_none_or(|t| t.elapsed() > LIVE_MAX_AGE);
             match state {
+                Ok(true) if live && stale => {}
                 Ok(true) => match self.read_back(local) {
                     Ok(Some(img)) => return Ok(img),
                     Ok(None) => {}
@@ -850,7 +877,7 @@ impl OutputDup {
     }
 }
 
-fn capture_region(rect: PxRect) -> anyhow::Result<Rgba> {
+fn capture_region(rect: PxRect, live: bool) -> anyhow::Result<Rgba> {
     let mut guard = SESSION.lock().unwrap_or_else(|p| p.into_inner());
     for attempt in 0..2 {
         let stale = guard
@@ -870,7 +897,7 @@ fn capture_region(rect: PxRect) -> anyhow::Result<Rgba> {
         let Some(session) = guard.as_mut() else {
             return gdi_capture(rect);
         };
-        match session.capture(rect, first) {
+        match session.capture(rect, first, live) {
             Ok(img) => return Ok(img),
             Err(e) if e.is::<AccessLost>() && attempt == 0 => {
                 // Mode change, secure desktop, or driver reset: rebuild the session once.
