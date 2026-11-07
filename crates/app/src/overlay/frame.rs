@@ -1,19 +1,35 @@
-//! Per-frame driver: input -> state, render cache upkeep, canvas painting and chrome.
+//! Per-frame driver: input -> state, render cache upkeep, canvas painting and chrome, and
+//! typing straight onto the image (live rendered text with a caret and selection).
 
-use egui::{Align2, FontId, Frame, Id, Margin, Modifiers, TextEdit};
+use egui::{Id, Modifiers};
+use stinkshot_core::annotate;
 
 use super::paint::{
-    around, color32, dashed_rect, paint_loupe, paint_selection_chrome, paint_shape,
-    paint_shape_handles, paint_spotlight_dim,
+    around, color32, dashed_rect, paint_group_box, paint_guides, paint_loupe, paint_marquee,
+    paint_selected_outline, paint_selection_chrome, paint_shape, paint_shape_handles,
+    paint_spotlight_dim,
 };
 use super::*;
 
-fn rect_pt(r: PxRect, k: f32) -> Rect {
-    Rect::from_min_size(
-        Pos2::new(r.x as f32 * k, r.y as f32 * k),
-        Vec2::new(r.w as f32 * k, r.h as f32 * k),
-    )
+/// Draw a rendered shape patch (image px rect) through the image mapping.
+fn paint_patch(painter: &egui::Painter, m: ImgToPt, rect: PxRect, tex: &egui::TextureHandle) {
+    let r = m.r(RectF::new(
+        rect.x as f32,
+        rect.y as f32,
+        rect.w as f32,
+        rect.h as f32,
+    ));
+    painter.image(
+        tex.id(),
+        r,
+        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+        Color32::WHITE,
+    );
 }
+
+/// Caret blink: solid for this long after typing or moving, then on/off at this period.
+const CARET_SOLID: Duration = Duration::from_millis(500);
+const CARET_BLINK: Duration = Duration::from_millis(530);
 
 impl Overlay {
     pub(super) fn frame(&mut self, ctx: &Context, shared: &mut Shared) -> SurfaceStatus {
@@ -32,9 +48,14 @@ impl Overlay {
         if self.finishing.is_some() {
             self.poll_finish(ctx, shared);
         } else {
-            let inp = Self::read_input(ctx, ppp);
+            let inp = self.read_input(ctx, ppp);
             let keys = Self::read_keys(ctx);
-            self.handle_keys(ctx, shared, &keys, &inp);
+            // Typing owns the keyboard; Esc that ends typing must not also deselect.
+            let was_editing = self.edit.is_some();
+            self.text_keys(ctx);
+            if !was_editing {
+                self.handle_keys(ctx, shared, &keys, &inp);
+            }
             if !self.closed {
                 self.handle_pointer(ctx, shared, &inp);
             }
@@ -47,8 +68,9 @@ impl Overlay {
         let inp = if self.finishing.is_some() {
             Input::default()
         } else {
-            Self::read_input(ctx, ppp)
+            self.read_input(ctx, ppp)
         };
+        self.update_text_patch(ctx);
         self.paint_canvas(ctx, shared, &inp, ppp);
         let mut actions = Vec::new();
         self.paint_ui(ctx, shared, &inp, ppp, &mut actions);
@@ -63,36 +85,49 @@ impl Overlay {
 
     // ---------------------------------------------------------------- render cache
 
-    fn clear_render_cache(&mut self) {
-        self.rendered_tex = None;
-        self.rendered_doc = None;
-        self.rendered_img = None;
-        self.submitted = None;
-    }
-
     fn poll_render(&mut self, ctx: &Context) {
-        let result = self.renderer.as_ref().and_then(|r| r.poll());
-        if let Some(r) = result
-            && self.submitted.as_ref() == Some(&r.doc)
-        {
-            match r.image {
-                Some(img) => {
-                    self.rendered_tex = Some(TiledTexture::upload(ctx, "ov-rendered", &img, false));
-                    self.rendered_img = Some(Arc::new(img));
+        let results = self.renderer.as_ref().map(|r| r.poll()).unwrap_or_default();
+        for r in results {
+            match r.out {
+                Some(render::RenderOut::Full(tiles)) => {
+                    self.rendered_tex = Some(TiledTexture::from_tiles(ctx, "ov-rendered", tiles));
                     self.rendered_doc = Some(r.doc);
                     self.render_ok = true;
                 }
+                Some(render::RenderOut::Patch(pieces)) => {
+                    // Patches build on the texture the worker last sent; without it (the
+                    // cache was dropped meanwhile) the next submit asks for a full image.
+                    let ok = self.rendered_tex.as_mut().is_some_and(|t| t.patch(pieces));
+                    match ok {
+                        true => {
+                            self.rendered_doc = Some(r.doc);
+                            self.render_ok = true;
+                        }
+                        false => {
+                            self.rendered_tex = None;
+                            self.rendered_doc = None;
+                            self.submitted = None;
+                        }
+                    }
+                }
                 None => {
                     self.rendered_tex = None;
-                    self.rendered_img = None;
                     self.rendered_doc = Some(r.doc);
                     self.render_ok = false;
                 }
             }
         }
         if self.live_release_pending && self.rendered_doc.as_ref() == Some(&self.doc) {
-            self.live = None;
+            self.live.clear();
             self.live_release_pending = false;
+        }
+        if self.settled_text.as_ref().is_some_and(|p| {
+            self.rendered_doc
+                .as_ref()
+                .is_some_and(|d| d.get(p.shape.id) == Some(&p.shape))
+                || self.doc.get(p.shape.id) != Some(&p.shape)
+        }) {
+            self.settled_text = None;
         }
     }
 
@@ -103,7 +138,7 @@ impl Overlay {
         }
         if self.doc.shapes.is_empty() {
             self.clear_render_cache();
-            self.live = None;
+            self.live.clear();
             self.live_release_pending = false;
             return;
         }
@@ -114,7 +149,7 @@ impl Overlay {
         let rd = if self.live_release_pending {
             self.doc.clone()
         } else {
-            shapes::doc_without(&self.doc, self.live)
+            shapes::doc_without(&self.doc, &self.live)
         };
         if rd.shapes.is_empty() {
             self.clear_render_cache();
@@ -123,21 +158,301 @@ impl Overlay {
         if self.submitted.as_ref() != Some(&rd) {
             let base = self.ensure_base();
             let fonts = self.fonts.clone();
+            let need_full = self.rendered_tex.is_none();
             self.submitted = Some(rd.clone());
             if let Some(r) = self.renderer.as_mut() {
-                r.submit(base, rd, fonts);
+                r.submit(base, rd, fonts, need_full);
             }
         }
     }
 
     /// Shapes the cached render does not (yet) show correctly are painted live.
     fn needs_live_paint(&self, s: &Shape) -> bool {
-        if Some(s.id) == self.live || !self.render_ok {
+        if self.live.contains(&s.id) || !self.render_ok {
             return true;
         }
         match &self.rendered_doc {
             Some(d) => d.get(s.id) != Some(s),
             None => true,
+        }
+    }
+
+    // ---------------------------------------------------------------- typing on the image
+
+    /// Re-render the text being typed when it changed (exact final pixels, small canvas).
+    fn update_text_patch(&mut self, ctx: &Context) {
+        let Some(e) = self.edit.as_ref() else { return };
+        let Some(shape) = self.doc.get(e.id).cloned() else {
+            return;
+        };
+        if e.patch.as_ref().is_some_and(|p| p.shape == shape) {
+            return;
+        }
+        let patch = annotate::render_shape_patch(&shape, &self.fonts).map(|(rect, img)| {
+            let ci = egui::ColorImage::from_rgba_unmultiplied(
+                [img.width as usize, img.height as usize],
+                &img.data,
+            );
+            let tex = ctx.load_texture(
+                "ov-text-edit",
+                ci,
+                egui::TextureOptions {
+                    magnification: egui::TextureFilter::Linear,
+                    minification: egui::TextureFilter::Linear,
+                    ..egui::TextureOptions::LINEAR
+                },
+            );
+            (rect, tex)
+        });
+        if let Some(e) = self.edit.as_mut() {
+            e.patch = Some(match patch {
+                Some((rect, tex)) => TextPatch {
+                    shape,
+                    rect,
+                    tex: Some(tex),
+                },
+                None => TextPatch {
+                    shape,
+                    rect: PxRect::default(),
+                    tex: None,
+                },
+            });
+        }
+    }
+
+    /// Keyboard while typing on the image: characters, caret movement and selection,
+    /// clipboard, Enter for a new line, Esc or Ctrl+Enter to finish, Ctrl+B for bold.
+    fn text_keys(&mut self, ctx: &Context) {
+        if self.edit.is_none() {
+            return;
+        }
+        let (done, events) = ctx.input_mut(|i| {
+            let done = i.consume_key(Modifiers::NONE, Key::Escape)
+                || i.consume_key(Modifiers::COMMAND, Key::Enter);
+            (done, i.events.clone())
+        });
+        if done {
+            self.commit_text();
+            return;
+        }
+        let mut changed = false;
+        let mut bold = false;
+        let mut vertical: Option<i32> = None;
+        let mut line_edge: Option<(bool, bool)> = None;
+        if let Some(e) = self.edit.as_mut() {
+            for ev in events {
+                match ev {
+                    Event::Text(t) => {
+                        let t: String = t.chars().filter(|c| !c.is_control()).collect();
+                        if !t.is_empty() {
+                            e.caret.insert(&mut e.buffer, &t);
+                            changed = true;
+                        }
+                    }
+                    Event::Paste(t) => {
+                        let t = t.replace("\r\n", "\n");
+                        e.caret.insert(&mut e.buffer, &t);
+                        changed = true;
+                    }
+                    Event::Copy | Event::Cut => {
+                        let sel = e.caret.selected(&e.buffer).to_string();
+                        if !sel.is_empty() {
+                            if let Err(err) = clipboard::set_text(&sel) {
+                                log::warn!("copy text: {err:#}");
+                            }
+                            if matches!(ev, Event::Cut) {
+                                e.caret.insert(&mut e.buffer, "");
+                                changed = true;
+                            }
+                        }
+                    }
+                    Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } => {
+                        let word = modifiers.command;
+                        let ext = modifiers.shift;
+                        match key {
+                            Key::Enter if !modifiers.command => {
+                                e.caret.insert(&mut e.buffer, "\n");
+                                changed = true;
+                            }
+                            Key::Backspace => {
+                                e.caret.backspace(&mut e.buffer, word);
+                                changed = true;
+                            }
+                            Key::Delete => {
+                                e.caret.delete(&mut e.buffer, word);
+                                changed = true;
+                            }
+                            Key::ArrowLeft => e.caret.left(&e.buffer, word, ext),
+                            Key::ArrowRight => e.caret.right(&e.buffer, word, ext),
+                            Key::ArrowUp => vertical = Some(-1),
+                            Key::ArrowDown => vertical = Some(1),
+                            Key::Home => line_edge = Some((false, ext)),
+                            Key::End => line_edge = Some((true, ext)),
+                            Key::A if modifiers.command => e.caret.select_all(&e.buffer),
+                            Key::B if modifiers.command => bold = true,
+                            _ => {}
+                        }
+                        if modifiers.shift && !matches!(key, Key::Enter) {
+                            vertical = vertical.map(|v| v * 2);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            e.caret.clamp(&e.buffer);
+            e.blink_from = Instant::now();
+            if changed {
+                let (id, text) = (e.id, e.buffer.clone());
+                if let Some(s) = self.doc.get_mut(id) {
+                    shapes::set_text(&mut s.kind, &text);
+                }
+            }
+        }
+        if let Some(v) = vertical {
+            self.caret_vertical(v.signum(), v.abs() > 1);
+        }
+        if let Some((end, ext)) = line_edge {
+            self.caret_line_edge(end, ext);
+        }
+        if bold {
+            self.toggle_bold();
+        }
+    }
+
+    /// Caret (x, line top, line height) in image px for byte offset `i`.
+    fn caret_pos(&self, i: usize) -> Option<(f32, f32, f32)> {
+        let e = self.edit.as_ref()?;
+        let shape = self.doc.get(e.id)?;
+        let (size, bold, lines) = annotate::text_layout(&self.fonts, &shape.kind)?;
+        let ranges: Vec<std::ops::Range<usize>> = lines.iter().map(|l| l.range.clone()).collect();
+        let li = textedit::line_of(&ranges, i);
+        let line = lines.get(li)?;
+        let end = i.clamp(line.range.start, line.range.end);
+        let x = line.origin.x
+            + self
+                .fonts
+                .line_width(&e.buffer[line.range.start..end], size, bold);
+        Some((x, line.origin.y, size * stinkshot_core::fonts::LINE_HEIGHT))
+    }
+
+    fn caret_vertical(&mut self, dir: i32, extend: bool) {
+        let Some(cur) = self.edit.as_ref().map(|e| e.caret.cursor) else {
+            return;
+        };
+        let Some((x, top, lh)) = self.caret_pos(cur) else {
+            return;
+        };
+        let y = top + lh / 2.0 + dir as f32 * lh;
+        if let Some(i) = self.caret_at(PtF::new(x, y))
+            && let Some(e) = self.edit.as_mut()
+        {
+            e.caret.move_to(i, extend);
+        }
+    }
+
+    fn caret_line_edge(&mut self, end: bool, extend: bool) {
+        let Some(e) = self.edit.as_ref() else { return };
+        let Some(shape) = self.doc.get(e.id) else {
+            return;
+        };
+        let Some((_, _, lines)) = annotate::text_layout(&self.fonts, &shape.kind) else {
+            return;
+        };
+        let ranges: Vec<std::ops::Range<usize>> = lines.iter().map(|l| l.range.clone()).collect();
+        let li = textedit::line_of(&ranges, e.caret.cursor);
+        if let Some(r) = ranges.get(li).cloned()
+            && let Some(e) = self.edit.as_mut()
+        {
+            e.caret.move_to(if end { r.end } else { r.start }, extend);
+        }
+    }
+
+    /// The text being typed: its rendered pixels, the selection and the caret.
+    fn paint_text_edit(&self, painter: &egui::Painter, ctx: &Context, m: ImgToPt, accent: Color32) {
+        let Some(e) = self.edit.as_ref() else { return };
+        let Some(shape) = self.doc.get(e.id) else {
+            return;
+        };
+        if let Some(TextPatch {
+            rect,
+            tex: Some(tex),
+            ..
+        }) = &e.patch
+        {
+            paint_patch(painter, m, *rect, tex);
+        }
+        let Some((size, bold, lines)) = annotate::text_layout(&self.fonts, &shape.kind) else {
+            return;
+        };
+        let lh = size * stinkshot_core::fonts::LINE_HEIGHT;
+        // Selection: one band per line.
+        let sel = e.caret.range();
+        if !sel.is_empty() {
+            for l in &lines {
+                let a = sel.start.max(l.range.start);
+                let b = sel.end.min(l.range.end);
+                // A selected line break shows as a short band at the line end.
+                let crosses = sel.end > l.range.end && sel.start <= l.range.end;
+                if a > b || (a == b && !crosses) {
+                    continue;
+                }
+                let x0 = l.origin.x
+                    + self
+                        .fonts
+                        .line_width(&e.buffer[l.range.start..a], size, bold);
+                let mut x1 = l.origin.x
+                    + self
+                        .fonts
+                        .line_width(&e.buffer[l.range.start..b], size, bold);
+                if crosses {
+                    x1 += size * 0.3;
+                }
+                painter.rect_filled(
+                    m.r(RectF::new(x0, l.origin.y, (x1 - x0).max(1.0), lh)),
+                    0.0,
+                    accent.gamma_multiply(0.35),
+                );
+            }
+        }
+        // Caret: text-colored with a thin contrasting edge, blinking after a moment.
+        let since = e.blink_from.elapsed();
+        let on = since < CARET_SOLID
+            || ((since - CARET_SOLID).as_millis() / CARET_BLINK.as_millis()) % 2 == 1;
+        let wait = if since < CARET_SOLID {
+            CARET_SOLID - since
+        } else {
+            let p = CARET_BLINK.as_millis() as u64;
+            Duration::from_millis(p - ((since - CARET_SOLID).as_millis() as u64 % p))
+        };
+        ctx.request_repaint_after(wait);
+        if on && let Some((x, top, lh)) = self.caret_pos(e.caret.cursor) {
+            let ink = match &shape.kind {
+                ShapeKind::Callout { .. } => {
+                    let t = hover::contrast_text(shape.style.fill.unwrap_or(shape.style.color));
+                    Color32::from_rgb(t[0], t[1], t[2])
+                }
+                _ => color32([
+                    shape.style.color[0],
+                    shape.style.color[1],
+                    shape.style.color[2],
+                    255,
+                ]),
+            };
+            let a = m.p(PtF::new(x, top + lh * 0.08));
+            let b = m.p(PtF::new(x, top + lh * 0.92));
+            let w = (m.len(size) / 14.0).clamp(1.5, 3.0);
+            let edge = if theme::luminance(ink) > 0.5 {
+                Color32::from_black_alpha(140)
+            } else {
+                Color32::from_white_alpha(170)
+            };
+            painter.line_segment([a, b], egui::Stroke::new(w + 2.0, edge));
+            painter.line_segment([a, b], egui::Stroke::new(w, ink));
         }
     }
 
@@ -152,20 +467,38 @@ impl Overlay {
             Vec2::new(self.bounds.w as f32 * k, self.bounds.h as f32 * k),
         );
         let painter = ctx.layer_painter(LayerId::background());
+        let zoomed = !self.view.is_identity();
+        if zoomed {
+            painter.rect_filled(screen, 0.0, Color32::from_rgb(0x10, 0x10, 0x12));
+        }
+        let origin_pt = Pos2::new(self.view.off.0 * k, self.view.off.1 * k);
+        let kz = k * self.view.zoom;
         if let Some(t) = &self.frozen_tex {
-            t.paint(&painter, Pos2::ZERO, k, Color32::WHITE);
+            t.paint(&painter, origin_pt, kz, Color32::WHITE);
+        }
+        // The editor shows the whole picture (cropped-away parts dim like the screen).
+        if matches!(self.kind, Kind::Annotate)
+            && let Some(t) = &self.base_tex
+        {
+            let (x, y) = self.view.to_screen(self.img_origin);
+            t.paint(
+                &painter,
+                Pos2::new(x * k, y * k),
+                kz * self.scale,
+                Color32::WHITE,
+            );
         }
 
         let preview = self.preview_rect(inp.shift);
         let clear_px = preview.or(self.sel).or(self.hover);
-        let clear = clear_px.map(|r| rect_pt(r, k).intersect(screen));
+        let clear = clear_px.map(|r| self.canvas_rect_pt(r, ppp).intersect(screen));
         match clear {
-            Some(c) => {
+            Some(c) if c.is_positive() => {
                 for r in around(screen, c) {
                     painter.rect_filled(r, 0.0, pal.overlay_dim);
                 }
             }
-            None => {
+            _ => {
                 painter.rect_filled(screen, 0.0, pal.overlay_dim);
             }
         }
@@ -178,65 +511,93 @@ impl Overlay {
                 .last_region
                 .and_then(|r| hover::virtual_to_local(r, self.bounds))
         {
-            dashed_rect(&painter, rect_pt(lr, k), Color32::from_white_alpha(70));
+            dashed_rect(
+                &painter,
+                self.canvas_rect_pt(lr, ppp),
+                Color32::from_white_alpha(70),
+            );
         }
 
         // Selection contents.
-        if let (Some(sel), true) = (self.sel, self.annotating()) {
-            let sel_pt = rect_pt(sel, k);
-            let kk = k * self.scale;
+        if let (Some(sel), true, Some(m)) = (self.sel, self.annotating(), self.img_to_pt(ppp)) {
+            let sel_pt = self.canvas_rect_pt(sel, ppp);
             let drawn_render = self.rendered_tex.is_some() && self.rendered_doc.is_some();
-            match self.kind {
-                Kind::Annotate => {
-                    if drawn_render {
-                        if let Some(t) = &self.rendered_tex {
-                            t.paint(&painter, sel_pt.min, kk, Color32::WHITE);
-                        }
-                    } else if let Some(t) = &self.base_tex {
-                        t.paint(&painter, sel_pt.min, kk, Color32::WHITE);
-                    }
-                }
-                _ => {
-                    if drawn_render && let Some(t) = &self.rendered_tex {
-                        t.paint(&painter, sel_pt.min, kk, Color32::WHITE);
-                    }
-                }
+            if drawn_render && let Some(t) = &self.rendered_tex {
+                t.paint(&painter, m.origin, m.k, Color32::WHITE);
             }
 
             // Live previews, clipped to the selection.
-            let clip = painter.with_clip_rect(sel_pt);
-            let m = ImgToPt {
-                origin: sel_pt.min,
-                k: kk,
-            };
+            let clip = painter.with_clip_rect(sel_pt.intersect(screen));
             let editing = self.edit.as_ref().map(|e| e.id);
             for s in &self.doc.shapes {
+                if editing == Some(s.id) {
+                    continue;
+                }
                 if self.needs_live_paint(s) {
+                    if let Some(p) = self.settled_text.as_ref().filter(|p| p.shape == *s)
+                        && let Some(tex) = &p.tex
+                    {
+                        paint_patch(&clip, m, p.rect, tex);
+                        continue;
+                    }
                     if let ShapeKind::Spotlight { rect, dim } = &s.kind {
                         paint_spotlight_dim(&clip, sel_pt, m.r(*rect), *dim);
                     }
-                    paint_shape(&clip, m, s, editing == Some(s.id));
+                    paint_shape(&clip, m, s, false);
                 }
             }
+            self.paint_text_edit(&clip, ctx, m, accent);
             self.paint_drag_preview(&clip, m, inp);
             self.paint_smart_findings(&clip, m, accent);
 
-            if self.edit.is_none()
-                && let Some(s) = self.selected.and_then(|id| self.doc.get(id))
-            {
-                let measure = self.measurer();
-                paint_shape_handles(&painter, m, s, accent, &measure);
+            let measure = self.measurer();
+            if self.edit.is_none() {
+                if let Some(s) = self.sel_one().and_then(|id| self.doc.get(id)) {
+                    let hot = match (&self.drag, self.hover_handle) {
+                        (Drag::ResizeShape { handle, .. }, _) => Some(*handle),
+                        (_, Some(HoverHandle::Shape(h))) => Some(h),
+                        _ => None,
+                    };
+                    paint_shape_handles(&painter, m, s, accent, &measure, hot);
+                } else if self.selected.len() > 1 {
+                    for s in self
+                        .doc
+                        .shapes
+                        .iter()
+                        .filter(|s| self.selected.contains(&s.id))
+                    {
+                        paint_selected_outline(&painter, m, s, &measure);
+                    }
+                    if let Some(b) = shapes::group_bounds(&self.doc, &self.selected, &measure) {
+                        paint_group_box(&painter, m.r(b), accent);
+                    }
+                }
             }
+            if let Some(r) = self.marquee_rect() {
+                paint_marquee(&painter, m.r(r), accent);
+            }
+            paint_guides(&painter, m, &self.guides, accent);
         }
 
         // Selection / hover / drag chrome.
         if let Some(r) = preview {
-            paint_selection_chrome(&painter, rect_pt(r, k), accent, false);
+            paint_selection_chrome(&painter, self.canvas_rect_pt(r, ppp), accent, false, None);
         } else if let Some(sel) = self.sel {
             let handles = self.sel_editable() && self.tool == Tool::Select && self.edit.is_none();
-            paint_selection_chrome(&painter, rect_pt(sel, k), accent, handles);
+            let hot = match (&self.drag, self.hover_handle) {
+                (Drag::ResizeSel { handle, .. }, _) => Some(*handle),
+                (_, Some(HoverHandle::Sel(h))) => Some(h),
+                _ => None,
+            };
+            paint_selection_chrome(
+                &painter,
+                self.canvas_rect_pt(sel, ppp),
+                accent,
+                handles,
+                hot,
+            );
         } else if let Some(h) = self.hover {
-            paint_selection_chrome(&painter, rect_pt(h, k), accent, false);
+            paint_selection_chrome(&painter, self.canvas_rect_pt(h, ppp), accent, false, None);
         }
     }
 
@@ -311,12 +672,16 @@ impl Overlay {
                 ("Esc", "Done"),
                 ("Ctrl+Enter", "Done"),
                 ("Enter", "New Line"),
+                (keys::BOLD.label, "Bold"),
             ];
         }
         // Esc steps back one level before it cancels; say which.
         let help = ("?", "Shortcuts");
         if self.help_open {
             return vec![("F1", "Close Shortcuts"), ("Esc", "Close Shortcuts")];
+        }
+        if self.picking {
+            return vec![("Click", "Pick Color"), ("Esc", "Cancel"), help];
         }
         match self.smart_view() {
             Some(smart_redact::PanelView::Review(_)) => {
@@ -329,7 +694,7 @@ impl Overlay {
             ("Esc", "Close Panel")
         } else if self.annotating()
             && self.sel.is_some()
-            && (self.selected.is_some() || self.tool != Tool::Select)
+            && (!self.selected.is_empty() || self.tool != Tool::Select)
         {
             ("Esc", "Deselect")
         } else if self.discard_prompt_active() {
@@ -337,6 +702,17 @@ impl Overlay {
         } else {
             ("Esc", "Cancel")
         };
+        if self.annotating() && self.sel.is_some() && !self.selected.is_empty() {
+            // Ctrl+C copies the shapes now; say so, and that Enter still copies the image.
+            return vec![
+                ("Enter", "Copy Image"),
+                (keys::COPY.label, "Copy Shapes"),
+                (keys::DUPLICATE.label, "Duplicate"),
+                ("Del", "Delete"),
+                esc,
+                help,
+            ];
+        }
         match (self.sel.is_some(), self.kind) {
             (false, _) => vec![
                 ("Drag", "Region"),
@@ -350,7 +726,7 @@ impl Overlay {
                 ("Enter", "Copy"),
                 (keys::SAVE.label, "Save"),
                 (keys::UNDO.label, "Undo"),
-                ("Del", "Delete"),
+                ("Ctrl+Wheel", "Zoom"),
                 esc,
                 help,
             ],
@@ -365,6 +741,33 @@ impl Overlay {
         }
     }
 
+    /// The context bar for the text being typed or the one selected arrow / text.
+    fn context_bar_state(&self) -> Option<(ShapeId, ui::ContextBar)> {
+        let id = self.edit.as_ref().map(|e| e.id).or(self.sel_one())?;
+        let s = self.doc.get(id)?;
+        let bar = match &s.kind {
+            ShapeKind::Text {
+                bold,
+                background,
+                size,
+                ..
+            } => ui::ContextBar::Text {
+                bold: *bold,
+                pill: background.is_some(),
+                size: *size,
+            },
+            ShapeKind::Arrow {
+                double, head, ctrl, ..
+            } => ui::ContextBar::Arrow {
+                double: *double,
+                head: *head,
+                curved: ctrl.is_some(),
+            },
+            _ => return None,
+        };
+        Some((id, bar))
+    }
+
     fn paint_ui(
         &mut self,
         ctx: &Context,
@@ -376,11 +779,11 @@ impl Overlay {
         let k = 1.0 / ppp;
         let pal = theme::palette(shared.dark);
         let accent = color32(shared.accent);
-        let ref_local = inp
-            .pos
-            .or(self.last_pointer)
+        let ref_screen = inp
+            .spos
+            .or(self.last_screen)
             .unwrap_or((self.cursor_local.0 as f32, self.cursor_local.1 as f32));
-        let (ref_mon, ref_scale) = self.monitor_at((ref_local.0 as i32, ref_local.1 as i32));
+        let (ref_mon, ref_scale) = self.monitor_at((ref_screen.0 as i32, ref_screen.1 as i32));
 
         let busy = self.finishing.is_some();
         if busy {
@@ -396,16 +799,17 @@ impl Overlay {
         }
 
         // Loupe visibility decides where copied-color feedback goes.
-        let loupe_active = shared.config.capture.show_loupe
-            && inp.pos.is_some()
+        let loupe_active = inp.pos.is_some()
             && !inp.over_ui
             && self.edit.is_none()
             && !self.help_open
-            && (self.sel.is_none()
-                || matches!(
-                    self.drag,
-                    Drag::Selecting { .. } | Drag::ResizeSel { .. } | Drag::MoveSel { .. }
-                ));
+            && (self.picking
+                || (shared.config.capture.show_loupe
+                    && (self.sel.is_none()
+                        || matches!(
+                            self.drag,
+                            Drag::Selecting { .. } | Drag::ResizeSel { .. } | Drag::MoveSel { .. }
+                        ))));
         let hex_flash = self.hex_flash_text();
         if hex_flash.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
@@ -424,6 +828,8 @@ impl Overlay {
             Some(text.clone())
         } else if let Some(n) = self.notice_text() {
             Some(n.to_string())
+        } else if self.picking {
+            Some("Pick a Color from the Image".into())
         } else if let Kind::Select(p) = self.kind {
             Some(hover::purpose_label(p).into())
         } else {
@@ -462,6 +868,7 @@ impl Overlay {
             && !self.help_open
             && let (Some(h), Some(label)) = (self.hover, &self.snap_label)
         {
+            let h = self.canvas_rect_screen(h);
             let pos_pt = if (h.y as f32) * k >= 40.0 {
                 Pos2::new(h.x as f32 * k, h.y as f32 * k - 34.0)
             } else {
@@ -475,23 +882,35 @@ impl Overlay {
         let chip_rect = preview.or(self.sel);
         let manipulating = matches!(
             self.drag,
-            Drag::Draw { .. } | Drag::MoveShape { .. } | Drag::ResizeShape { .. }
+            Drag::Draw { .. }
+                | Drag::MoveShapes { moved: true, .. }
+                | Drag::ResizeShape { .. }
+                | Drag::Marquee { .. }
+                | Drag::Pan { .. }
         );
 
-        // Size label + presets above the selection.
+        // Size label + presets above the selection (kept on screen when zoomed in).
         if let (Some(r), false) = (chip_rect, manipulating) {
-            let pos_pt = if (r.y as f32) * k >= 40.0 {
-                Pos2::new(r.x as f32 * k, r.y as f32 * k - 34.0)
+            let rs = self.canvas_rect_screen(r);
+            let mon = self.monitor_for(rs);
+            let y = (rs.y as f32 * k - 34.0).max(mon.y as f32 * k + 52.0);
+            let x = (rs.x as f32 * k).clamp(
+                mon.x as f32 * k + 6.0,
+                (mon.right() as f32 * k - 260.0).max(mon.x as f32 * k + 6.0),
+            );
+            let pos_pt = if (rs.y as f32) * k >= 40.0 {
+                Pos2::new(x, y)
             } else {
-                Pos2::new(r.x as f32 * k + 6.0, r.y as f32 * k + 6.0)
+                Pos2::new(rs.x as f32 * k + 6.0, rs.y as f32 * k + 6.0)
             };
             let size = if matches!(self.kind, Kind::Annotate) {
                 (self.doc.base_width as i32, self.doc.base_height as i32)
             } else {
                 (r.w, r.h)
             };
-            let editable =
-                self.sel_editable() && !matches!(self.kind, Kind::Select(_)) && preview.is_none();
+            let editable = matches!(self.kind, Kind::Capture) && preview.is_none();
+            let zoom = (!self.view.is_identity() || matches!(self.kind, Kind::Annotate))
+                .then(|| view::percent(self.view, self.scale));
             let mut text = std::mem::take(&mut self.exact_text);
             let mut st = ChipState {
                 size,
@@ -501,6 +920,7 @@ impl Overlay {
                 exact_text: &mut text,
                 purpose: None,
                 editable,
+                zoom: zoom.filter(|_| self.sel.is_some() && preview.is_none()),
             };
             ui::size_chips(ctx, pos_pt, &mut st, pal, accent, actions);
             self.exact_text = text;
@@ -514,24 +934,33 @@ impl Overlay {
             && !matches!(self.drag, Drag::Selecting { .. })
             && let Some(sel) = self.sel
         {
+            let sel_s = self.canvas_rect_screen(sel);
             let gap = 8.0 * ppp;
             let tool_px = (self.bar_sizes.0.x * ppp, self.bar_sizes.0.y * ppp);
             let act_px = (self.bar_sizes.1.x * ppp, self.bar_sizes.1.y * ppp);
             // Docked: follows the selection. Undocked (grip dragged): stays where it was
             // left, clamped to the monitor it is on.
-            let ((tx, ty), (ax, ay), mon) = match self.effective_bar_origin(ppp, sel) {
-                Some(origin) => self.undocked_bars(origin, ppp, sel),
+            let ((tx, ty), (ax, ay), mon) = match self.effective_bar_origin(ppp, sel_s) {
+                Some(origin) => self.undocked_bars(origin, ppp, sel_s),
                 None => {
-                    let mon = self.monitor_for(sel);
-                    let (t, a) = selection::layout_bars(sel, mon, tool_px, act_px, gap, gap);
+                    let mon = self.monitor_for(sel_s);
+                    // A zoomed selection can be larger than the monitor: dock to the part
+                    // that is on screen.
+                    let vis = sel_s.intersect(&mon).unwrap_or(sel_s);
+                    let (t, a) = selection::layout_bars(vis, mon, tool_px, act_px, gap, gap);
                     (t, a, mon)
                 }
             };
             self.bar_drawn_at = Some((tx, ty));
+            let (color, width) = match self.sel_one().and_then(|id| self.doc.get(id)) {
+                Some(s) => (shapes::display_color(s), shapes::display_width(s)),
+                None => (self.color, self.width),
+            };
             let info = ui::BarInfo {
                 tool: self.tool,
-                color: self.color,
-                width: self.width,
+                color,
+                width,
+                picking: self.picking,
             };
             let lifted = self.grip_drag.is_some();
             let lay = ui::tool_bar(ctx, Pos2::new(tx * k, ty * k), &info, pal, lifted, actions);
@@ -549,7 +978,10 @@ impl Overlay {
             self.width_btn = lay.width_btn;
 
             // Popups open on the bar's monitor, wherever the bar is.
-            let screen = rect_pt(mon, k);
+            let screen = Rect::from_min_size(
+                Pos2::new(mon.x as f32 * k, mon.y as f32 * k),
+                Vec2::new(mon.w as f32 * k, mon.h as f32 * k),
+            );
 
             // Find Sensitive Info panel: under the action bar, right edges aligned (above
             // it when there is no room below), kept on the bar's monitor.
@@ -585,32 +1017,51 @@ impl Overlay {
                     self.color_btn,
                     screen,
                     &self.palette,
-                    self.color,
+                    &self.recent,
+                    color,
                     pal,
                     actions,
                 ),
-                Some(Popup::Width) => ui::width_popup(
-                    ctx,
-                    self.width_btn,
-                    screen,
-                    self.width,
-                    pal,
-                    accent,
-                    actions,
-                ),
+                Some(Popup::Width) => {
+                    ui::width_popup(ctx, self.width_btn, screen, width, pal, accent, actions)
+                }
                 None => {}
+            }
+
+            // Options for the selected arrow or text (or the text being typed).
+            let quiet = matches!(
+                self.drag,
+                Drag::MoveShapes { moved: true, .. }
+                    | Drag::ResizeShape { .. }
+                    | Drag::Marquee { .. }
+                    | Drag::Pan { .. }
+                    | Drag::Draw { .. }
+            );
+            if !quiet
+                && self.popup.is_none()
+                && let Some((id, bar)) = self.context_bar_state()
+                && let (Some(s), Some(m)) = (self.doc.get(id), self.img_to_pt(ppp))
+            {
+                let measure = self.measurer();
+                let anchor = m.r(shapes::bounds(s, &measure)).expand(6.0);
+                let mon_s = self.monitor_for(self.canvas_rect_screen(sel));
+                let mon_pt = Rect::from_min_size(
+                    Pos2::new(mon_s.x as f32 * k, mon_s.y as f32 * k + 48.0),
+                    Vec2::new(mon_s.w as f32 * k, mon_s.h as f32 * k - 48.0),
+                );
+                ui::context_bar(ctx, anchor, mon_pt, bar, pal, actions);
             }
         }
 
-        self.text_edit_ui(ctx, ppp, accent);
-
-        // Loupe.
-        if loupe_active && let Some(p) = inp.pos {
-            let cell = (p.0.floor() as i32, p.1.floor() as i32);
-            let ptr = Pos2::new(p.0 * k, p.1 * k);
+        // Loupe (and the eyedropper's).
+        if loupe_active && let (Some(p), Some(sp)) = (inp.pos, inp.spos) {
+            let ptr = Pos2::new(sp.0 * k, sp.1 * k);
             let size = paint::LOUPE_CELLS as f32 * paint::LOUPE_CELL;
             let total_h = size + 6.0 + 48.0;
-            let mon = rect_pt(ref_mon, k);
+            let mon = Rect::from_min_size(
+                Pos2::new(ref_mon.x as f32 * k, ref_mon.y as f32 * k),
+                Vec2::new(ref_mon.w as f32 * k, ref_mon.h as f32 * k),
+            );
             let mut x = ptr.x + 24.0;
             let mut y = ptr.y + 24.0;
             if x + size + 8.0 > mon.right() {
@@ -623,19 +1074,25 @@ impl Overlay {
                 Order::Tooltip,
                 Id::unique("stinkshot-ov-loupe"),
             ));
-            let rgb = paint_loupe(
-                &lp,
-                Pos2::new(x, y),
-                &self.frozen_image,
-                cell.0,
-                cell.1,
-                accent,
-            );
+            // In the editor the eyedropper loupe magnifies the picture itself.
+            let (img, cx, cy): (&Rgba, i32, i32) = match (self.kind, &self.orig) {
+                (Kind::Annotate, Some(o)) if self.picking => (
+                    o,
+                    ((p.0 - self.img_origin.0) / self.scale).floor() as i32,
+                    ((p.1 - self.img_origin.1) / self.scale).floor() as i32,
+                ),
+                _ => (&self.frozen_image, p.0.floor() as i32, p.1.floor() as i32),
+            };
+            let rgb = paint_loupe(&lp, Pos2::new(x, y), img, cx, cy, accent);
+            let rgb = if self.picking { self.sample_at(p) } else { rgb };
             let hex = hover::hex_string(rgb);
             ui::loupe_plate(
                 ctx,
                 Pos2::new(x, y + size + 6.0),
-                (cell.0 + self.bounds.x, cell.1 + self.bounds.y),
+                (
+                    p.0.floor() as i32 + self.bounds.x,
+                    p.1.floor() as i32 + self.bounds.y,
+                ),
                 (ref_scale * 100.0).round() as i32,
                 &hex,
                 rgb,
@@ -644,97 +1101,5 @@ impl Overlay {
                 accent,
             );
         }
-    }
-
-    // ---------------------------------------------------------------- inline text editor
-
-    fn text_edit_ui(&mut self, ctx: &Context, ppp: f32, accent: Color32) {
-        if self.edit.is_none() {
-            return;
-        }
-        let (esc, ctrl_enter) = ctx.input_mut(|i| {
-            (
-                i.consume_key(Modifiers::NONE, Key::Escape),
-                i.consume_key(Modifiers::COMMAND, Key::Enter),
-            )
-        });
-        if esc || ctrl_enter {
-            self.commit_text();
-            return;
-        }
-        let (Some(sel), Some(edit_id)) = (self.sel, self.edit.as_ref().map(|e| e.id)) else {
-            return;
-        };
-        let Some(shape) = self.doc.get(edit_id) else {
-            self.edit = None;
-            return;
-        };
-        let Some((pos, size, inner_w)) = shapes::text_anchor(&shape.kind) else {
-            self.edit = None;
-            return;
-        };
-        let k = 1.0 / ppp;
-        let kk = k * self.scale;
-        let origin = Pos2::new(sel.x as f32 * k, sel.y as f32 * k);
-        let at = Pos2::new(origin.x + pos.x * kk, origin.y + pos.y * kk);
-        let font_pt = (size * kk).max(6.0);
-        let col = match &shape.kind {
-            ShapeKind::Callout { .. } => {
-                let t = hover::contrast_text(shape.style.fill.unwrap_or(shape.style.color));
-                Color32::from_rgb(t[0], t[1], t[2])
-            }
-            _ => color32([
-                shape.style.color[0],
-                shape.style.color[1],
-                shape.style.color[2],
-                255,
-            ]),
-        };
-        let measure = self.measurer();
-        let buffer_now = self
-            .edit
-            .as_ref()
-            .map(|e| e.buffer.clone())
-            .unwrap_or_default();
-        let w_pt = match inner_w {
-            Some(w) => w * kk,
-            None => (measure(&buffer_now, size).0 * kk + font_pt * 2.0).max(90.0),
-        };
-
-        let mut changed_text: Option<String> = None;
-        if let Some(edit) = self.edit.as_mut() {
-            let resp = egui::Area::new(Id::unique("stinkshot-ov-text-edit"))
-                .order(Order::Foreground)
-                .fixed_pos(at)
-                .show(ctx, |ui| {
-                    let out = TextEdit::multiline(&mut edit.buffer)
-                        .font(FontId::proportional(font_pt))
-                        .text_color(col)
-                        .frame(Frame::NONE)
-                        .margin(Margin::same(0))
-                        .desired_width(w_pt)
-                        .desired_rows(1)
-                        .lock_focus(true)
-                        .show(ui);
-                    out.response.request_focus();
-                    ui.painter().rect_stroke(
-                        out.response.rect.expand(3.0),
-                        2.0,
-                        egui::Stroke::new(1.0, accent),
-                        egui::epaint::StrokeKind::Outside,
-                    );
-                    out.response.changed()
-                });
-            if resp.inner {
-                changed_text = Some(edit.buffer.clone());
-            }
-            edit.just_started = false;
-        }
-        if let Some(t) = changed_text
-            && let Some(s) = self.doc.get_mut(edit_id)
-        {
-            shapes::set_text(&mut s.kind, &t);
-        }
-        let _ = Align2::LEFT_TOP;
     }
 }

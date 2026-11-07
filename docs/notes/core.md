@@ -77,6 +77,28 @@ All `todo!()` bodies in `crates/core` are implemented. `cargo test -p stinkshot-
 - `Config` and `Privacy` now `#[derive(Default)]` instead of hand-written impls (same values).
 - `config::Capture::open_editor_after_capture` (default false; `#[serde(default)]` on the
   table, so older configs load with it off).
+- Editor polish (Nov 7 2026), all additive with serde defaults:
+  - `ShapeKind::Arrow` gains `ctrl: Option<PtF>` (quadratic control point, curved arrow),
+    `double: bool` (head at both ends) and `head: ArrowHead` (`Notched` default, `Triangle`,
+    `Open`). `ShapeKind::Text` gains `bold: bool`. Missing fields load as straight / single /
+    notched / regular, and default values are not written (`skip_serializing_if`), so a doc
+    without the new features serializes exactly as before. Tests:
+    `old_sidecar_json_loads_with_defaults`, `new_arrow_and_text_fields_round_trip`.
+  - Shared geometry made public so the editor preview matches the renderer:
+    `arrow_parts` (+ `ArrowParts`, `ArrowGeom`), `arrow_centerline`, `arrow_mid`,
+    `ctrl_through`, `follow_ctrl`, `quad_points`, `callout_radius`, `callout_tail_base`,
+    `text_layout` (+ `TextLine`, byte ranges per laid-out line, used for the caret).
+  - `render_region(work, doc, fonts, region)`: the `region` crop of `render(base, doc)` drawn
+    over `work = bake_destructive(base, doc)`; equal to the full render within 2 levels
+    (`region_render_matches_full_render`). The editor's render worker uses it for dirty
+    rectangles.
+  - `render_shape_patch(shape, fonts)`: one vector shape on a small transparent canvas (the
+    editor's live text while typing).
+  - Plain text whose color is dark gets a light halo instead of the black drop shadow.
+  - Callout text wrapping keeps spaces between words exactly as typed (the old wrap dropped a
+    leading space); render and caret share `text_layout`.
+  - `config::Editor::recent_colors` (hex, newest first) and `config::Editor::tool_styles`
+    (`BTreeMap<String, ToolStyle { color, width }>`), both empty by default.
 - No signatures changed.
 
 ## Contract requests

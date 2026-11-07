@@ -1,20 +1,33 @@
 //! Pure annotation-shape math for the editor: bounds, hit testing, translation, resize
-//! handles per shape type, creation from a drag, smoothing, recoloring and sizing.
+//! handles per shape type, creation from a drag, smoothing, recoloring and sizing, z-order,
+//! duplication and the text / arrow option toggles.
 //! All coordinates are float base-image pixels. Text extents come from a `Measure`
 //! callback (the app passes `Fonts::measure`; tests pass a fixed-advance fake) so nothing
-//! here depends on font files or on core's still-evolving geometry helpers.
+//! here depends on font files.
 
-use stinkshot_core::annotate::{Doc, Shape, ShapeId, ShapeKind, Style};
+use stinkshot_core::annotate::{
+    self, ArrowHead, Doc, Shape, ShapeId, ShapeKind, Style, arrow_centerline, arrow_mid,
+    arrow_parts, ctrl_through, follow_ctrl,
+};
 use stinkshot_core::{PtF, RectF};
 
 use super::selection::Handle8;
 
-/// Text extent callback: (text, size_px) -> (width, height).
-pub type Measure<'a> = &'a dyn Fn(&str, f32) -> (f32, f32);
+/// Text extent callback: (text, size_px, bold) -> (width, height).
+pub type Measure<'a> = &'a dyn Fn(&str, f32, bool) -> (f32, f32);
 
 /// Highlighter alpha the editor writes into `Style::color`.
 pub const HIGHLIGHTER_ALPHA: u8 = 0x99;
 pub const MIN_SHAPE: f32 = 2.0;
+/// Text pill padding as a fraction of the font size (matches core's renderer).
+const TEXT_PAD_X: f32 = 0.4;
+const TEXT_PAD_Y: f32 = 0.2;
+/// A curve handle dragged this close (image px) to the chord's middle straightens the arrow.
+pub const STRAIGHTEN_PX: f32 = 4.0;
+/// Font sizes the text size buttons step through.
+pub const TEXT_SIZES: [f32; 16] = [
+    10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 32.0, 40.0, 48.0, 56.0, 64.0, 72.0, 96.0, 128.0,
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Tool {
@@ -55,6 +68,57 @@ impl Tool {
             Tool::Spotlight => "Spotlight (S)",
         }
     }
+
+    /// Key in `[editor.tool_styles]`.
+    pub fn config_key(self) -> &'static str {
+        match self {
+            Tool::Select => "select",
+            Tool::Arrow => "arrow",
+            Tool::Line => "line",
+            Tool::Rect => "rect",
+            Tool::Ellipse => "ellipse",
+            Tool::Pen => "pen",
+            Tool::Highlighter => "highlighter",
+            Tool::Text => "text",
+            Tool::Step => "step",
+            Tool::Blur => "blur",
+            Tool::Pixelate => "pixelate",
+            Tool::Redact => "redact",
+            Tool::Magnifier => "magnifier",
+            Tool::Callout => "callout",
+            Tool::Spotlight => "spotlight",
+        }
+    }
+
+    pub const ALL: [Tool; 15] = [
+        Tool::Select,
+        Tool::Arrow,
+        Tool::Line,
+        Tool::Rect,
+        Tool::Ellipse,
+        Tool::Pen,
+        Tool::Highlighter,
+        Tool::Text,
+        Tool::Step,
+        Tool::Blur,
+        Tool::Pixelate,
+        Tool::Redact,
+        Tool::Magnifier,
+        Tool::Callout,
+        Tool::Spotlight,
+    ];
+
+    pub fn from_config_key(k: &str) -> Option<Tool> {
+        Tool::ALL.into_iter().find(|t| t.config_key() == k)
+    }
+
+    /// Tools whose color / width the editor remembers separately.
+    pub fn has_style(self) -> bool {
+        !matches!(
+            self,
+            Tool::Select | Tool::Blur | Tool::Pixelate | Tool::Spotlight | Tool::Magnifier
+        )
+    }
 }
 
 /// Handle identity on a selected shape.
@@ -67,6 +131,8 @@ pub enum ShapeHandle {
     /// Arrow/line start and end points.
     P1,
     P2,
+    /// Arrow curve handle (the point the curve passes through at its middle).
+    Mid,
     /// Callout tail point.
     Tail,
 }
@@ -90,12 +156,27 @@ pub fn dist_to_segment(p: PtF, a: PtF, b: PtF) -> f32 {
     dist(p, pt(a.x + t * dx, a.y + t * dy))
 }
 
-fn union(a: RectF, b: RectF) -> RectF {
+fn dist_to_polyline(p: PtF, pts: &[PtF]) -> f32 {
+    match pts.len() {
+        0 => f32::INFINITY,
+        1 => dist(p, pts[0]),
+        _ => pts
+            .windows(2)
+            .map(|s| dist_to_segment(p, s[0], s[1]))
+            .fold(f32::INFINITY, f32::min),
+    }
+}
+
+pub fn union(a: RectF, b: RectF) -> RectF {
     let x0 = a.x.min(b.x);
     let y0 = a.y.min(b.y);
     let x1 = (a.x + a.w).max(b.x + b.w);
     let y1 = (a.y + a.h).max(b.y + b.h);
     RectF::new(x0, y0, x1 - x0, y1 - y0)
+}
+
+pub fn intersects(a: RectF, b: RectF) -> bool {
+    a.x <= b.x + b.w && b.x <= a.x + a.w && a.y <= b.y + b.h && b.y <= a.y + a.h
 }
 
 fn points_bbox(points: &[PtF]) -> RectF {
@@ -117,10 +198,10 @@ pub fn step_radius(width: f32) -> f32 {
     9.0 + width * 1.5
 }
 
-/// Rect covered by a text block anchored at `pos`.
-pub fn text_rect(pos: PtF, text: &str, size: f32, measure: Measure) -> RectF {
+/// Rect covered by a text block anchored at `pos` (without its pill).
+pub fn text_rect(pos: PtF, text: &str, size: f32, bold: bool, measure: Measure) -> RectF {
     let probe = if text.is_empty() { "M" } else { text };
-    let (w, h) = measure(probe, size);
+    let (w, h) = measure(probe, size, bold);
     let w = if text.is_empty() { size * 0.6 } else { w };
     RectF::new(pos.x, pos.y, w.max(4.0), h.max(size))
 }
@@ -129,15 +210,45 @@ pub fn text_rect(pos: PtF, text: &str, size: f32, measure: Measure) -> RectF {
 pub fn bounds(shape: &Shape, measure: Measure) -> RectF {
     let w = shape.style.width;
     match &shape.kind {
-        ShapeKind::Arrow { from, to } => RectF::from_points(*from, *to).expand(w * 2.0),
+        ShapeKind::Arrow {
+            from,
+            to,
+            ctrl,
+            double,
+            head,
+        } => {
+            let mut r = points_bbox(&arrow_centerline(*from, *to, *ctrl)).expand(w / 2.0);
+            if let Some(parts) = arrow_parts(*from, *to, *ctrl, w, *double, *head) {
+                for g in &parts.heads {
+                    r = union(r, points_bbox(&[g.tip, g.left, g.right]).expand(w / 4.0));
+                }
+            }
+            r
+        }
         ShapeKind::Line { from, to } => RectF::from_points(*from, *to).expand(w / 2.0),
         ShapeKind::Rect { rect, .. } | ShapeKind::Ellipse { rect } => rect.expand(w / 2.0),
         ShapeKind::Pen { points } | ShapeKind::Highlighter { points } => {
             points_bbox(points).expand(w / 2.0)
         }
         ShapeKind::Text {
-            pos, text, size, ..
-        } => text_rect(*pos, text, *size, measure),
+            pos,
+            text,
+            size,
+            background,
+            bold,
+        } => {
+            let r = text_rect(*pos, text, *size, *bold, measure);
+            if background.is_some() {
+                RectF::new(
+                    r.x - size * TEXT_PAD_X,
+                    r.y - size * TEXT_PAD_Y,
+                    r.w + 2.0 * size * TEXT_PAD_X,
+                    r.h + 2.0 * size * TEXT_PAD_Y,
+                )
+            } else {
+                r
+            }
+        }
         ShapeKind::Step { center, radius, .. } => RectF::new(
             center.x - radius,
             center.y - radius,
@@ -151,6 +262,15 @@ pub fn bounds(shape: &Shape, measure: Measure) -> RectF {
         ShapeKind::Callout { rect, tail, .. } => union(*rect, RectF::new(tail.x, tail.y, 0.0, 0.0)),
         ShapeKind::Spotlight { rect, .. } => *rect,
     }
+}
+
+/// Bounds of several shapes together (None when none of `ids` exists).
+pub fn group_bounds(doc: &Doc, ids: &[ShapeId], measure: Measure) -> Option<RectF> {
+    doc.shapes
+        .iter()
+        .filter(|s| ids.contains(&s.id))
+        .map(|s| bounds(s, measure))
+        .reduce(union)
 }
 
 fn near_rect_border(r: RectF, p: PtF, reach: f32) -> bool {
@@ -182,9 +302,11 @@ pub fn hit(shape: &Shape, p: PtF, tol: f32, measure: Measure) -> bool {
     let w = shape.style.width;
     let filled = shape.style.fill.is_some();
     match &shape.kind {
-        ShapeKind::Arrow { from, to } | ShapeKind::Line { from, to } => {
-            dist_to_segment(p, *from, *to) <= w / 2.0 + tol + 1.0
+        ShapeKind::Arrow { from, to, ctrl, .. } => {
+            dist_to_polyline(p, &arrow_centerline(*from, *to, *ctrl)) <= w / 2.0 + tol + 1.0
+                || dist(p, *to) <= w * 1.5 + tol + 4.0
         }
+        ShapeKind::Line { from, to } => dist_to_segment(p, *from, *to) <= w / 2.0 + tol + 1.0,
         ShapeKind::Rect { rect, .. } => {
             if filled {
                 rect.expand(w / 2.0 + tol).contains(p)
@@ -201,14 +323,7 @@ pub fn hit(shape: &Shape, p: PtF, tol: f32, measure: Measure) -> bool {
             }
         }
         ShapeKind::Pen { points } | ShapeKind::Highlighter { points } => {
-            let reach = w / 2.0 + tol;
-            match points.len() {
-                0 => false,
-                1 => dist(p, points[0]) <= reach,
-                _ => points
-                    .windows(2)
-                    .any(|s| dist_to_segment(p, s[0], s[1]) <= reach),
-            }
+            dist_to_polyline(p, points) <= w / 2.0 + tol
         }
         ShapeKind::Text { .. } => bounds(shape, measure).expand(tol).contains(p),
         ShapeKind::Step { center, radius, .. } => dist(p, *center) <= radius + tol,
@@ -228,7 +343,11 @@ pub fn hit(shape: &Shape, p: PtF, tol: f32, measure: Measure) -> bool {
             in_dest || near_rect_border(*source, p, 2.0 + tol)
         }
         ShapeKind::Callout { rect, tail, .. } => {
-            rect.expand(tol).contains(p) || dist(p, *tail) <= 8.0 + tol
+            let root = pt(
+                tail.x.clamp(rect.x, rect.x + rect.w),
+                tail.y.clamp(rect.y, rect.y + rect.h),
+            );
+            rect.expand(tol).contains(p) || dist_to_segment(p, root, *tail) <= 8.0 + tol
         }
         ShapeKind::Spotlight { rect, .. } => near_rect_border(*rect, p, 4.0 + tol),
     }
@@ -243,43 +362,17 @@ pub fn hit_test(doc: &Doc, p: PtF, tol: f32, measure: Measure) -> Option<ShapeId
         .map(|s| s.id)
 }
 
-fn tr(p: &mut PtF, dx: f32, dy: f32) {
-    p.x += dx;
-    p.y += dy;
-}
-
-fn tr_rect(r: &mut RectF, dx: f32, dy: f32) {
-    r.x += dx;
-    r.y += dy;
+/// Shapes whose bounds touch the marquee `r` (image px), in z-order.
+pub fn shapes_in_rect(doc: &Doc, r: RectF, measure: Measure) -> Vec<ShapeId> {
+    doc.shapes
+        .iter()
+        .filter(|s| intersects(bounds(s, measure), r))
+        .map(|s| s.id)
+        .collect()
 }
 
 pub fn translate(kind: &mut ShapeKind, dx: f32, dy: f32) {
-    match kind {
-        ShapeKind::Arrow { from, to } | ShapeKind::Line { from, to } => {
-            tr(from, dx, dy);
-            tr(to, dx, dy);
-        }
-        ShapeKind::Rect { rect, .. }
-        | ShapeKind::Ellipse { rect }
-        | ShapeKind::Blur { rect, .. }
-        | ShapeKind::Pixelate { rect, .. }
-        | ShapeKind::Redact { rect }
-        | ShapeKind::Spotlight { rect, .. } => tr_rect(rect, dx, dy),
-        ShapeKind::Pen { points } | ShapeKind::Highlighter { points } => {
-            points.iter_mut().for_each(|p| tr(p, dx, dy))
-        }
-        ShapeKind::Text { pos, .. } => tr(pos, dx, dy),
-        ShapeKind::Step { center, .. } => tr(center, dx, dy),
-        ShapeKind::Magnifier { source, dest, .. } => {
-            // Moving the magnifier moves the placed inset; the source stays on the content.
-            let _ = source;
-            tr_rect(dest, dx, dy);
-        }
-        ShapeKind::Callout { rect, tail, .. } => {
-            tr_rect(rect, dx, dy);
-            tr(tail, dx, dy);
-        }
-    }
+    annotate::translate_shape(kind, dx, dy);
 }
 
 /// Main rectangle used for the 8 handles (not for arrows/lines/steps).
@@ -309,7 +402,12 @@ pub fn handles(shape: &Shape, measure: Measure) -> Vec<(ShapeHandle, PtF)> {
             }
         };
     match &shape.kind {
-        ShapeKind::Arrow { from, to } | ShapeKind::Line { from, to } => {
+        ShapeKind::Arrow { from, to, ctrl, .. } => {
+            out.push((ShapeHandle::P1, *from));
+            out.push((ShapeHandle::P2, *to));
+            out.push((ShapeHandle::Mid, arrow_mid(*from, *to, *ctrl)));
+        }
+        ShapeKind::Line { from, to } => {
             out.push((ShapeHandle::P1, *from));
             out.push((ShapeHandle::P2, *to));
         }
@@ -348,7 +446,7 @@ pub fn handles(shape: &Shape, measure: Measure) -> Vec<(ShapeHandle, PtF)> {
 }
 
 /// Handle (if any) of `shape` within `radius` image px of `p`. Later handles win ties so
-/// that Src/Tail handles are reachable over overlapping rect handles.
+/// that Src/Tail/Mid handles are reachable over overlapping rect handles.
 pub fn hit_handle(shape: &Shape, p: PtF, radius: f32, measure: Measure) -> Option<ShapeHandle> {
     let mut best: Option<(ShapeHandle, f32)> = None;
     for (h, pos) in handles(shape, measure) {
@@ -360,7 +458,8 @@ pub fn hit_handle(shape: &Shape, p: PtF, radius: f32, measure: Measure) -> Optio
     best.map(|(h, _)| h)
 }
 
-/// Resize a float rect by dragging `h` to `p`; flips when crossing; `square` forces 1:1.
+/// Resize a float rect by dragging `h` to `p`; flips when crossing; `square` forces 1:1
+/// (corners: the larger side wins; edges: the other side follows, centred).
 pub fn resize_frect(r: RectF, h: Handle8, p: PtF, square: bool) -> RectF {
     let hd = h.h_dir();
     let vd = h.v_dir();
@@ -384,6 +483,14 @@ pub fn resize_frect(r: RectF, h: Handle8, p: PtF, square: bool) -> RectF {
         x1 = fx.max(fx + sx * s);
         y0 = fy.min(fy + sy * s);
         y1 = fy.max(fy + sy * s);
+    } else if square && hd != 0 {
+        let s = x1 - x0;
+        let cy = r.y + r.h / 2.0;
+        (y0, y1) = (cy - s / 2.0, cy + s / 2.0);
+    } else if square && vd != 0 {
+        let s = y1 - y0;
+        let cx = r.x + r.w / 2.0;
+        (x0, x1) = (cx - s / 2.0, cx + s / 2.0);
     }
     RectF::new(x0, y0, x1 - x0, y1 - y0)
 }
@@ -405,8 +512,22 @@ fn scale_points(points: &mut [PtF], from: RectF, to: RectF) {
     }
 }
 
+/// The curve handle constrained to the chord's perpendicular bisector (a symmetric bend).
+fn on_bisector(from: PtF, to: PtF, p: PtF) -> PtF {
+    let m = pt((from.x + to.x) / 2.0, (from.y + to.y) / 2.0);
+    let (dx, dy) = (to.x - from.x, to.y - from.y);
+    let l = (dx * dx + dy * dy).sqrt();
+    if l < 1e-3 {
+        return p;
+    }
+    let (nx, ny) = (-dy / l, dx / l);
+    let t = (p.x - m.x) * nx + (p.y - m.y) * ny;
+    pt(m.x + nx * t, m.y + ny * t)
+}
+
 /// Apply a handle drag to `shape`. `p` is the pointer in image px; `constrain` (Shift)
-/// keeps 45 degree angles for lines and squares for rectangles.
+/// keeps 45 degree angles for lines and arrows, squares and circles for rect-like shapes,
+/// and a symmetric bend for the arrow curve handle.
 pub fn drag_handle(
     shape: &mut Shape,
     handle: ShapeHandle,
@@ -417,14 +538,42 @@ pub fn drag_handle(
     let old_main = main_rect(shape);
     let text_h = bounds(shape, measure).h;
     match (&mut shape.kind, handle) {
-        (ShapeKind::Arrow { from, to } | ShapeKind::Line { from, to }, ShapeHandle::P1) => {
+        (ShapeKind::Arrow { from, to, ctrl, .. }, ShapeHandle::P1 | ShapeHandle::P2) => {
+            let (old_from, old_to) = (*from, *to);
+            if handle == ShapeHandle::P1 {
+                *from = if constrain {
+                    constrain_angle(*to, p)
+                } else {
+                    p
+                };
+            } else {
+                *to = if constrain {
+                    constrain_angle(*from, p)
+                } else {
+                    p
+                };
+            }
+            if let Some(c) = ctrl {
+                *c = follow_ctrl(old_from, old_to, *from, *to, *c);
+            }
+        }
+        (ShapeKind::Arrow { from, to, ctrl, .. }, ShapeHandle::Mid) => {
+            let p = if constrain {
+                on_bisector(*from, *to, p)
+            } else {
+                p
+            };
+            let chord_mid = pt((from.x + to.x) / 2.0, (from.y + to.y) / 2.0);
+            *ctrl = (dist(p, chord_mid) > STRAIGHTEN_PX).then(|| ctrl_through(*from, *to, p));
+        }
+        (ShapeKind::Line { from, to }, ShapeHandle::P1) => {
             *from = if constrain {
                 constrain_angle(*to, p)
             } else {
                 p
             };
         }
-        (ShapeKind::Arrow { from, to } | ShapeKind::Line { from, to }, ShapeHandle::P2) => {
+        (ShapeKind::Line { from, to }, ShapeHandle::P2) => {
             *to = if constrain {
                 constrain_angle(*from, p)
             } else {
@@ -444,7 +593,7 @@ pub fn drag_handle(
         }
         (ShapeKind::Pen { points } | ShapeKind::Highlighter { points }, ShapeHandle::Rect(h)) => {
             if let Some(old) = old_main {
-                let new = resize_frect(old, h, p, false);
+                let new = resize_frect(old, h, p, constrain);
                 scale_points(points, old, new);
             }
         }
@@ -487,6 +636,15 @@ pub fn constrain_angle(anchor: PtF, p: PtF) -> PtF {
     pt(anchor.x + len * a.cos(), anchor.y + len * a.sin())
 }
 
+/// Shift while moving: keep the drag on the dominant axis.
+pub fn constrain_axis(d: (f32, f32)) -> (f32, f32) {
+    if d.0.abs() >= d.1.abs() {
+        (d.0, 0.0)
+    } else {
+        (0.0, d.1)
+    }
+}
+
 /// Smooth a freehand stroke: drop near-duplicate points then one Chaikin corner-cut pass.
 pub fn smooth_points(points: &[PtF]) -> Vec<PtF> {
     let mut dedup: Vec<PtF> = Vec::with_capacity(points.len());
@@ -509,6 +667,26 @@ pub fn smooth_points(points: &[PtF]) -> Vec<PtF> {
     out
 }
 
+/// Sticky options for new arrows and text (the last ones picked on a shape).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShapeOptions {
+    pub arrow_double: bool,
+    pub arrow_head: ArrowHead,
+    pub text_bold: bool,
+    pub text_pill: bool,
+}
+
+impl Default for ShapeOptions {
+    fn default() -> Self {
+        Self {
+            arrow_double: false,
+            arrow_head: ArrowHead::Notched,
+            text_bold: false,
+            text_pill: false,
+        }
+    }
+}
+
 /// Editor-wide creation parameters taken from the config.
 #[derive(Clone, Debug)]
 pub struct ToolParams {
@@ -516,6 +694,17 @@ pub struct ToolParams {
     pub font_size: f32,
     pub blur_radius: f32,
     pub pixelate_block: u32,
+    pub options: ShapeOptions,
+}
+
+/// Black-ish or white ink for text on `bg` (the threshold core's renderer uses).
+pub fn contrast_ink(bg: [u8; 4]) -> [u8; 4] {
+    let lum = 0.299 * bg[0] as f32 + 0.587 * bg[1] as f32 + 0.114 * bg[2] as f32;
+    if lum > 150.0 {
+        [20, 20, 22, 255]
+    } else {
+        [255, 255, 255, 255]
+    }
 }
 
 /// Style used for a freshly created shape of `tool` given the current color/width.
@@ -537,6 +726,27 @@ pub fn style_for_tool(tool: Tool, base: &Style) -> Style {
         _ => {}
     }
     s
+}
+
+/// A new text shape at `pos` with the sticky options: with the pill on, the pill takes the
+/// color and the text gets black or white ink on it.
+pub fn new_text(pos: PtF, params: &ToolParams) -> (ShapeKind, Style) {
+    let mut style = style_for_tool(Tool::Text, &params.style);
+    let c = style.color;
+    let background = params.options.text_pill.then(|| {
+        style.color = contrast_ink(c);
+        [c[0], c[1], c[2], 255]
+    });
+    (
+        ShapeKind::Text {
+            pos,
+            text: String::new(),
+            size: params.font_size,
+            background,
+            bold: params.options.text_bold,
+        },
+        style,
+    )
 }
 
 /// Build a shape from a completed drag from `a` to `b` (image px). `None` when the drag is
@@ -574,7 +784,13 @@ pub fn shape_from_drag(
                 b = constrain_angle(a, b);
             }
             if tool == Tool::Arrow {
-                ShapeKind::Arrow { from: a, to: b }
+                ShapeKind::Arrow {
+                    from: a,
+                    to: b,
+                    ctrl: None,
+                    double: params.options.arrow_double,
+                    head: params.options.arrow_head,
+                }
             } else {
                 ShapeKind::Line { from: a, to: b }
             }
@@ -634,11 +850,21 @@ fn sized(r: RectF, small: bool) -> Option<RectF> {
     }
 }
 
-/// Recolor a shape. Highlighters keep their translucency; callouts recolor their fill too.
+/// Recolor a shape. Highlighters keep their translucency; callouts recolor their fill too;
+/// text on a pill recolors the pill and picks readable ink.
 pub fn recolor(shape: &mut Shape, color: [u8; 4]) {
     let mut c = color;
     if matches!(shape.kind, ShapeKind::Highlighter { .. }) {
         c[3] = HIGHLIGHTER_ALPHA;
+    }
+    if let ShapeKind::Text {
+        background: Some(bg),
+        ..
+    } = &mut shape.kind
+    {
+        *bg = [c[0], c[1], c[2], 255];
+        shape.style.color = contrast_ink(*bg);
+        return;
     }
     shape.style.color = c;
     if shape.style.fill.is_some() {
@@ -646,8 +872,32 @@ pub fn recolor(shape: &mut Shape, color: [u8; 4]) {
     }
 }
 
+/// The color the toolbar swatch shows for a shape (the pill of pill text, a callout's fill).
+pub fn display_color(shape: &Shape) -> [u8; 4] {
+    let c = match (&shape.kind, shape.style.fill) {
+        (
+            ShapeKind::Text {
+                background: Some(bg),
+                ..
+            },
+            _,
+        ) => *bg,
+        (ShapeKind::Callout { .. }, Some(f)) => f,
+        _ => shape.style.color,
+    };
+    [c[0], c[1], c[2], 255]
+}
+
+/// The stroke width the toolbar shows for a shape (highlighters store 4x the setting).
+pub fn display_width(shape: &Shape) -> f32 {
+    match shape.kind {
+        ShapeKind::Highlighter { .. } => (shape.style.width / 4.0).clamp(1.0, 64.0),
+        _ => shape.style.width.clamp(1.0, 64.0),
+    }
+}
+
 /// Change the "size" of a shape by `delta` (stroke width, text size, step radius, blur
-/// strength...). Returns the new stroke width the toolbar should show, if any.
+/// strength...).
 pub fn adjust_size(shape: &mut Shape, delta: f32) {
     match &mut shape.kind {
         ShapeKind::Text { size, .. } | ShapeKind::Callout { size, .. } => {
@@ -663,6 +913,80 @@ pub fn adjust_size(shape: &mut Shape, delta: f32) {
         }
         ShapeKind::Spotlight { dim, .. } => *dim = (*dim + delta * 0.05).clamp(0.1, 0.95),
         _ => shape.style.width = (shape.style.width + delta).clamp(1.0, 64.0),
+    }
+}
+
+/// Next text size up (`up`) or down from `size` in `TEXT_SIZES`, stopping at the ends.
+pub fn step_text_size(size: f32, up: bool) -> f32 {
+    if up {
+        TEXT_SIZES
+            .iter()
+            .copied()
+            .find(|s| *s > size + 0.5)
+            .unwrap_or(size.max(TEXT_SIZES[TEXT_SIZES.len() - 1]))
+    } else {
+        TEXT_SIZES
+            .iter()
+            .rev()
+            .copied()
+            .find(|s| *s < size - 0.5)
+            .unwrap_or(size.min(TEXT_SIZES[0]))
+    }
+}
+
+/// Text size buttons on a text or callout shape.
+pub fn bump_text_size(kind: &mut ShapeKind, up: bool) -> bool {
+    match kind {
+        ShapeKind::Text { size, .. } | ShapeKind::Callout { size, .. } => {
+            let n = step_text_size(*size, up);
+            let changed = (n - *size).abs() > 0.01;
+            *size = n;
+            changed
+        }
+        _ => false,
+    }
+}
+
+pub fn set_bold(kind: &mut ShapeKind, on: bool) {
+    if let ShapeKind::Text { bold, .. } = kind {
+        *bold = on;
+    }
+}
+
+/// Pill on: the pill takes the text's color and the text gets black or white ink. Off: the
+/// text takes the pill's color back.
+pub fn set_pill(shape: &mut Shape, on: bool) {
+    if let ShapeKind::Text { background, .. } = &mut shape.kind {
+        match (*background, on) {
+            (None, true) => {
+                let c = shape.style.color;
+                *background = Some([c[0], c[1], c[2], 255]);
+                shape.style.color = contrast_ink(c);
+            }
+            (Some(bg), false) => {
+                *background = None;
+                shape.style.color = bg;
+            }
+            _ => {}
+        }
+    }
+}
+
+pub fn set_arrow_double(kind: &mut ShapeKind, on: bool) {
+    if let ShapeKind::Arrow { double, .. } = kind {
+        *double = on;
+    }
+}
+
+pub fn set_arrow_head(kind: &mut ShapeKind, style: ArrowHead) {
+    if let ShapeKind::Arrow { head, .. } = kind {
+        *head = style;
+    }
+}
+
+pub fn straighten(kind: &mut ShapeKind) {
+    if let ShapeKind::Arrow { ctrl, .. } = kind {
+        *ctrl = None;
     }
 }
 
@@ -684,26 +1008,12 @@ pub fn set_text(kind: &mut ShapeKind, new: &str) {
     }
 }
 
-/// Where the inline text editor sits for a textual shape: top-left of the text (image px),
-/// the font size, and for callouts the inner box width.
-pub fn text_anchor(kind: &ShapeKind) -> Option<(PtF, f32, Option<f32>)> {
-    match kind {
-        ShapeKind::Text { pos, size, .. } => Some((*pos, *size, None)),
-        ShapeKind::Callout { rect, size, .. } => Some((
-            pt(rect.x + 10.0, rect.y + 6.0),
-            *size,
-            Some((rect.w - 20.0).max(20.0)),
-        )),
-        _ => None,
-    }
-}
-
-/// Copy `doc` keeping only shapes not in `skip` (used so a shape being manipulated is not
-/// baked into the cached render while it is painted live).
-pub fn doc_without(doc: &Doc, skip: Option<ShapeId>) -> Doc {
+/// Copy `doc` keeping only shapes not in `skip` (used so shapes being manipulated are not
+/// baked into the cached render while they are painted live).
+pub fn doc_without(doc: &Doc, skip: &[ShapeId]) -> Doc {
     let mut d = doc.clone();
-    if let Some(id) = skip {
-        d.shapes.retain(|s| s.id != id);
+    if !skip.is_empty() {
+        d.shapes.retain(|s| !skip.contains(&s.id));
     }
     d
 }
@@ -712,14 +1022,109 @@ pub fn doc_without(doc: &Doc, skip: Option<ShapeId>) -> Doc {
 pub fn translate_all(doc: &mut Doc, dx: f32, dy: f32) {
     for s in &mut doc.shapes {
         translate(&mut s.kind, dx, dy);
+        if let ShapeKind::Magnifier { source, .. } = &mut s.kind {
+            // The whole picture moves, so the magnified spot moves with it.
+            source.x += dx;
+            source.y += dy;
+        }
     }
+}
+
+// ------------------------------------------------------------------- z-order and copies
+
+/// Ctrl+]: each selected shape swaps with the unselected shape just above it.
+pub fn bring_forward(doc: &mut Doc, ids: &[ShapeId]) -> bool {
+    let mut changed = false;
+    let n = doc.shapes.len();
+    for i in (0..n.saturating_sub(1)).rev() {
+        if ids.contains(&doc.shapes[i].id) && !ids.contains(&doc.shapes[i + 1].id) {
+            doc.shapes.swap(i, i + 1);
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Ctrl+[: each selected shape swaps with the unselected shape just below it.
+pub fn send_backward(doc: &mut Doc, ids: &[ShapeId]) -> bool {
+    let mut changed = false;
+    for i in 1..doc.shapes.len() {
+        if ids.contains(&doc.shapes[i].id) && !ids.contains(&doc.shapes[i - 1].id) {
+            doc.shapes.swap(i, i - 1);
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Ctrl+Shift+]: selected shapes on top, keeping their order.
+pub fn bring_to_front(doc: &mut Doc, ids: &[ShapeId]) -> bool {
+    let before: Vec<ShapeId> = doc.shapes.iter().map(|s| s.id).collect();
+    let (sel, rest): (Vec<Shape>, Vec<Shape>) = std::mem::take(&mut doc.shapes)
+        .into_iter()
+        .partition(|s| ids.contains(&s.id));
+    doc.shapes = rest.into_iter().chain(sel).collect();
+    doc.shapes.iter().map(|s| s.id).ne(before)
+}
+
+/// Ctrl+Shift+[: selected shapes at the bottom, keeping their order.
+pub fn send_to_back(doc: &mut Doc, ids: &[ShapeId]) -> bool {
+    let before: Vec<ShapeId> = doc.shapes.iter().map(|s| s.id).collect();
+    let (sel, rest): (Vec<Shape>, Vec<Shape>) = std::mem::take(&mut doc.shapes)
+        .into_iter()
+        .partition(|s| ids.contains(&s.id));
+    doc.shapes = sel.into_iter().chain(rest).collect();
+    doc.shapes.iter().map(|s| s.id).ne(before)
+}
+
+/// Add copies of `shapes` on top, moved by `offset`, with fresh ids (and fresh step
+/// numbers). Returns the new ids in order.
+pub fn add_copies(doc: &mut Doc, shapes: &[Shape], offset: (f32, f32)) -> Vec<ShapeId> {
+    let mut out = Vec::with_capacity(shapes.len());
+    for s in shapes {
+        let mut kind = s.kind.clone();
+        translate(&mut kind, offset.0, offset.1);
+        if let ShapeKind::Step { n, .. } = &mut kind {
+            *n = doc.next_step_number();
+        }
+        out.push(doc.add(kind, s.style.clone()));
+    }
+    out
+}
+
+/// The selected shapes in z-order (what Ctrl+C / Ctrl+D copy).
+pub fn collect(doc: &Doc, ids: &[ShapeId]) -> Vec<Shape> {
+    doc.shapes
+        .iter()
+        .filter(|s| ids.contains(&s.id))
+        .cloned()
+        .collect()
+}
+
+/// Paste offset: shift copies so they stay inside a `w` x `h` image (at least partly).
+pub fn paste_offset(group: RectF, offset: (f32, f32), w: f32, h: f32) -> (f32, f32) {
+    let mut dx = offset.0;
+    let mut dy = offset.1;
+    if group.x + dx > w - 8.0 {
+        dx = w - 8.0 - group.x - group.w.min(w / 2.0);
+    }
+    if group.y + dy > h - 8.0 {
+        dy = h - 8.0 - group.y - group.h.min(h / 2.0);
+    }
+    if group.x + group.w + dx < 8.0 {
+        dx = 8.0 - group.x;
+    }
+    if group.y + group.h + dy < 8.0 {
+        dy = 8.0 - group.y;
+    }
+    (dx, dy)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn measure(text: &str, size: f32) -> (f32, f32) {
+    fn measure(text: &str, size: f32, _bold: bool) -> (f32, f32) {
         let lines: Vec<&str> = text.split('\n').collect();
         let w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f32 * size * 0.5;
         (w, lines.len() as f32 * size * 1.25)
@@ -800,6 +1205,7 @@ mod tests {
                 text: "Hello".into(),
                 size: 20.0,
                 background: None,
+                bold: false,
             },
             ShapeKind::Step {
                 center: pt(200.0, 200.0),
@@ -857,9 +1263,12 @@ mod tests {
         assert_eq!(
             n(ShapeKind::Arrow {
                 from: pt(0.0, 0.0),
-                to: pt(1.0, 1.0)
+                to: pt(1.0, 1.0),
+                ctrl: None,
+                double: false,
+                head: ArrowHead::Notched,
             }),
-            2
+            3
         );
         assert_eq!(
             n(ShapeKind::Rect {
@@ -898,7 +1307,8 @@ mod tests {
                 pos: pt(0.0, 0.0),
                 text: "a".into(),
                 size: 12.0,
-                background: None
+                background: None,
+                bold: false,
             }),
             1
         );
@@ -953,6 +1363,9 @@ mod tests {
             kind: ShapeKind::Arrow {
                 from: pt(0.0, 0.0),
                 to: pt(10.0, 0.0),
+                ctrl: None,
+                double: false,
+                head: ArrowHead::Notched,
             },
             style: style(),
         };
@@ -992,6 +1405,7 @@ mod tests {
                 text: "ab".into(),
                 size: 20.0,
                 background: None,
+                bold: false,
             },
             style: style(),
         };
@@ -1057,6 +1471,7 @@ mod tests {
             font_size: 20.0,
             blur_radius: 12.0,
             pixelate_block: 10,
+            options: ShapeOptions::default(),
         }
     }
 
@@ -1172,8 +1587,8 @@ mod tests {
                 rect: RectF::new(10.0, 10.0, 5.0, 5.0),
             },
         ]);
-        assert_eq!(doc_without(&d, Some(1)).shapes.len(), 1);
-        assert_eq!(doc_without(&d, None).shapes.len(), 2);
+        assert_eq!(doc_without(&d, &[1]).shapes.len(), 1);
+        assert_eq!(doc_without(&d, &[]).shapes.len(), 2);
         translate_all(&mut d, -3.0, 4.0);
         assert!(
             matches!(d.shapes[1].kind, ShapeKind::Redact { rect } if rect.x == 7.0 && rect.y == 14.0)
@@ -1187,12 +1602,308 @@ mod tests {
             text: "x".into(),
             size: 16.0,
             background: None,
+            bold: false,
         };
         assert!(is_textual(&k));
         set_text(&mut k, "multi\nline");
         assert_eq!(text_of(&k), Some("multi\nline"));
-        assert!(text_anchor(&k).is_some());
-        let r = text_rect(pt(0.0, 0.0), "", 20.0, &measure);
+        let r = text_rect(pt(0.0, 0.0), "", 20.0, false, &measure);
         assert!(r.w >= 4.0 && r.h >= 20.0);
+    }
+
+    fn redact_doc(n: usize) -> Doc {
+        let mut d = Doc::new(400, 300);
+        for i in 0..n {
+            d.add(
+                ShapeKind::Redact {
+                    rect: RectF::new(i as f32 * 10.0, 0.0, 5.0, 5.0),
+                },
+                style(),
+            );
+        }
+        d
+    }
+
+    fn order(d: &Doc) -> Vec<ShapeId> {
+        d.shapes.iter().map(|s| s.id).collect()
+    }
+
+    #[test]
+    fn z_order_steps_and_extremes() {
+        let mut d = redact_doc(5); // ids 1..=5, bottom to top
+        assert!(bring_forward(&mut d, &[2, 3]));
+        assert_eq!(order(&d), [1, 4, 2, 3, 5]);
+        assert!(send_backward(&mut d, &[3]));
+        assert_eq!(order(&d), [1, 4, 3, 2, 5]);
+        assert!(bring_to_front(&mut d, &[1, 3]));
+        assert_eq!(order(&d), [4, 2, 5, 1, 3]);
+        assert!(send_to_back(&mut d, &[5, 3]));
+        assert_eq!(order(&d), [5, 3, 4, 2, 1]);
+        // Already at the edge: nothing changes.
+        assert!(!send_to_back(&mut d, &[5]));
+        assert!(!bring_forward(&mut d, &[1]));
+        assert!(!send_backward(&mut d, &[5, 3]));
+        assert_eq!(order(&d), [5, 3, 4, 2, 1]);
+    }
+
+    #[test]
+    fn copies_get_new_ids_offsets_and_step_numbers() {
+        let mut d = Doc::new(400, 300);
+        let a = d.add(
+            ShapeKind::Step {
+                center: pt(50.0, 50.0),
+                n: 1,
+                radius: 10.0,
+            },
+            style(),
+        );
+        let b = d.add(
+            ShapeKind::Rect {
+                rect: RectF::new(100.0, 100.0, 20.0, 20.0),
+                corner_radius: 0.0,
+            },
+            style(),
+        );
+        let src = collect(&d, &[b, a]);
+        assert_eq!(src.len(), 2);
+        assert_eq!(src[0].id, a, "copies keep z-order, not pick order");
+        let ids = add_copies(&mut d, &src, (16.0, 16.0));
+        assert_eq!(ids.len(), 2);
+        assert!(!ids.contains(&a) && !ids.contains(&b));
+        assert!(
+            matches!(d.get(ids[0]).unwrap().kind, ShapeKind::Step { n: 2, center, .. } if center == pt(66.0, 66.0))
+        );
+        assert!(
+            matches!(d.get(ids[1]).unwrap().kind, ShapeKind::Rect { rect, .. } if rect.x == 116.0)
+        );
+    }
+
+    #[test]
+    fn pasted_copies_stay_on_the_image() {
+        let g = RectF::new(380.0, 280.0, 40.0, 30.0);
+        let (dx, dy) = paste_offset(g, (64.0, 64.0), 400.0, 300.0);
+        assert!(g.x + dx <= 400.0 - 8.0 && g.y + dy <= 300.0 - 8.0);
+        let inside = RectF::new(10.0, 10.0, 20.0, 20.0);
+        assert_eq!(
+            paste_offset(inside, (16.0, 16.0), 400.0, 300.0),
+            (16.0, 16.0)
+        );
+    }
+
+    #[test]
+    fn marquee_selects_touching_shapes() {
+        let d = redact_doc(4); // x = 0, 10, 20, 30
+        let ids = shapes_in_rect(&d, RectF::new(12.0, 2.0, 10.0, 1.0), &measure);
+        assert_eq!(ids, [2, 3]);
+        assert!(shapes_in_rect(&d, RectF::new(100.0, 100.0, 5.0, 5.0), &measure).is_empty());
+        assert_eq!(
+            group_bounds(&d, &[1, 4], &measure),
+            Some(RectF::new(0.0, 0.0, 35.0, 5.0))
+        );
+    }
+
+    #[test]
+    fn shift_resize_keeps_squares_on_edge_handles_too() {
+        let r = RectF::new(10.0, 10.0, 40.0, 20.0);
+        let s = resize_frect(r, Handle8::Right, pt(90.0, 0.0), true);
+        assert_eq!((s.w, s.h), (80.0, 80.0));
+        assert_eq!(s.y + s.h / 2.0, 20.0, "centred on the old middle");
+        let s = resize_frect(r, Handle8::Bottom, pt(0.0, 60.0), true);
+        assert_eq!((s.w, s.h), (50.0, 50.0));
+        let s = resize_frect(r, Handle8::BottomRight, pt(70.0, 40.0), true);
+        assert_eq!(s.w, s.h);
+        // Ellipses resize the same way (circle).
+        let mut e = Shape {
+            id: 1,
+            kind: ShapeKind::Ellipse { rect: r },
+            style: style(),
+        };
+        drag_handle(
+            &mut e,
+            ShapeHandle::Rect(Handle8::Left),
+            pt(-30.0, 0.0),
+            true,
+            &measure,
+        );
+        assert!(matches!(e.kind, ShapeKind::Ellipse { rect } if (rect.w - rect.h).abs() < 1e-4));
+        assert_eq!(constrain_axis((5.0, -2.0)), (5.0, 0.0));
+        assert_eq!(constrain_axis((1.0, -9.0)), (0.0, -9.0));
+    }
+
+    fn arrow_shape() -> Shape {
+        Shape {
+            id: 1,
+            kind: ShapeKind::Arrow {
+                from: pt(0.0, 0.0),
+                to: pt(100.0, 0.0),
+                ctrl: None,
+                double: false,
+                head: ArrowHead::Notched,
+            },
+            style: style(),
+        }
+    }
+
+    #[test]
+    fn curve_handle_bends_and_straightens() {
+        let mut s = arrow_shape();
+        let hs = handles(&s, &measure);
+        assert!(hs.contains(&(ShapeHandle::Mid, pt(50.0, 0.0))));
+        drag_handle(&mut s, ShapeHandle::Mid, pt(50.0, 40.0), false, &measure);
+        let ShapeKind::Arrow { ctrl, .. } = s.kind else {
+            unreachable!()
+        };
+        assert_eq!(ctrl, Some(pt(50.0, 80.0)));
+        // The handle now sits on the curve where it was dropped.
+        assert!(handles(&s, &measure).contains(&(ShapeHandle::Mid, pt(50.0, 40.0))));
+        // The curve is hit where it runs, the chord no longer.
+        let d = Doc {
+            shapes: vec![s.clone()],
+            ..Doc::new(200, 200)
+        };
+        assert!(hit_test(&d, pt(50.0, 40.0), 2.0, &measure).is_some());
+        assert!(hit_test(&d, pt(50.0, 0.0), 2.0, &measure).is_none());
+        // Shift keeps the bend symmetric (on the perpendicular bisector).
+        drag_handle(&mut s, ShapeHandle::Mid, pt(70.0, 30.0), true, &measure);
+        assert!(
+            matches!(s.kind, ShapeKind::Arrow { ctrl: Some(c), .. } if (c.x - 50.0).abs() < 1e-3)
+        );
+        // Moving an end keeps the bend; dropping the handle on the chord straightens.
+        drag_handle(&mut s, ShapeHandle::P2, pt(200.0, 0.0), false, &measure);
+        assert!(
+            matches!(s.kind, ShapeKind::Arrow { ctrl: Some(c), .. } if (c.x - 100.0).abs() < 1e-3)
+        );
+        drag_handle(&mut s, ShapeHandle::Mid, pt(101.0, 2.0), false, &measure);
+        assert!(matches!(s.kind, ShapeKind::Arrow { ctrl: None, .. }));
+    }
+
+    #[test]
+    fn arrow_options_and_bounds() {
+        let mut s = arrow_shape();
+        set_arrow_double(&mut s.kind, true);
+        set_arrow_head(&mut s.kind, ArrowHead::Open);
+        assert!(matches!(
+            s.kind,
+            ShapeKind::Arrow {
+                double: true,
+                head: ArrowHead::Open,
+                ..
+            }
+        ));
+        let b = bounds(&s, &measure);
+        assert!(b.x <= 0.0 && b.x + b.w >= 100.0 && b.h > 4.0);
+        drag_handle(&mut s, ShapeHandle::Mid, pt(50.0, -60.0), false, &measure);
+        assert!(bounds(&s, &measure).y <= -59.0);
+        straighten(&mut s.kind);
+        assert!(matches!(s.kind, ShapeKind::Arrow { ctrl: None, .. }));
+        // New arrows take the sticky options.
+        let mut p = params();
+        p.options.arrow_double = true;
+        p.options.arrow_head = ArrowHead::Triangle;
+        let (k, _) = shape_from_drag(Tool::Arrow, pt(0.0, 0.0), pt(50.0, 0.0), false, &p).unwrap();
+        assert!(matches!(
+            k,
+            ShapeKind::Arrow {
+                double: true,
+                head: ArrowHead::Triangle,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn text_pill_takes_the_color_and_gets_readable_ink() {
+        let mut p = params();
+        p.style.color = [255, 220, 0, 255];
+        p.options.text_pill = true;
+        p.options.text_bold = true;
+        let (kind, st) = new_text(pt(5.0, 5.0), &p);
+        assert!(matches!(
+            kind,
+            ShapeKind::Text {
+                background: Some([255, 220, 0, 255]),
+                bold: true,
+                ..
+            }
+        ));
+        assert_eq!(st.color, [20, 20, 22, 255], "dark ink on yellow");
+        let mut s = Shape {
+            id: 1,
+            kind,
+            style: st,
+        };
+        // Recoloring pill text recolors the pill; ink follows.
+        recolor(&mut s, [10, 20, 160, 255]);
+        assert!(matches!(
+            s.kind,
+            ShapeKind::Text {
+                background: Some([10, 20, 160, 255]),
+                ..
+            }
+        ));
+        assert_eq!(s.style.color, [255, 255, 255, 255]);
+        assert_eq!(display_color(&s), [10, 20, 160, 255]);
+        set_pill(&mut s, false);
+        assert!(matches!(
+            s.kind,
+            ShapeKind::Text {
+                background: None,
+                ..
+            }
+        ));
+        assert_eq!(s.style.color, [10, 20, 160, 255]);
+        set_pill(&mut s, true);
+        assert_eq!(s.style.color, [255, 255, 255, 255]);
+        // Bold text measures (and so hits) wider.
+        let mut bold = s.clone();
+        set_bold(&mut bold.kind, true);
+        set_text(&mut bold.kind, "Hello");
+        assert!(matches!(bold.kind, ShapeKind::Text { bold: true, .. }));
+    }
+
+    #[test]
+    fn text_size_steps() {
+        assert_eq!(step_text_size(20.0, true), 24.0);
+        assert_eq!(step_text_size(20.0, false), 18.0);
+        assert_eq!(step_text_size(21.0, false), 20.0);
+        assert_eq!(step_text_size(128.0, true), 128.0);
+        assert_eq!(step_text_size(10.0, false), 10.0);
+        let mut k = ShapeKind::Text {
+            pos: pt(0.0, 0.0),
+            text: "x".into(),
+            size: 20.0,
+            background: None,
+            bold: false,
+        };
+        assert!(bump_text_size(&mut k, true));
+        assert!(matches!(k, ShapeKind::Text { size, .. } if size == 24.0));
+    }
+
+    #[test]
+    fn tool_config_keys_round_trip() {
+        for t in Tool::ALL {
+            assert_eq!(Tool::from_config_key(t.config_key()), Some(t));
+        }
+        assert_eq!(Tool::from_config_key("nope"), None);
+        assert!(Tool::Arrow.has_style() && Tool::Redact.has_style());
+        assert!(!Tool::Select.has_style() && !Tool::Blur.has_style());
+    }
+
+    #[test]
+    fn translate_all_moves_the_magnifier_source_too() {
+        let mut d = Doc::new(100, 100);
+        d.add(
+            ShapeKind::Magnifier {
+                source: RectF::new(10.0, 10.0, 5.0, 5.0),
+                dest: RectF::new(50.0, 50.0, 20.0, 20.0),
+                circular: true,
+            },
+            style(),
+        );
+        translate_all(&mut d, -5.0, 3.0);
+        assert!(matches!(
+            d.shapes[0].kind,
+            ShapeKind::Magnifier { source, dest, .. } if source.x == 5.0 && dest.y == 53.0
+        ));
     }
 }

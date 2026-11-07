@@ -3,7 +3,7 @@
 
 use egui::epaint::StrokeKind;
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape as EShape, Stroke, Vec2};
-use stinkshot_core::annotate::{Shape, ShapeKind};
+use stinkshot_core::annotate::{self, ArrowHead, Shape, ShapeKind};
 use stinkshot_core::{PtF, RectF, Rgba};
 
 use super::hover::contrast_text;
@@ -44,22 +44,35 @@ pub fn paint_shape(painter: &Painter, m: ImgToPt, shape: &Shape, skip_text: bool
     let stroke_w = m.len(shape.style.width).max(1.0);
     let stroke = Stroke::new(stroke_w, col);
     match &shape.kind {
-        ShapeKind::Arrow { from, to } => {
-            let (a, b) = (m.p(*from), m.p(*to));
-            painter.add(EShape::line_segment([a, b], stroke));
-            let dir = b - a;
-            let len = dir.length();
-            if len > 0.5 {
-                let d = dir / len;
-                let head = m.len((shape.style.width * 4.0).max(12.0)).min(len);
-                let n = Vec2::new(-d.y, d.x);
-                let base = b - d * head;
-                let w = head * 0.5;
-                painter.add(EShape::convex_polygon(
-                    vec![b, base + n * w, base - n * w],
-                    col,
-                    Stroke::NONE,
-                ));
+        ShapeKind::Arrow {
+            from,
+            to,
+            ctrl,
+            double,
+            head,
+        } => {
+            // Same geometry as the renderer (curve, trimmed shaft, head styles).
+            let Some(parts) =
+                annotate::arrow_parts(*from, *to, *ctrl, shape.style.width, *double, *head)
+            else {
+                return;
+            };
+            let shaft: Vec<Pos2> = parts.shaft.iter().map(|p| m.p(*p)).collect();
+            if shaft.len() >= 2 {
+                painter.add(EShape::line(shaft.clone(), stroke));
+                painter.circle_filled(shaft[0], stroke_w / 2.0, col);
+            }
+            for g in &parts.heads {
+                let (tip, l, n, r) = (m.p(g.tip), m.p(g.left), m.p(g.notch), m.p(g.right));
+                if parts.style == ArrowHead::Open {
+                    painter.add(EShape::line(vec![l, tip, r], stroke));
+                    painter.circle_filled(l, stroke_w / 2.0, col);
+                    painter.circle_filled(r, stroke_w / 2.0, col);
+                } else {
+                    // Two convex halves so the notch stays concave.
+                    painter.add(EShape::convex_polygon(vec![tip, l, n], col, Stroke::NONE));
+                    painter.add(EShape::convex_polygon(vec![tip, n, r], col, Stroke::NONE));
+                }
             }
         }
         ShapeKind::Line { from, to } => {
@@ -110,26 +123,25 @@ pub fn paint_shape(painter: &Painter, m: ImgToPt, shape: &Shape, skip_text: bool
             text,
             size,
             background,
+            bold,
         } => {
             let p = m.p(*pos);
+            let font = if *bold {
+                crate::theme::semibold(m.len(*size).max(1.0))
+            } else {
+                FontId::proportional(m.len(*size).max(1.0))
+            };
+            let galley = painter.layout_no_wrap(text.clone(), font, col);
             if let Some(bg) = background {
-                let r = Rect::from_min_size(
-                    p,
-                    Vec2::new(
-                        m.len(size * 0.55) * text.chars().count().max(1) as f32,
-                        m.len(size * 1.25),
-                    ),
-                );
-                painter.rect_filled(r.expand(2.0), 2.0, color32(*bg));
+                let sz = galley
+                    .size()
+                    .max(Vec2::new(m.len(size * 0.6), m.len(*size)));
+                let r = Rect::from_min_size(p, sz)
+                    .expand2(Vec2::new(m.len(size * 0.4), m.len(size * 0.2)));
+                painter.rect_filled(r, (r.height() / 2.0).min(m.len(size * 0.7)), color32(*bg));
             }
             if !skip_text && !text.is_empty() {
-                painter.text(
-                    p,
-                    Align2::LEFT_TOP,
-                    text,
-                    FontId::proportional(m.len(*size)),
-                    col,
-                );
+                painter.galley(p, galley, col);
             }
         }
         ShapeKind::Step { center, n, radius } => {
@@ -223,52 +235,26 @@ pub fn paint_shape(painter: &Painter, m: ImgToPt, shape: &Shape, skip_text: bool
         } => {
             let r = m.r(*rect);
             let fill = color32(shape.style.fill.unwrap_or(shape.style.color));
-            let t = m.p(*tail);
-            // Tail attaches to the nearest edge.
-            let c = r.center();
-            let hw = (r.width() / 2.0).max(1.0);
-            let hh = (r.height() / 2.0).max(1.0);
-            let horizontal = (t.x - c.x).abs() / hw > (t.y - c.y).abs() / hh;
-            let pts = if !horizontal && t.y >= c.y {
-                let bx = (r.left() + 14.0).clamp(r.left(), r.right());
-                vec![
-                    Pos2::new(bx, r.bottom() - 1.0),
-                    Pos2::new((bx + 18.0).min(r.right()), r.bottom() - 1.0),
-                    t,
-                ]
-            } else if !horizontal {
-                let bx = (r.left() + 14.0).clamp(r.left(), r.right());
-                vec![
-                    Pos2::new(bx, r.top() + 1.0),
-                    Pos2::new((bx + 18.0).min(r.right()), r.top() + 1.0),
-                    t,
-                ]
-            } else if t.x < c.x {
-                let by = (r.top() + 10.0).clamp(r.top(), r.bottom());
-                vec![
-                    Pos2::new(r.left() + 1.0, by),
-                    Pos2::new(r.left() + 1.0, (by + 16.0).min(r.bottom())),
-                    t,
-                ]
-            } else {
-                let by = (r.top() + 10.0).clamp(r.top(), r.bottom());
-                vec![
-                    Pos2::new(r.right() - 1.0, by),
-                    Pos2::new(r.right() - 1.0, (by + 16.0).min(r.bottom())),
-                    t,
-                ]
-            };
-            painter.rect_filled(r, m.len(8.0), fill);
-            painter.add(EShape::convex_polygon(pts, fill, Stroke::NONE));
+            // Bubble corner and tail as the renderer draws them.
+            painter.rect_filled(r, m.len(annotate::callout_radius(*rect)), fill);
+            if let Some((a, b)) = annotate::callout_tail_base(*rect, *tail) {
+                painter.add(EShape::convex_polygon(
+                    vec![m.p(a), m.p(b), m.p(*tail)],
+                    fill,
+                    Stroke::NONE,
+                ));
+            }
             if !skip_text && !text.is_empty() {
                 let tc = contrast_text(shape.style.fill.unwrap_or(shape.style.color));
-                painter.text(
-                    Pos2::new(r.left() + m.len(10.0), r.top() + m.len(6.0)),
-                    Align2::LEFT_TOP,
-                    text,
-                    FontId::proportional(m.len(*size)),
+                let pad = m.len(size * 0.7);
+                let galley = painter.layout(
+                    text.clone(),
+                    FontId::proportional(m.len(*size).max(1.0)),
                     Color32::from_rgb(tc[0], tc[1], tc[2]),
+                    (r.width() - 2.0 * pad).max(m.len(*size)),
                 );
+                let top = r.center().y - galley.size().y / 2.0;
+                painter.galley(Pos2::new(r.left() + pad, top), galley, Color32::WHITE);
             }
         }
         ShapeKind::Spotlight { rect, dim } => {
@@ -319,53 +305,172 @@ pub fn dashed_rect(painter: &Painter, r: Rect, color: Color32) {
 }
 
 /// Selection chrome: accent outline plus eight 9x9 handles (design: white fill, accent border).
-pub fn paint_selection_chrome(painter: &Painter, r: Rect, accent: Color32, with_handles: bool) {
+/// The handle under the pointer grows and fills with the accent.
+pub fn paint_selection_chrome(
+    painter: &Painter,
+    r: Rect,
+    accent: Color32,
+    with_handles: bool,
+    hovered: Option<Handle8>,
+) {
     painter.rect_stroke(r, 0.0, Stroke::new(1.5, accent), StrokeKind::Outside);
     if with_handles {
         let fr: FRect = (r.min.x, r.min.y, r.width(), r.height());
         for h in Handle8::ALL {
             let (x, y) = handle_pos(fr, h);
-            let hr = Rect::from_center_size(Pos2::new(x, y), Vec2::splat(9.0));
-            painter.rect_filled(hr, 2.0, Color32::WHITE);
-            painter.rect_stroke(hr, 2.0, Stroke::new(1.5, accent), StrokeKind::Inside);
+            let hot = hovered == Some(h);
+            let hr =
+                Rect::from_center_size(Pos2::new(x, y), Vec2::splat(if hot { 11.0 } else { 9.0 }));
+            painter.rect_filled(hr, 2.0, if hot { accent } else { Color32::WHITE });
+            painter.rect_stroke(
+                hr,
+                2.0,
+                Stroke::new(1.5, if hot { Color32::WHITE } else { accent }),
+                StrokeKind::Inside,
+            );
         }
     }
 }
 
-/// Handles of a selected annotation shape (round, smaller than selection handles).
+fn dashed_box(painter: &Painter, r: Rect, color: Color32) {
+    for s in EShape::dashed_line(
+        &[
+            r.left_top(),
+            r.right_top(),
+            r.right_bottom(),
+            r.left_bottom(),
+            r.left_top(),
+        ],
+        Stroke::new(1.0, color),
+        4.0,
+        3.0,
+    ) {
+        painter.add(s);
+    }
+}
+
+/// Outline of a selected shape (several shapes are selected: no handles).
+pub fn paint_selected_outline(
+    painter: &Painter,
+    m: ImgToPt,
+    shape: &Shape,
+    measure: shapes::Measure,
+) {
+    let b = shapes::bounds(shape, measure);
+    dashed_box(painter, m.r(b).expand(2.0), Color32::from_white_alpha(190));
+}
+
+/// Group box around several selected shapes.
+pub fn paint_group_box(painter: &Painter, r: Rect, accent: Color32) {
+    painter.rect_stroke(
+        r.expand(4.0),
+        3.0,
+        Stroke::new(1.0, accent),
+        StrokeKind::Outside,
+    );
+}
+
+/// Handles of a selected annotation shape (round, smaller than selection handles). Box
+/// handles are white with an accent ring, end points are solid accent, the arrow's curve
+/// handle is a white diamond; the one under the pointer (or being dragged) grows and fills
+/// with the accent.
 pub fn paint_shape_handles(
     painter: &Painter,
     m: ImgToPt,
     shape: &Shape,
     accent: Color32,
     measure: shapes::Measure,
+    hot: Option<ShapeHandle>,
 ) {
     let b = shapes::bounds(shape, measure);
-    let br = m.r(b).expand(2.0);
-    for s in EShape::dashed_line(
-        &[
-            br.left_top(),
-            br.right_top(),
-            br.right_bottom(),
-            br.left_bottom(),
-            br.left_top(),
-        ],
-        Stroke::new(1.0, Color32::from_white_alpha(190)),
-        4.0,
-        3.0,
-    ) {
-        painter.add(s);
+    dashed_box(painter, m.r(b).expand(2.0), Color32::from_white_alpha(190));
+    // The curve handle sits on the curve; a faint line to the chord middle shows the bend.
+    if let ShapeKind::Arrow { from, to, ctrl, .. } = &shape.kind {
+        let mid = m.p(annotate::arrow_mid(*from, *to, *ctrl));
+        let chord = m.p(PtF::new((from.x + to.x) / 2.0, (from.y + to.y) / 2.0));
+        if ctrl.is_some() {
+            for s in EShape::dashed_line(
+                &[chord, mid],
+                Stroke::new(1.0, Color32::from_white_alpha(150)),
+                3.0,
+                3.0,
+            ) {
+                painter.add(s);
+            }
+        }
     }
     for (h, p) in shapes::handles(shape, measure) {
         let c = m.p(p);
-        let (fill, r) = match h {
-            ShapeHandle::Src(_) => (Color32::from_rgb(0xff, 0xd1, 0x66), 4.0),
-            ShapeHandle::Tail | ShapeHandle::P1 | ShapeHandle::P2 => (accent, 5.5),
-            ShapeHandle::Rect(_) => (Color32::WHITE, 4.5),
-        };
-        painter.circle_filled(c, r, fill);
-        painter.circle_stroke(c, r, Stroke::new(1.5, accent));
+        let is_hot = hot == Some(h);
+        let grow = if is_hot { 1.5 } else { 0.0 };
+        match h {
+            ShapeHandle::Mid => {
+                let r = 5.5 + grow;
+                let pts = vec![
+                    c + Vec2::new(0.0, -r),
+                    c + Vec2::new(r, 0.0),
+                    c + Vec2::new(0.0, r),
+                    c + Vec2::new(-r, 0.0),
+                ];
+                let (fill, ring) = if is_hot {
+                    (accent, Color32::WHITE)
+                } else {
+                    (Color32::WHITE, accent)
+                };
+                painter.add(EShape::convex_polygon(pts, fill, Stroke::new(1.5, ring)));
+            }
+            _ => {
+                let (fill, ring, r) = match h {
+                    ShapeHandle::Src(_) => (Color32::from_rgb(0xff, 0xd1, 0x66), accent, 4.0),
+                    ShapeHandle::Tail | ShapeHandle::P1 | ShapeHandle::P2 => {
+                        (accent, Color32::WHITE, 5.5)
+                    }
+                    _ => (Color32::WHITE, accent, 4.5),
+                };
+                let (fill, ring) = if is_hot {
+                    (accent, Color32::WHITE)
+                } else {
+                    (fill, ring)
+                };
+                // A soft shadow keeps handles visible on white screenshots.
+                painter.circle_filled(
+                    c + Vec2::new(0.0, 1.0),
+                    r + grow + 1.0,
+                    Color32::from_black_alpha(60),
+                );
+                painter.circle_filled(c, r + grow, fill);
+                painter.circle_stroke(c, r + grow, Stroke::new(1.5, ring));
+            }
+        }
     }
+}
+
+/// Smart guides: thin accent lines (image px mapped to points).
+pub fn paint_guides(painter: &Painter, m: ImgToPt, guides: &[super::snap::Guide], accent: Color32) {
+    let stroke = Stroke::new(1.0, accent);
+    for g in guides {
+        let (a, b) = if g.vertical {
+            (PtF::new(g.at, g.from), PtF::new(g.at, g.to))
+        } else {
+            (PtF::new(g.from, g.at), PtF::new(g.to, g.at))
+        };
+        let (a, b) = (m.p(a), m.p(b));
+        let ext = if g.vertical {
+            Vec2::new(0.0, 6.0)
+        } else {
+            Vec2::new(6.0, 0.0)
+        };
+        painter.line_segment([a - ext, b + ext], stroke);
+        for p in [a, b] {
+            painter.circle_filled(p, 2.0, accent);
+        }
+    }
+}
+
+/// Rubber-band selection rectangle.
+pub fn paint_marquee(painter: &Painter, r: Rect, accent: Color32) {
+    painter.rect_filled(r, 0.0, accent.gamma_multiply(0.12));
+    painter.rect_stroke(r, 0.0, Stroke::new(1.0, accent), StrokeKind::Inside);
 }
 
 /// Size of one loupe cell in points and cell count (design: 11 x 11 at 12 pt = 132 pt).

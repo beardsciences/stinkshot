@@ -334,7 +334,7 @@ impl Overlay {
         }
         if self.doc != pre {
             self.undo.push(&pre);
-            self.selected = None;
+            self.selected.clear();
             self.tool = Tool::Select;
         }
     }
@@ -637,6 +637,7 @@ mod tests {
             font_size: 20.0,
             blur_radius: 12.0,
             pixelate_block: 10,
+            options: ShapeOptions::default(),
         };
         let r = PxRect::new(1, 2, 30, 40);
         let (k, s) = redaction_shape(RedactStyle::Box, r, &params);
@@ -665,6 +666,7 @@ mod tests {
             font_size: 20.0,
             blur_radius: 4.0,
             pixelate_block: 4,
+            options: ShapeOptions::default(),
         };
         // Small text keeps the tool setting; tall text gets coarser cells and a wider blur.
         assert_eq!(strength(PxRect::new(0, 0, 80, 9), &params), (4.0, 5));

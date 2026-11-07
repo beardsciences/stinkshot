@@ -37,6 +37,12 @@ pub enum UiAction {
     FindSensitive,
     /// Inside the Find Sensitive Info panel.
     Smart(super::smart_redact::SmartAction),
+    /// Eyedropper button (or I): pick a color from the image.
+    Eyedropper,
+    /// A context bar option on the selected arrow or text.
+    Shape(super::ops::ShapeOpt),
+    /// The zoom chip: back to the fitted view.
+    ZoomFit,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -78,6 +84,8 @@ pub struct BarInfo {
     pub tool: Tool,
     pub color: [u8; 4],
     pub width: f32,
+    /// The eyedropper is picking.
+    pub picking: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -228,6 +236,12 @@ pub fn tool_bar(
                     if resp.clicked() {
                         out.push(UiAction::TogglePopup(Popup::Color));
                     }
+                    let tip = format!("Pick Color from Image ({})", super::keys::EYEDROPPER.label);
+                    if theme::widgets::icon_button(ui, Icon::Eyedropper, &tip, info.picking)
+                        .clicked()
+                    {
+                        out.push(UiAction::Eyedropper);
+                    }
 
                     // Stroke width: painted like the icon buttons so hover/press match.
                     let (wr, wb) = ui.allocate_exact_size(Vec2::new(46.0, 34.0), Sense::click());
@@ -360,56 +374,368 @@ fn popup_area(
         });
 }
 
-/// Palette popup (8 swatches from config).
+/// One round swatch button (palette and recent colors).
+fn swatch(
+    ui: &mut egui::Ui,
+    c: [u8; 4],
+    current: [u8; 4],
+    tip: String,
+    pal: &Palette,
+    out: &mut Vec<UiAction>,
+) {
+    let (r, resp) = ui.allocate_exact_size(Vec2::splat(34.0), Sense::click());
+    let resp = resp.on_hover_text(tip);
+    if resp.hovered() {
+        let (dark, _) = theme::current(ui.ctx());
+        ui.painter()
+            .rect_filled(r, 6.0, theme::subtle_fill(dark, 1));
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    ui.painter()
+        .circle_filled(r.center(), 9.0, color32([c[0], c[1], c[2], 255]));
+    if c[..3] == current[..3] {
+        ui.painter()
+            .circle_stroke(r.center(), 11.5, egui::Stroke::new(1.5, pal.text));
+    } else {
+        ui.painter()
+            .circle_stroke(r.center(), 9.0, egui::Stroke::new(1.0, pal.stroke));
+    }
+    if resp.clicked() {
+        out.push(UiAction::Color(c));
+    }
+}
+
+/// Palette popup: 8 swatches from config, then the recent colors (newest first).
+#[allow(clippy::too_many_arguments)]
 pub fn color_popup(
     ctx: &Context,
     anchor: Rect,
     screen: Rect,
     palette: &[[u8; 4]],
+    recent: &[[u8; 4]],
     current: [u8; 4],
     pal: &Palette,
     out: &mut Vec<UiAction>,
 ) {
+    let h = if recent.is_empty() { 44.0 } else { 86.0 };
     popup_area(
         ctx,
         "stinkshot-ov-color",
         anchor,
         screen,
-        Vec2::new(8.0 * 34.0, 44.0),
+        Vec2::new(8.0 * 34.0, h),
         pal,
         |ui| {
-            ui.spacing_mut().item_spacing = Vec2::new(2.0, 0.0);
+            ui.spacing_mut().item_spacing = Vec2::new(2.0, 4.0);
             ui.horizontal(|ui| {
                 for (i, c) in palette.iter().take(8).enumerate() {
-                    let (r, resp) = ui.allocate_exact_size(Vec2::splat(34.0), Sense::click());
-                    let resp = resp.on_hover_text(format!("Color {}", i + 1));
-                    if resp.hovered() {
-                        let (dark, _) = theme::current(ui.ctx());
-                        ui.painter()
-                            .rect_filled(r, 6.0, theme::subtle_fill(dark, 1));
-                    }
-                    ui.painter()
-                        .circle_filled(r.center(), 9.0, color32([c[0], c[1], c[2], 255]));
-                    if c[..3] == current[..3] {
-                        ui.painter().circle_stroke(
-                            r.center(),
-                            11.5,
-                            egui::Stroke::new(1.5, pal.text),
-                        );
-                    } else {
-                        ui.painter().circle_stroke(
-                            r.center(),
-                            9.0,
-                            egui::Stroke::new(1.0, pal.stroke),
-                        );
-                    }
-                    if resp.clicked() {
-                        out.push(UiAction::Color(*c));
-                    }
+                    swatch(ui, *c, current, format!("Color {}", i + 1), pal, out);
                 }
             });
+            if !recent.is_empty() {
+                ui.horizontal(|ui| {
+                    let (r, _) = ui.allocate_exact_size(Vec2::new(64.0, 34.0), Sense::hover());
+                    ui.painter().text(
+                        Pos2::new(r.left() + 8.0, r.center().y),
+                        Align2::LEFT_CENTER,
+                        "Recent",
+                        FontId::proportional(12.0),
+                        pal.text_secondary,
+                    );
+                    for c in recent {
+                        let hex = super::hover::hex_string([c[0], c[1], c[2]]);
+                        swatch(ui, *c, current, format!("Recent Color {hex}"), pal, out);
+                    }
+                });
+            }
         },
     );
+}
+
+/// What the context bar above a selected arrow or text shows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ContextBar {
+    Text {
+        bold: bool,
+        pill: bool,
+        size: f32,
+    },
+    Arrow {
+        double: bool,
+        head: stinkshot_core::annotate::ArrowHead,
+        curved: bool,
+    },
+}
+
+/// A 30x30 option button styled like the icon buttons, its glyph drawn by `glyph`.
+fn opt_button(
+    ui: &mut egui::Ui,
+    tip: &str,
+    selected: bool,
+    glyph: impl FnOnce(&egui::Painter, Rect, Color32),
+) -> egui::Response {
+    let (dark, accent) = theme::current(ui.ctx());
+    let pal = theme::palette(dark);
+    let (r, resp) = ui.allocate_exact_size(Vec2::splat(30.0), Sense::click());
+    let hover = ui
+        .ctx()
+        .animate_bool_with_time(resp.id.with("hover"), resp.hovered(), 0.1);
+    let bg = if selected {
+        theme::accent_soft(accent, 56 + (24.0 * hover) as u8)
+    } else if resp.is_pointer_button_down_on() {
+        theme::subtle_fill(dark, 2)
+    } else {
+        theme::subtle_fill(dark, 1).gamma_multiply(hover)
+    };
+    ui.painter().rect_filled(r, 6.0, bg);
+    if selected {
+        ui.painter().rect_stroke(
+            r,
+            6.0,
+            egui::Stroke::new(1.0, theme::accent_soft(accent, 140)),
+            egui::StrokeKind::Inside,
+        );
+    }
+    let ink = if selected {
+        theme::accent_fg(accent, dark)
+    } else {
+        pal.text
+    };
+    glyph(ui.painter(), r.shrink(7.0), ink);
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp.on_hover_text(tip)
+}
+
+fn arrow_glyph(
+    p: &egui::Painter,
+    r: Rect,
+    c: Color32,
+    double: bool,
+    head: stinkshot_core::annotate::ArrowHead,
+) {
+    use stinkshot_core::annotate::ArrowHead;
+    let a = Pos2::new(r.left(), r.center().y);
+    let b = Pos2::new(r.right(), r.center().y);
+    let stroke = egui::Stroke::new(1.6, c);
+    let head_at = |tip: Pos2, dir: f32| {
+        let back = tip.x - dir * 6.0;
+        let (l, rr) = (Pos2::new(back, tip.y - 4.5), Pos2::new(back, tip.y + 4.5));
+        match head {
+            ArrowHead::Open => {
+                p.line_segment([l, tip], stroke);
+                p.line_segment([rr, tip], stroke);
+            }
+            ArrowHead::Triangle => {
+                p.add(egui::Shape::convex_polygon(
+                    vec![tip, l, rr],
+                    c,
+                    egui::Stroke::NONE,
+                ));
+            }
+            ArrowHead::Notched => {
+                let n = Pos2::new(tip.x - dir * 4.0, tip.y);
+                p.add(egui::Shape::convex_polygon(
+                    vec![tip, l, n],
+                    c,
+                    egui::Stroke::NONE,
+                ));
+                p.add(egui::Shape::convex_polygon(
+                    vec![tip, n, rr],
+                    c,
+                    egui::Stroke::NONE,
+                ));
+            }
+        }
+    };
+    let (sa, sb) = (
+        if double { Pos2::new(a.x + 4.0, a.y) } else { a },
+        Pos2::new(b.x - 4.0, b.y),
+    );
+    p.line_segment([sa, sb], stroke);
+    head_at(b, 1.0);
+    if double {
+        head_at(a, -1.0);
+    }
+}
+
+/// Small floating bar of options for the selected arrow or text (or the text being typed),
+/// above `anchor` (the shape's screen rect, points), below it when there is no room.
+pub fn context_bar(
+    ctx: &Context,
+    anchor: Rect,
+    screen: Rect,
+    bar: ContextBar,
+    pal: &Palette,
+    out: &mut Vec<UiAction>,
+) {
+    use super::ops::ShapeOpt;
+    use stinkshot_core::annotate::ArrowHead;
+    let (w, h) = match bar {
+        ContextBar::Text { .. } => (4.0 * 32.0 + 40.0, 40.0),
+        ContextBar::Arrow { curved, .. } => {
+            ((5.0 + f32::from(u8::from(curved))) * 32.0 + 22.0, 40.0)
+        }
+    };
+    let above = anchor.top() - 10.0 - h >= screen.top() + 4.0;
+    let y = if above {
+        anchor.top() - 10.0 - h
+    } else {
+        (anchor.bottom() + 10.0).min(screen.bottom() - h - 4.0)
+    };
+    let x = (anchor.center().x - w / 2.0).clamp(
+        screen.left() + 4.0,
+        (screen.right() - w - 4.0).max(screen.left() + 4.0),
+    );
+    Area::new(Id::unique("stinkshot-ov-context"))
+        .order(Order::Foreground)
+        .fixed_pos(Pos2::new(x, y))
+        .show(ctx, |ui| {
+            Frame::NONE
+                .fill(pal.flyout.gamma_multiply(0.97))
+                .stroke(egui::Stroke::new(1.0, pal.stroke))
+                .corner_radius(8)
+                .inner_margin(Margin::same(4))
+                .shadow(egui::epaint::Shadow {
+                    offset: [0, 4],
+                    blur: 14,
+                    spread: 0,
+                    color: Color32::from_black_alpha(90),
+                })
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing = Vec2::new(2.0, 0.0);
+                    ui.horizontal(|ui| match bar {
+                        ContextBar::Text { bold, pill, size } => {
+                            let tip = format!(
+                                "Smaller Text ({} px)",
+                                super::shapes::step_text_size(size, false).round()
+                            );
+                            if opt_button(ui, &tip, false, |p, r, c| {
+                                p.text(
+                                    r.center(),
+                                    Align2::CENTER_CENTER,
+                                    "A\u{2212}",
+                                    FontId::proportional(13.0),
+                                    c,
+                                );
+                            })
+                            .clicked()
+                            {
+                                out.push(UiAction::Shape(ShapeOpt::TextSmaller));
+                            }
+                            let (r, _) =
+                                ui.allocate_exact_size(Vec2::new(30.0, 30.0), Sense::hover());
+                            ui.painter().text(
+                                r.center(),
+                                Align2::CENTER_CENTER,
+                                format!("{}", size.round() as i32),
+                                FontId::proportional(12.0),
+                                pal.text_secondary,
+                            );
+                            let tip = format!(
+                                "Larger Text ({} px)",
+                                super::shapes::step_text_size(size, true).round()
+                            );
+                            if opt_button(ui, &tip, false, |p, r, c| {
+                                p.text(
+                                    r.center(),
+                                    Align2::CENTER_CENTER,
+                                    "A+",
+                                    FontId::proportional(15.0),
+                                    c,
+                                );
+                            })
+                            .clicked()
+                            {
+                                out.push(UiAction::Shape(ShapeOpt::TextLarger));
+                            }
+                            let tip = format!("Bold ({})", super::keys::BOLD.label);
+                            if opt_button(ui, &tip, bold, |p, r, c| {
+                                p.text(
+                                    r.center(),
+                                    Align2::CENTER_CENTER,
+                                    "B",
+                                    theme::semibold(15.0),
+                                    c,
+                                );
+                            })
+                            .clicked()
+                            {
+                                out.push(UiAction::Shape(ShapeOpt::Bold(!bold)));
+                            }
+                            if opt_button(ui, "Background Pill", pill, |p, r, c| {
+                                let pr = Rect::from_center_size(
+                                    r.center(),
+                                    Vec2::new(r.width(), r.height() * 0.62),
+                                );
+                                p.rect_filled(pr, pr.height() / 2.0, c);
+                                p.text(
+                                    pr.center(),
+                                    Align2::CENTER_CENTER,
+                                    "T",
+                                    theme::semibold(10.0),
+                                    pal.flyout,
+                                );
+                            })
+                            .clicked()
+                            {
+                                out.push(UiAction::Shape(ShapeOpt::Pill(!pill)));
+                            }
+                        }
+                        ContextBar::Arrow {
+                            double,
+                            head,
+                            curved,
+                        } => {
+                            if opt_button(ui, "One Head", !double, |p, r, c| {
+                                arrow_glyph(p, r, c, false, head)
+                            })
+                            .clicked()
+                            {
+                                out.push(UiAction::Shape(ShapeOpt::Double(false)));
+                            }
+                            if opt_button(ui, "Heads at Both Ends", double, |p, r, c| {
+                                arrow_glyph(p, r, c, true, head)
+                            })
+                            .clicked()
+                            {
+                                out.push(UiAction::Shape(ShapeOpt::Double(true)));
+                            }
+                            separator(ui, pal);
+                            for (h, tip) in [
+                                (ArrowHead::Notched, "Notched Head"),
+                                (ArrowHead::Triangle, "Triangle Head"),
+                                (ArrowHead::Open, "Open Head"),
+                            ] {
+                                if opt_button(ui, tip, head == h, |p, r, c| {
+                                    arrow_glyph(p, r, c, false, h)
+                                })
+                                .clicked()
+                                {
+                                    out.push(UiAction::Shape(ShapeOpt::Head(h)));
+                                }
+                            }
+                            if curved
+                                && opt_button(
+                                    ui,
+                                    "Straighten (Double-Click the Curve Handle)",
+                                    false,
+                                    |p, r, c| {
+                                        p.line_segment(
+                                            [r.left_bottom(), r.right_top()],
+                                            egui::Stroke::new(1.6, c),
+                                        );
+                                    },
+                                )
+                                .clicked()
+                            {
+                                out.push(UiAction::Shape(ShapeOpt::Straighten));
+                            }
+                        }
+                    });
+                });
+        });
 }
 
 /// Stroke width popup with preset dots.
@@ -472,6 +798,8 @@ pub struct ChipState<'a> {
     pub purpose: Option<&'static str>,
     /// Aspect/exact chips only make sense while the selection can still be edited.
     pub editable: bool,
+    /// Image zoom in percent while the view is zoomed or panned; clicking it fits again.
+    pub zoom: Option<i32>,
 }
 
 const PRESETS: [(&str, Option<Ratio>); 4] = [
@@ -511,6 +839,24 @@ pub fn size_chips(
                             .color(pal.text),
                     );
                 });
+                if let Some(z) = st.zoom {
+                    let r = chip(pal)
+                        .show(ui, |ui| {
+                            ui.label(RichText::new(format!("{z}%")).size(12.0).color(accent_fg));
+                        })
+                        .response
+                        .interact(Sense::click())
+                        .on_hover_text(format!(
+                            "Zoom \u{b7} Click to Fit ({})",
+                            super::keys::ZOOM_FIT.label
+                        ));
+                    if r.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    if r.clicked() {
+                        out.push(UiAction::ZoomFit);
+                    }
+                }
                 if st.editable {
                     chip(pal).show(ui, |ui| {
                         ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);

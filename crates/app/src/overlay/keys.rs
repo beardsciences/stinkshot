@@ -75,6 +75,20 @@ pub const FIND_SENSITIVE: Chord = Chord::ctrl(Key::R, "Ctrl+R");
 pub const UNDO: Chord = Chord::ctrl(Key::Z, "Ctrl+Z");
 pub const REDO: Chord = Chord::ctrl(Key::Y, "Ctrl+Y");
 pub const COPY_COLOR: Chord = Chord::plain(Key::C, "C");
+/// Pick a color from the image (eyedropper).
+pub const EYEDROPPER: Chord = Chord::plain(Key::I, "I");
+pub const DUPLICATE: Chord = Chord::ctrl(Key::D, "Ctrl+D");
+/// Copy / paste shapes inside the editor (Ctrl+C copies the image when no shape is selected).
+pub const COPY: Chord = Chord::ctrl(Key::C, "Ctrl+C");
+pub const PASTE: Chord = Chord::ctrl(Key::V, "Ctrl+V");
+pub const BOLD: Chord = Chord::ctrl(Key::B, "Ctrl+B");
+pub const ZOOM_FIT: Chord = Chord::ctrl(Key::Num0, "Ctrl+0");
+pub const ZOOM_ACTUAL: Chord = Chord::ctrl(Key::Num1, "Ctrl+1");
+/// Z-order chords (read in Overlay::read_keys; brackets with Ctrl, Shift goes all the way).
+pub const FORWARD: &str = "Ctrl+]";
+pub const BACKWARD: &str = "Ctrl+[";
+pub const TO_FRONT: &str = "Ctrl+Shift+]";
+pub const TO_BACK: &str = "Ctrl+Shift+[";
 pub const HELP: Chord = Chord::plain(Key::F1, "F1");
 /// Typed character that also toggles the cheat sheet (layout independent).
 pub const HELP_CHAR: &str = "?";
@@ -128,20 +142,40 @@ pub fn sheet(select_only: bool) -> Sheet {
         .collect();
     let edit = vec![
         ("1-8".to_string(), "Palette Color"),
+        (EYEDROPPER.label.to_string(), "Pick Color from Image"),
         ("[  ]".to_string(), "Thinner or Thicker"),
         (UNDO.label.to_string(), "Undo"),
         (REDO.label.to_string(), "Redo"),
         (format!("Ctrl+Shift+{}", UNDO.key.name()), "Redo"),
         ("Shift+Drag".to_string(), "Straight Line, Square or Circle"),
-        ("Del or Backspace".to_string(), "Delete the Selected Shape"),
-        ("Arrows".to_string(), "Move the Selected Shape"),
+        ("Alt+Drag".to_string(), "Move Without Snapping"),
+        ("Del or Backspace".to_string(), "Delete the Selected Shapes"),
         ("Double-Click".to_string(), "Edit Text"),
+        (BOLD.label.to_string(), "Bold Text"),
         (FIND_SENSITIVE.label.to_string(), "Find Sensitive Info"),
         ("Esc".to_string(), "Deselect, Then Cancel"),
     ];
+    let arrange = vec![
+        ("Shift+Click".to_string(), "Add or Remove a Shape"),
+        ("Drag Empty Space".to_string(), "Select Shapes in an Area"),
+        ("Arrows".to_string(), "Move the Selected Shapes"),
+        (DUPLICATE.label.to_string(), "Duplicate"),
+        (COPY.label.to_string(), "Copy the Selected Shapes"),
+        (PASTE.label.to_string(), "Paste Shapes"),
+        (format!("{FORWARD}  {BACKWARD}"), "Forward or Backward"),
+        (format!("{TO_FRONT}  {TO_BACK}"), "To Front or Back"),
+    ];
+    let view = vec![
+        ("Ctrl+Wheel".to_string(), "Zoom at the Cursor"),
+        ("Ctrl+=  Ctrl+-".to_string(), "Zoom In or Out"),
+        (ZOOM_FIT.label.to_string(), "Fit"),
+        (ZOOM_ACTUAL.label.to_string(), "Actual Size (100%)"),
+        ("Space+Drag".to_string(), "Pan When Zoomed"),
+        ("Middle-Drag".to_string(), "Pan"),
+    ];
     let finish = vec![
-        ("Enter".to_string(), "Copy"),
-        ("Ctrl+C".to_string(), "Copy"),
+        ("Enter".to_string(), "Copy the Image"),
+        ("Ctrl+C".to_string(), "Copy the Image (No Shape Selected)"),
         (SAVE.label.to_string(), "Save As"),
         (PIN.label.to_string(), "Pin to Screen"),
         (COPY_TEXT.label.to_string(), "Copy Text (OCR)"),
@@ -152,6 +186,8 @@ pub fn sheet(select_only: bool) -> Sheet {
         ("Select", select),
         ("Tools", tools),
         ("Edit", edit),
+        ("Arrange", arrange),
+        ("View", view),
         ("Finish", finish),
     ]
 }
@@ -197,6 +233,13 @@ mod tests {
             REDO,
             COPY_COLOR,
             HELP,
+            EYEDROPPER,
+            DUPLICATE,
+            COPY,
+            PASTE,
+            BOLD,
+            ZOOM_FIT,
+            ZOOM_ACTUAL,
         ] {
             let expect = if c.ctrl {
                 format!("Ctrl+{}", c.key.name())
@@ -207,16 +250,21 @@ mod tests {
         }
         // Plain-letter chords must not collide with tool letters.
         assert!(tool_for_key(COPY_COLOR.key).is_none());
+        assert!(tool_for_key(EYEDROPPER.key).is_none());
+        assert_ne!(EYEDROPPER.key, COPY_COLOR.key);
     }
 
     #[test]
     fn sheet_has_the_four_groups_and_every_tool() {
         let s = sheet(false);
         let titles: Vec<&str> = s.iter().map(|(t, _)| *t).collect();
-        assert_eq!(titles, ["Select", "Tools", "Edit", "Finish"]);
+        assert_eq!(
+            titles,
+            ["Select", "Tools", "Edit", "Arrange", "View", "Finish"]
+        );
         assert_eq!(s[1].1.len(), TOOL_KEYS.len());
         assert!(s[1].1.iter().any(|(k, v)| k == "A" && *v == "Arrow"));
-        assert!(s[3].1.iter().any(|(k, _)| k == SAVE.label));
+        assert!(s[5].1.iter().any(|(k, _)| k == SAVE.label));
         for (_, what) in &s[1].1 {
             assert!(!what.contains('('), "no shortcut suffix left in {what}");
         }
@@ -270,6 +318,21 @@ mod tests {
             "Esc",
             "Enter",
             "Arrows",
+            EYEDROPPER.label,
+            DUPLICATE.label,
+            COPY.label,
+            PASTE.label,
+            BOLD.label,
+            ZOOM_FIT.label,
+            ZOOM_ACTUAL.label,
+            FORWARD,
+            BACKWARD,
+            TO_FRONT,
+            TO_BACK,
+            "Ctrl+Wheel",
+            "Middle-Drag",
+            "Shift+Click",
+            "Alt+Drag",
         ] {
             assert!(has(k), "{k} missing from the cheat sheet");
         }
@@ -278,5 +341,19 @@ mod tests {
                 .iter()
                 .any(|(k, v)| k == "Shift+Drag" && v.contains("Square"))
         );
+    }
+
+    #[test]
+    fn ctrl_c_on_the_sheet_says_when_it_copies_shapes() {
+        let s = sheet(false);
+        let rows: Vec<&(String, &str)> = s.iter().flat_map(|(_, r)| r.iter()).collect();
+        let ctrl_c: Vec<&str> = rows
+            .iter()
+            .filter(|(k, _)| k == COPY.label)
+            .map(|(_, v)| *v)
+            .collect();
+        assert_eq!(ctrl_c.len(), 2, "{ctrl_c:?}");
+        assert!(ctrl_c.iter().any(|v| v.contains("Shapes")));
+        assert!(ctrl_c.iter().any(|v| v.contains("No Shape Selected")));
     }
 }
