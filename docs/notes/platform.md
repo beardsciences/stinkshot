@@ -12,6 +12,7 @@ about 5 s here because of the WGC hang described below).
 
 | Module | Notes |
 |---|---|
+| `hdr` | Advanced color state + SDR white level per display (DisplayConfig), FP16 scRGB to sRGB8 converter with highlight roll-off. See `docs/notes/hdr.md`. |
 | `dpi` | `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)`; failure (already set by manifest) is logged at debug. |
 | `monitors` | `EnumDisplayMonitors` + `GetMonitorInfoW` (EX) + `GetDpiForMonitor(EFFECTIVE)`. `list()` is sorted primary first, then left-to-right. |
 | `capture` | DXGI Desktop Duplication per output with one cached session (see below), BGRA/RGBA8/R10G10B10A2/FP16 conversion, GDI `BitBlt(CAPTUREBLT)` fallback, WGC window capture, PrintWindow fallback, cursor drawing. |
@@ -40,9 +41,9 @@ about 5 s here because of the WGC hang described below).
   differs from them.
 - Rotated outputs and software-composed outputs use GDI instead. GDI is also the fallback for
   any duplication error (secure desktop, driver reset, no adapters).
-- `DuplicateOutput1` is asked for BGRA8 only, so HDR outputs are tone-mapped to SDR by the
-  system. The float/10-bit converters are there as a safety net (linear scRGB to sRGB with a
-  4096-entry LUT).
+- SDR outputs are duplicated as BGRA8. HDR outputs are duplicated as FP16 scRGB and converted
+  with the display's SDR white level (`hdr` module); an 8-bit duplication of an HDR output is
+  clipped, not tone-mapped, and looked blown out. See `docs/notes/hdr.md`.
 - Conversion is split across up to 8 threads by row bands.
 - Timing on this box (2 monitors, 6400x2160 virtual desktop): `freeze_all` about 40 to 55 ms
   with an optimized build once the session exists; **the first capture takes 0.3 to 0.6 s**
@@ -138,6 +139,8 @@ about 5 s here because of the WGC hang described below).
 
 - `capture::warm_up()`: create the duplication session ahead of time.
 - `capture::release_cached_capture()`: drop the cached session.
+- `hdr` module (Nov 6 2026): `displays()`, `display_for_device()`, `display_for_monitor()`,
+  `ScrgbToSrgb`, half/sRGB helpers. Feature `Win32_Devices_Display` added.
 - `clipboard::get_text()`, `get_image()`, `has_dibv5()`: read-back helpers (used by tests).
 - `input::key_label(vk, scan, extended)`: public so the visualizer can label arbitrary keys.
 - `Cargo.toml`: added `image` dependency and extra `windows` features.
@@ -173,7 +176,7 @@ about 5 s here because of the WGC hang described below).
       `virtual_bounds`, gaps are black, no seam at monitor borders.
 - [ ] Rotate a monitor to portrait: capture is correctly oriented (GDI path).
 - [ ] Play a full-screen video and an HDR video: freeze looks right and not washed out; with
-      HDR on, the image is SDR tone-mapped, not blown out.
+      HDR on, SDR content matches the screen and HDR highlights roll off toward white.
 - [ ] Lock screen / UAC prompt during capture: falls back without panicking or hanging.
 - [ ] `capture_window` on a covered window, a maximized window, a Win11 window with rounded
       corners (alpha corners), an elevated app, a minimized window (clean error), and a window
