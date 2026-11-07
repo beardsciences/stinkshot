@@ -245,3 +245,23 @@ Recording
 - [ ] Trim: filmstrip fills, handles drag and cannot cross, preview follows the active handle,
       arrow keys nudge, Save GIF / Save MP4 progress bar, Discard asks first.
 - [ ] Scroll HUD shows frame count and size, progress follows height, Cancel / Stop here and Esc.
+
+## Viewport-builder feedback check (Nov 6 2026)
+
+The pin wiggled because its `viewport_builder` reported a rect rewritten every frame, and egui
+turns every builder change into `OuterPosition` / `InnerSize` commands (egui 0.37
+`ViewportBuilder::patch` compares the new builder with the previous one, not with the real
+window). Checked every other surface for the same pattern:
+
+| Surface | Builder position / size | Moved by | Fight? |
+|---|---|---|---|
+| Recording HUD (`RecordHud`) | creation rect / `HUD_W` x `HUD_H`, never reassigned | OS move loop (`StartDrag` after egui's drag threshold) | No |
+| Scrolling HUD, Countdown, Record Frame | creation rect, never reassigned | not movable (`ScrollHud` has no drag; the other two are click-through) | No |
+| Toast | final slot rect / `logical_size(kind)`, never reassigned | entrance slide via `window_util::set_rect` only | No |
+| Trim, History, Settings | constants (Trim: creation rect + `TRIM_W` x `TRIM_H`) | title bar (OS) | No |
+| Overlay | `frozen.bounds`, constant per overlay | not movable | No |
+
+So no change was needed. The HUD drag starts after egui's drag threshold, so the window keeps
+the cursor offset of that moment (a few px behind the press point) but it does not jump or
+wiggle; starting the OS drag on press would steal clicks from the HUD buttons, which sit over
+the draggable background. Verified from code (no synthetic input).
