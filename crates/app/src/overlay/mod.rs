@@ -665,6 +665,10 @@ impl Overlay {
             return;
         }
         self.initialized = true;
+        crate::timing::point(format_args!(
+            "overlay: first frame, {:.1} ms after Overlay::new",
+            self.opened_at.elapsed().as_secs_f64() * 1000.0
+        ));
         self.renderer = Some(Renderer::new(ctx));
         self.frozen_tex = Some(TiledTexture::upload(
             ctx,
@@ -678,6 +682,7 @@ impl Overlay {
             self.base_tex = Some(TiledTexture::upload(ctx, "ov-base", b, false));
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        crate::timing::point(format_args!("overlay: textures uploaded"));
     }
 
     // ---------------------------------------------------------------- input reading

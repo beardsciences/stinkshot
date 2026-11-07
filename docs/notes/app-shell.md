@@ -143,3 +143,74 @@ running instances, and none of them is shown to users):
   lists show the exe's FileDescription, not the value name), `HKCU\Software\StinkShot`.
 - `StinkShot.App` manifest assembly identity, the `StinkShot.Semibold` egui font family name.
 - Crate names, `stinkshot.exe`, `STINKSHOT_PROFILE`.
+
+## First overlay after launch was slow (Nov 6 2026)
+
+Report: right after start-up the first `stinkshot region` sometimes showed no overlay within
+3 s while later ones did; once the client gave up with "another instance owns the mutex but
+did not answer IPC".
+
+Measured with `timing::point` trace lines (debug level, `grep timing: stinkshot.log`, time
+since process start): mutex, IPC listener ready, eframe up, first frame, IPC received, IPC
+command taken by the shell, dispatch, freeze (window list and `freeze_all` separately),
+overlay constructed, overlay first frame, textures uploaded, overlay window created. The
+client side logs which forwarding attempt succeeded. Reproduced in the `b4` dev profile with
+a script that launches `--tray`, sends `region` 0.3 s later, waits for our own
+`StinkShot.Overlay` window (enumerated by our pid) and closes it with `WM_CLOSE` (a window
+message, no synthetic input).
+
+Root causes (in order of cost):
+
+1. **Cold DXGI duplication session.** The first `freeze_all` created the D3D11 device and the
+   duplications and GDI-seeded every output's placeholder first frame: 787 ms vs 35-44 ms warm
+   (optimized), 2164 ms vs 850 ms in the unoptimized dev build. `capture::warm_up()` existed
+   for this (platform notes) but nothing called it, and it only probed a 16x16 rect, so the
+   second monitor stayed cold.
+2. **IPC listener started late.** The mutex was taken at process start but the listener only
+   in `Shell::new`, after fonts, history, OCR and wgpu (about 0.75-1 s in a dev build, more on
+   a cold boot). The client retried for 705 ms in the baseline run; past its 3 s budget the
+   command was lost ("did not answer IPC").
+3. **Root window restyle on the first frame.** `setup_root_window` (tool-window style, which
+   hides and re-shows the root) ran first thing in `logic` and took about 150 ms on the first
+   frame, delaying a command queued at launch by that much.
+4. Dev-build only: platform and core were unoptimized, so every freeze converted the 6400x2160
+   desktop (FP16 tone mapping, swizzles, `Rgba::filled`) at opt-level 0: about 0.85 s per
+   freeze, which hid the real latency.
+
+Not a cause: the first overlay viewport is not slower than later ones (first frame 82-106 ms
+after `Overlay::new` on the first and on later overlays), so no wgpu pre-warm was added.
+
+Fixes:
+
+- `shell::run` starts the IPC listener and bridge (`start_ipc`) right after the mutex, before
+  config/fonts/history/OCR/eframe. Commands queue in the channel (the bridge's `wake()` is a
+  no-op until the shell registers its context) and the shell drains them on its first frame.
+- A `capture-warmup` thread calls `capture::warm_up()` right after the mutex, beside eframe
+  start-up. `warm_up` now primes every output (session, first frame past, shadow seeded)
+  without the read-back and conversion of a real capture. A capture that arrives during the
+  warm-up waits on the session lock, so it is never slower than before. GPU memory for the
+  duplication textures is now held from start-up instead of from the first capture.
+- `setup_root_window` runs at the end of `ui()`, after the surfaces are shown.
+- `Cargo.toml`: `stinkshot-platform` and `stinkshot-core` build at opt-level 2 in the dev
+  profile (like `stinkshot-record`), so dev builds show release-like capture latency.
+
+Timings (dev build, `b4` profile, 4K HDR + 1440p, region sent 0.3 s after launch unless noted;
+"visible" = our overlay window exists and is visible, measured by the script from the moment
+the client process is started):
+
+| Run | First overlay | Later overlays | First `freeze_all` | Warm `freeze_all` |
+|---|---|---|---|---|
+| Before (unoptimized platform/core) | 3060 ms | 931-940 ms | 2164 ms | 843-855 ms |
+| Before, warm-up off, optimized (region at 1.5 s) | 875 ms | 125 ms | 787 ms | 35 ms |
+| After, region at 0.3 s (app still starting) | 799 ms (eframe up at +870 ms, dispatch +880 ms) | 123 ms | 172 ms (waited for the warm-up) | 44 ms |
+| After, region at 1.5 s | 138 ms | - | 43 ms | - |
+
+In the 0.3 s run the command now reaches the app at once (forwarding attempt 0, it was attempt
+3-7) and is dispatched on the first frame (+0.1 ms after it, was +105-150 ms).
+
+Remaining, not fixed: in a dev build the app crate's tile upload of the frozen image (per-pixel
+`Color32` map, opt-level 0) takes about 600 ms per overlay before its first paint; release is
+fast. Global hotkeys (PrtSc included) are registered in `Shell::new`, so a PrtSc pressed before
+eframe is up still goes to Windows; after that the hotkey path is the same as IPC (bridge ->
+`pending` -> `begin_overlay` -> `freeze_all`) and gets the warm session. The first PrtSc was
+not pressed live (no synthetic input; hotkeys are disabled in the dev profile).

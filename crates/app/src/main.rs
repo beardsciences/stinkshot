@@ -25,6 +25,7 @@ mod shell;
 mod state;
 mod sysutil;
 mod theme;
+mod timing;
 mod toast;
 mod tray;
 mod update;

@@ -56,3 +56,13 @@ opt-level = 2
 
 [profile.dev.package.stinkshot-record]
 opt-level = 3
+
+# Screen capture converts every pixel of the desktop (FP16 HDR tone mapping, swizzles) on each
+# freeze. Unoptimized that is about 1 s per freeze, which makes dev builds useless for judging
+# overlay latency; optimized it matches release (tens of ms).
+[profile.dev.package.stinkshot-platform]
+opt-level = 2
+
+# Full-desktop `Rgba` fills and blits on the same path.
+[profile.dev.package.stinkshot-core]
+opt-level = 2

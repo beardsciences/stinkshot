@@ -66,7 +66,7 @@ use crate::update::Release;
 use crate::workers::{
     self, BgConfig, BgKick, Env, SCROLL_CANCEL, SCROLL_RUN, SCROLL_STOP, WorkerMsg,
 };
-use crate::{logger, sysutil, wake};
+use crate::{logger, sysutil, timing, wake};
 
 const ROOT_TITLE: &str = "StinkShot.Root";
 const MAX_TOASTS: usize = 6;
@@ -86,6 +86,7 @@ const NOTICE_LAST_REGION_OFF_SCREEN: &str = "Last Region Is Off Screen: Select a
 // ---------------------------------------------------------------------------- entry
 
 pub fn run() -> anyhow::Result<()> {
+    timing::mark_start();
     if std::env::args().len() > 1 {
         sysutil::attach_parent_console();
     }
@@ -93,6 +94,7 @@ pub fn run() -> anyhow::Result<()> {
     // Before any worker touches WinRT: cached factories must never outlive the MTA.
     stinkshot_platform::keep_mta_alive();
     logger::init();
+    timing::point(format_args!("logger ready"));
 
     let (initial, forward_args) = match cli::parse() {
         CliAction::Headless(job) => {
@@ -110,11 +112,15 @@ pub fn run() -> anyhow::Result<()> {
     };
 
     let Some(guard) = system::acquire_single_instance() else {
+        timing::point(format_args!("another instance holds the mutex; forwarding"));
         if forward_args.is_empty() {
             return Ok(());
         }
-        for _ in 0..30 {
+        for attempt in 0..30 {
             if system::send_to_running_instance(&forward_args) {
+                timing::point(format_args!(
+                    "forwarded to the running instance (attempt {attempt})"
+                ));
                 return Ok(());
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -126,8 +132,21 @@ pub fn run() -> anyhow::Result<()> {
 
     // A plain launch (not `--tray`, no subcommand) that started a fresh instance: the user
     // clicked the exe and would otherwise see nothing at all.
+    timing::point(format_args!("single-instance mutex acquired"));
+    // Answer forwarded commands from now on: a launch right after this one must not wait for
+    // fonts, history, OCR and wgpu (about 1 s, more on a cold start) and give up after its 3 s
+    // of retries. Commands queue in the channel until the shell's first frame drains them.
+    let ipc_rx = start_ipc();
+    // The first freeze would otherwise create the DXGI duplication session itself (device,
+    // duplication and a GDI seed per output: 0.3 to 2 s). Do it now, beside eframe start-up.
+    let _ = std::thread::Builder::new()
+        .name("capture-warmup".into())
+        .spawn(|| {
+            capture::warm_up();
+            timing::point(format_args!("capture session warmed up"));
+        });
     let welcome = initial.is_none() && !forward_args.is_empty();
-    match run_app(initial, welcome, guard) {
+    match run_app(initial, welcome, guard, ipc_rx) {
         Ok(()) => Ok(()),
         Err(e) => {
             log::error!("fatal: {e:#}");
@@ -138,7 +157,37 @@ pub fn run() -> anyhow::Result<()> {
     }
 }
 
+/// Start the IPC listener (message-only window on its own thread) and a bridge that wakes the
+/// UI once it exists. Before the shell registers its context `wake()` is a no-op; the shell
+/// drains anything queued on its first frame.
+fn start_ipc() -> Receiver<Vec<String>> {
+    let (ipc_tx, ipc_inner_rx) = channel::<Vec<String>>();
+    let (ipc_fwd_tx, ipc_rx) = channel::<Vec<String>>();
+    match system::start_ipc_listener(ipc_tx) {
+        Ok(()) => {
+            let bridge = std::thread::Builder::new()
+                .name("ipc-bridge".into())
+                .spawn(move || {
+                    while let Ok(args) = ipc_inner_rx.recv() {
+                        timing::point(format_args!("ipc: received {args:?}"));
+                        if ipc_fwd_tx.send(args).is_err() {
+                            break;
+                        }
+                        wake::wake();
+                    }
+                });
+            if let Err(e) = bridge {
+                log::error!("IPC bridge failed to start: {e}");
+            }
+        }
+        Err(e) => log::error!("IPC listener failed: {e:#}"),
+    }
+    timing::point(format_args!("ipc listener ready"));
+    ipc_rx
+}
+
 struct Boot {
+    ipc_rx: Receiver<Vec<String>>,
     config: Config,
     fonts: Arc<Fonts>,
     history: Arc<History>,
@@ -160,14 +209,22 @@ fn welcome_body(region_hotkey: &str) -> String {
     }
 }
 
-fn run_app(initial: Option<Command>, welcome: bool, guard: InstanceGuard) -> anyhow::Result<()> {
+fn run_app(
+    initial: Option<Command>,
+    welcome: bool,
+    guard: InstanceGuard,
+    ipc_rx: Receiver<Vec<String>>,
+) -> anyhow::Result<()> {
     let config = Config::load();
+    timing::point(format_args!("config loaded"));
     let fonts = Arc::new(Fonts::load_system().context("load system fonts")?);
+    timing::point(format_args!("fonts loaded"));
     let history_dir = config.history_folder();
     let history = Arc::new(
         History::open(&history_dir)
             .with_context(|| format!("open history folder {}", history_dir.display()))?,
     );
+    timing::point(format_args!("history opened"));
 
     // OCR engine creation touches COM; do it on a scratch thread so the UI thread's apartment
     // stays the one winit sets up.
@@ -184,7 +241,9 @@ fn run_app(initial: Option<Command>, welcome: bool, guard: InstanceGuard) -> any
             }
         });
 
+    timing::point(format_args!("OCR engine ready"));
     let boot = Boot {
+        ipc_rx,
         config,
         fonts,
         history,
@@ -266,6 +325,10 @@ fn drive(
         st.tries += 1;
         match window_util::find_own_window(&title) {
             Some(hwnd) => {
+                timing::point(format_args!(
+                    "{title}: window created ({} frames)",
+                    st.tries
+                ));
                 st.created = true;
                 surf.on_created(hwnd, shared);
                 if focus {
@@ -380,6 +443,7 @@ struct Shell {
     update_retry_at: Instant,
     last_housekeeping: Instant,
     root_setup_tries: u32,
+    first_frame_seen: bool,
     needs_repaint: bool,
     quitting: bool,
     /// Set by `quit()`; the window closes when in-flight jobs finish or this passes.
@@ -445,10 +509,12 @@ fn fmt_bytes(b: u64) -> String {
 
 impl Shell {
     fn new(cc: &eframe::CreationContext<'_>, boot: Boot) -> anyhow::Result<Shell> {
+        timing::point(format_args!("eframe up (wgpu initialized), Shell::new"));
         let ctx = cc.egui_ctx.clone();
         wake::set_context(ctx.clone());
 
         let Boot {
+            ipc_rx,
             config,
             fonts,
             history,
@@ -464,26 +530,6 @@ impl Shell {
             resolved_theme.0,
             accent_color(resolved_theme.1),
         );
-
-        // IPC: args forwarded by later launches.
-        let (ipc_tx, ipc_inner_rx) = channel::<Vec<String>>();
-        let (ipc_fwd_tx, ipc_rx) = channel::<Vec<String>>();
-        match system::start_ipc_listener(ipc_tx) {
-            Ok(()) => {
-                std::thread::Builder::new()
-                    .name("ipc-bridge".into())
-                    .spawn(move || {
-                        while let Ok(args) = ipc_inner_rx.recv() {
-                            if ipc_fwd_tx.send(args).is_err() {
-                                break;
-                            }
-                            wake::wake();
-                        }
-                    })
-                    .context("start ipc bridge")?;
-            }
-            Err(e) => log::error!("IPC listener failed: {e:#}"),
-        }
 
         let tray = match Tray::new(&config) {
             Ok(t) => Some(t),
@@ -554,6 +600,7 @@ impl Shell {
             update_retry_at: Instant::now(),
             last_housekeeping: Instant::now(),
             root_setup_tries: 0,
+            first_frame_seen: false,
             needs_repaint: false,
             quitting: false,
             quit_deadline: None,
@@ -587,6 +634,7 @@ impl Shell {
         }
         shell.maybe_check_updates(false);
         shell.ctx.request_repaint();
+        timing::point(format_args!("Shell::new done"));
         Ok(shell)
     }
 
@@ -677,6 +725,17 @@ impl Shell {
     // ----------------------------------------------------------- command routing
 
     fn handle(&mut self, cmd: Command) {
+        if matches!(
+            cmd,
+            Command::CaptureRegion
+                | Command::CaptureWindow
+                | Command::CaptureFullscreen
+                | Command::CaptureScrolling
+                | Command::OcrRegion
+                | Command::RepeatLastRegion
+        ) {
+            timing::point(format_args!("dispatch {cmd:?}"));
+        }
         match cmd {
             Command::CaptureRegion => self.begin_overlay(OverlayMode::Capture),
             Command::CaptureWindow => self.capture_window(),
@@ -836,8 +895,16 @@ impl Shell {
     }
 
     fn freeze(&mut self) -> Option<(Frozen, Vec<stinkshot_platform::windows_enum::WinInfo>)> {
+        let t0 = Instant::now();
         let windows = windows_enum::visible_windows();
-        match capture::freeze_all(self.shared.config.capture.include_cursor) {
+        let t1 = Instant::now();
+        let res = capture::freeze_all(self.shared.config.capture.include_cursor);
+        timing::point(format_args!(
+            "freeze done: windows {:.1} ms, freeze_all {:.1} ms",
+            (t1 - t0).as_secs_f64() * 1000.0,
+            t1.elapsed().as_secs_f64() * 1000.0
+        ));
+        match res {
             Ok(f) => Some((f, windows)),
             Err(e) => {
                 let body = report(
@@ -874,6 +941,7 @@ impl Shell {
         };
         self.tray_overlay_at = None;
         self.overlay = Some(Slot::new(Overlay::new(req, &self.shared)));
+        timing::point(format_args!("overlay constructed (layers + Overlay::new)"));
         self.touch();
     }
 
@@ -1939,6 +2007,7 @@ impl Shell {
         }
         self.pending.extend(self.hotkeys.poll());
         while let Ok(args) = self.ipc_rx.try_recv() {
+            timing::point(format_args!("ipc: command taken by the shell"));
             match cli::command_from_args(&args) {
                 Some(cmd) => self.pending.push_back(cmd),
                 None => log::debug!("ignored forwarded args {args:?}"),
@@ -2030,7 +2099,10 @@ impl Shell {
 
 impl eframe::App for Shell {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.setup_root_window();
+        if !self.first_frame_seen {
+            self.first_frame_seen = true;
+            timing::point(format_args!("first frame"));
+        }
         if ctx.input(|i| i.viewport().close_requested()) && !self.quitting {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
@@ -2046,6 +2118,9 @@ impl eframe::App for Shell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.show_all(&ctx);
+        // After the surfaces: restyling the root hides and re-shows it, which costs about
+        // 150 ms on the first frame and would delay an overlay requested at launch.
+        self.setup_root_window();
         self.sync_hotkey_capture();
         self.open_queued_annotate();
         self.finish_quit();

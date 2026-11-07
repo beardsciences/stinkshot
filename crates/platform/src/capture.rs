@@ -878,15 +878,54 @@ fn capture_region(rect: PxRect) -> anyhow::Result<Rgba> {
 }
 
 /// Create the duplication session ahead of time (call once at startup from a worker thread).
-/// Session creation costs several hundred ms; afterwards `freeze_all` stays within a few tens
-/// of ms. Failure is harmless: captures fall back to GDI.
+/// Session creation plus each output's first frame (a placeholder that is replaced by a GDI
+/// seed) costs several hundred ms; afterwards `freeze_all` stays within a few tens of ms.
+/// Every output is primed (past its first frame, shadow texture seeded) without the
+/// read-back and pixel conversion a real capture does. Failure is harmless: captures create
+/// the session themselves or fall back to GDI.
 pub fn warm_up() {
-    let _ = capture_region(PxRect::new(
-        monitors::virtual_bounds().x,
-        monitors::virtual_bounds().y,
-        16,
-        16,
-    ));
+    let t0 = std::time::Instant::now();
+    let mut guard = SESSION.lock().unwrap_or_else(|p| p.into_inner());
+    let fresh = guard
+        .as_mut()
+        .is_none_or(|s| s.layout != current_layout() || !s.recheck_colors());
+    if fresh {
+        *guard = match Session::create() {
+            Ok(s) if !s.outputs.is_empty() => Some(s),
+            Ok(_) => None,
+            Err(e) => {
+                log::debug!("capture warm-up: duplication session unavailable: {e}");
+                None
+            }
+        };
+    }
+    let Some(session) = guard.as_mut() else {
+        return;
+    };
+    let mut lost = false;
+    for out in &mut session.outputs {
+        if out.dup.is_none() {
+            continue;
+        }
+        match out.refresh(FIRST_FRAME_TIMEOUT_MS) {
+            Ok(true) => {}
+            Ok(false) => {
+                if let Err(e) = out.seed_from_gdi() {
+                    log::debug!("capture warm-up: seeding {} failed: {e}", out.color.device);
+                }
+            }
+            Err(e) if e.is::<AccessLost>() => lost = true,
+            Err(e) => log::debug!("capture warm-up: {} refresh failed: {e}", out.color.device),
+        }
+    }
+    if lost {
+        // The next capture rebuilds it (mode change or secure desktop during start-up).
+        *guard = None;
+    }
+    log::debug!(
+        "capture warm-up: duplication session ready in {:.1} ms",
+        t0.elapsed().as_secs_f64() * 1000.0
+    );
 }
 
 /// Drop the cached duplication session (frees GPU resources). Safe to call at any time; the
