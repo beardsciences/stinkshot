@@ -137,7 +137,10 @@ about 5 s here because of the WGC hang described below).
 
 ## Contract changes (all additive)
 
-- `capture::warm_up()`: create the duplication session ahead of time.
+- `capture::warm_up()`: create the duplication session ahead of time. Since Nov 6 2026 it
+  primes every output (first frame past, shadow seeded) without a read-back, and the app calls
+  it from a `capture-warmup` thread right after taking the single-instance mutex (see
+  app-shell.md, "First overlay after launch was slow").
 - `capture::release_cached_capture()`: drop the cached session.
 - `hdr` module (Nov 6 2026): `displays()`, `display_for_device()`, `display_for_monitor()`,
   `ScrgbToSrgb`, half/sRGB helpers. Feature `Win32_Devices_Display` added.
