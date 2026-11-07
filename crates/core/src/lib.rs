@@ -12,6 +12,7 @@ pub mod geom;
 pub mod image;
 pub mod naming;
 pub mod redact;
+pub mod sensitive;
 
 pub use geom::{PtF, PxPoint, PxRect, RectF};
 pub use image::Rgba;

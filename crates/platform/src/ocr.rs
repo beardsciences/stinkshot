@@ -9,11 +9,24 @@ use windows::Media::Ocr::OcrEngine as WinOcrEngine;
 use windows::Storage::Streams::DataWriter;
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct OcrLine {
+pub struct OcrWord {
     pub text: String,
     /// In the input image's pixel space.
     pub rect: PxRect,
 }
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OcrLine {
+    pub text: String,
+    /// In the input image's pixel space.
+    pub rect: PxRect,
+    /// The line's words in reading order (Smart Redact boxes single words, not lines).
+    pub words: Vec<OcrWord>,
+}
+
+/// One recognized line of a tile: text, bounds and its words with their bounds, all as
+/// (x0, y0, x1, y1) in tile pixels.
+type TileLine = (String, [f32; 4], Vec<(String, [f32; 4])>);
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OcrResult {
@@ -74,12 +87,7 @@ impl WindowsOcr {
         )
     }
 
-    fn recognize_tile(
-        &self,
-        w: u32,
-        h: u32,
-        bgra: &[u8],
-    ) -> anyhow::Result<Vec<(String, [f32; 4])>> {
+    fn recognize_tile(&self, w: u32, h: u32, bgra: &[u8]) -> anyhow::Result<Vec<TileLine>> {
         let writer = DataWriter::new()?;
         writer.WriteBytes(bgra)?;
         let buffer = writer.DetachBuffer()?;
@@ -95,9 +103,11 @@ impl WindowsOcr {
         for line in result.Lines()? {
             let text = line.Text()?.to_string();
             let mut bounds: Option<[f32; 4]> = None; // x0, y0, x1, y1
+            let mut words = Vec::new();
             for word in line.Words()? {
                 let r = word.BoundingRect()?;
                 let b = [r.X, r.Y, r.X + r.Width, r.Y + r.Height];
+                words.push((word.Text()?.to_string(), b));
                 bounds = Some(match bounds {
                     None => b,
                     Some(o) => [
@@ -109,7 +119,7 @@ impl WindowsOcr {
                 });
             }
             if let Some(b) = bounds {
-                out.push((text, b));
+                out.push((text, b, words));
             }
         }
         Ok(out)
@@ -231,19 +241,33 @@ impl OcrEngine for WindowsOcr {
             } else {
                 (y0 + len - TILE_OVERLAP / 2) as f32
             };
-            for (text, b) in found {
-                let cy = y0 as f32 + (b[1] + b[3]) / 2.0;
-                if cy < keep_from || cy >= keep_to {
-                    continue;
-                }
+            // Tile px (x0, y0, x1, y1) -> input image px.
+            let to_px = |b: [f32; 4]| {
                 let x0 = (b[0] / scale).floor() as i32;
                 let y0f = ((y0 as f32 + b[1]) / scale).floor() as i32;
                 let x1 = (b[2] / scale).ceil() as i32;
                 let y1 = ((y0 as f32 + b[3]) / scale).ceil() as i32;
-                let rect = PxRect::new(x0.max(0), y0f.max(0), (x1 - x0).max(0), (y1 - y0f).max(0))
+                PxRect::new(x0.max(0), y0f.max(0), (x1 - x0).max(0), (y1 - y0f).max(0))
                     .intersect(&img.bounds())
-                    .unwrap_or_default();
-                lines.push(OcrLine { text, rect });
+                    .unwrap_or_default()
+            };
+            for (text, b, ws) in found {
+                let cy = y0 as f32 + (b[1] + b[3]) / 2.0;
+                if cy < keep_from || cy >= keep_to {
+                    continue;
+                }
+                let words = ws
+                    .into_iter()
+                    .map(|(text, wb)| OcrWord {
+                        text,
+                        rect: to_px(wb),
+                    })
+                    .collect();
+                lines.push(OcrLine {
+                    text,
+                    rect: to_px(b),
+                    words,
+                });
             }
         }
         let text = lines

@@ -293,6 +293,47 @@ fn render_text(text: &str, height: i32) -> Rgba {
 
 #[test]
 #[ignore = "needs a desktop session and an installed OCR language"]
+fn smart_redact_finds_rendered_email_and_phone() {
+    use stinkshot_core::sensitive::{SensitiveKind, TextWord, find_in_lines};
+    let ocr = WindowsOcr::new().expect("OCR engine (install an OCR language pack)");
+    let img = render_text("Mail jane.doe@example.com or call 555-123-4567", 28);
+    let r = ocr.recognize(&img).expect("recognize");
+    println!("smart redact OCR: {:?}", r.text);
+    let lines: Vec<Vec<TextWord>> = r
+        .lines
+        .iter()
+        .map(|l| {
+            assert!(!l.words.is_empty(), "words reported");
+            for w in &l.words {
+                assert!(
+                    l.rect.intersect(&w.rect) == Some(w.rect),
+                    "word inside line"
+                );
+            }
+            l.words
+                .iter()
+                .map(|w| TextWord {
+                    text: w.text.clone(),
+                    rect: w.rect,
+                })
+                .collect()
+        })
+        .collect();
+    let found = find_in_lines(&lines);
+    println!("findings: {found:?}");
+    let kinds: Vec<SensitiveKind> = found.iter().map(|f| f.kind).collect();
+    assert!(kinds.contains(&SensitiveKind::Email), "{kinds:?}");
+    assert!(kinds.contains(&SensitiveKind::Phone), "{kinds:?}");
+    // The email box covers the address, not the whole line.
+    let email = found
+        .iter()
+        .find(|f| f.kind == SensitiveKind::Email)
+        .unwrap();
+    assert!(email.rect.w < r.lines[0].rect.w / 2, "{email:?}");
+}
+
+#[test]
+#[ignore = "needs a desktop session and an installed OCR language"]
 fn ocr_reads_rendered_text() {
     let ocr = WindowsOcr::new().expect("OCR engine (install an OCR language pack)");
     assert_eq!(ocr.name(), "Windows OCR");
