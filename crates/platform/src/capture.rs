@@ -878,6 +878,10 @@ impl OutputDup {
 }
 
 fn capture_region(rect: PxRect, live: bool) -> anyhow::Result<Rgba> {
+    // Aware for the whole capture, not just DuplicateOutput1: a duplication made from an
+    // aware thread delivers no frames to an unaware one, and GDI coordinates on a scaled
+    // monitor are rescaled for unaware callers (tools and tests have no manifest).
+    let _dpi = crate::dpi::ThreadPerMonitorAware::new();
     let mut guard = SESSION.lock().unwrap_or_else(|p| p.into_inner());
     for attempt in 0..2 {
         let stale = guard
@@ -926,6 +930,7 @@ pub fn warm_up() {
         log::debug!("capture warm-up skipped: duplication lent to the recorder");
         return;
     }
+    let _dpi = crate::dpi::ThreadPerMonitorAware::new();
     let t0 = std::time::Instant::now();
     let mut guard = SESSION.lock().unwrap_or_else(|p| p.into_inner());
     for attempt in 0..2 {

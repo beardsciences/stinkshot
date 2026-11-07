@@ -102,6 +102,14 @@ until the duplication delivers again (`GdiWatch` in `capture.rs`, counts logged 
 monitor's part of the region every 500 ms. All recording numbers below went through this GDI path,
 not through duplication frames.
 
+Review fixes (Nov 7 2026): change detection compares the whole previous grab (a memcmp; the
+sampled hash read 2 of every 16 pixel columns on 1920/2560/3840-wide rows and missed a typed
+character or a caret). While the fallback is active every grab is written. The first probe
+of a silent period is written too, since the screen may have changed after the duplication's
+last frame and the stage would otherwise keep that older picture. A failing grab (secure
+desktop, mode change, wrong size) backs off for 500 ms and logs once per failure streak.
+The decision is `gdi_step` (unit tested).
+
 ### Late frames were lost
 
 A picture polled when no frame was due (between deadlines, or while paused) was never converted

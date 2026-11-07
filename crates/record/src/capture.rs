@@ -1084,16 +1084,24 @@ fn duplicate_output(
 ///   monitor is filled from GDI (which returns correct SDR colors on HDR displays too).
 /// - Fallback: a duplication can also stay silent while the screen does change (measured
 ///   Nov 7 2026 with the displays idle-off: DWM stops feeding duplications, GDI still sees
-///   windows repaint). After `DUP_SILENT_AFTER` of silence a GDI grab is compared with the
-///   previous one every `GDI_PROBE_EVERY`; when they differ the monitor is captured with GDI
-///   at the frame rate until the duplication delivers again.
+///   windows repaint). After `DUP_SILENT_AFTER` of silence a GDI grab is taken every
+///   `GDI_PROBE_EVERY`. The first grab of a silent period is written to the stage (the
+///   screen may have changed after the duplication's last frame), and later grabs are
+///   compared in full with the previous one; when they differ the monitor is captured with
+///   GDI at the frame rate, every grab written, until the duplication delivers again.
 struct GdiWatch {
     created: Instant,
     last_dup: Instant,
     next_probe: Instant,
-    last_hash: Option<u64>,
+    /// The last GDI grab, which is also what the stage shows for this monitor (every grab
+    /// that is kept here was written). None after a duplication frame.
+    prev: Option<Vec<u8>>,
     active: bool,
     last_grab: Instant,
+    /// After a failed grab no new attempt before this (secure desktop, mode change).
+    retry_at: Instant,
+    /// A failure streak is in progress (logged once).
+    failing: bool,
     /// Pictures taken from the duplication / from GDI (logged when the capture ends).
     dup_frames: u64,
     gdi_frames: u64,
@@ -1106,12 +1114,42 @@ impl GdiWatch {
             created: now,
             last_dup: now,
             next_probe: now,
-            last_hash: None,
+            prev: None,
             active: false,
             last_grab: now,
+            retry_at: now,
+            failing: false,
             dup_frames: 0,
             gdi_frames: 0,
         }
+    }
+}
+
+/// What to do with a GDI grab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GdiStep {
+    /// Nothing new on screen: keep the stage.
+    Skip,
+    /// Write the grab to the stage.
+    Write,
+    /// The screen changes while the duplication is silent: write and turn the fallback on.
+    Activate,
+}
+
+/// Decide what a GDI grab `cur` means. `prev` is the previous grab of this silent period
+/// (what the stage shows), None when the stage holds a duplication picture or nothing.
+fn gdi_step(got_frame: bool, active: bool, prev: Option<&[u8]>, cur: &[u8]) -> GdiStep {
+    if !got_frame || active {
+        // Seeding a static screen, or capturing with GDI: every grab is written (the
+        // expensive BitBlt already ran; a tiny change such as a caret must not be lost).
+        return GdiStep::Write;
+    }
+    match prev {
+        // First probe of a silent period: the screen may have changed after the
+        // duplication's last frame, and the stage still shows that older picture.
+        None => GdiStep::Write,
+        Some(p) if p != cur => GdiStep::Activate,
+        Some(_) => GdiStep::Skip,
     }
 }
 
@@ -1129,7 +1167,7 @@ fn gdi_fallback(
     if got {
         g.dup_frames += 1;
         g.last_dup = now;
-        g.last_hash = None;
+        g.prev = None;
         if g.active {
             g.active = false;
             log::info!(
@@ -1139,7 +1177,9 @@ fn gdi_fallback(
         }
         return false;
     }
-    let grab_now = if !m.got_frame {
+    let grab_now = if now < g.retry_at {
+        false
+    } else if !m.got_frame {
         now.duration_since(g.created) >= GDI_SEED_AFTER && now >= g.next_probe
     } else if g.active {
         // The video loop wakes about once per frame deadline; a full interval would miss
@@ -1159,64 +1199,62 @@ fn gdi_fallback(
     );
     g.last_grab = now;
     g.next_probe = now + GDI_PROBE_EVERY;
-    let img = match capture::capture_rect(rect, false) {
-        Ok(i) if i.width == rect.w as u32 && i.height == rect.h as u32 => i,
+    let failure = match capture::capture_rect(rect, false) {
+        Ok(i) if i.width == rect.w as u32 && i.height == rect.h as u32 => Ok(i),
+        Ok(i) => Err(format!("got {}x{}", i.width, i.height)),
+        Err(e) => Err(format!("failed: {e:#}")),
+    };
+    let img = match failure {
         Ok(i) => {
-            log::warn!(
-                "GDI grab of {}: got {}x{}",
-                m.color.device,
-                i.width,
-                i.height
+            if g.failing {
+                g.failing = false;
+                log::info!("GDI grab of {} works again", m.color.device);
+            }
+            i
+        }
+        Err(why) => {
+            // Back off and log once per streak, not on every poll.
+            g.retry_at = now + GDI_PROBE_EVERY;
+            if !g.failing {
+                g.failing = true;
+                log::warn!(
+                    "GDI grab of {} {why}; retrying every {} ms",
+                    m.color.device,
+                    GDI_PROBE_EVERY.as_millis()
+                );
+            }
+            return false;
+        }
+    };
+    let step = gdi_step(m.got_frame, g.active, g.prev.as_deref(), &img.data);
+    match step {
+        GdiStep::Skip => return false,
+        GdiStep::Write => {
+            if !m.got_frame {
+                log::debug!(
+                    "{} delivered no duplication frame yet (static screen); seeded from GDI",
+                    m.color.device
+                );
+            }
+        }
+        GdiStep::Activate => {
+            g.active = true;
+            log::info!(
+                "{}: duplication silent while the screen changes; capturing with GDI",
+                m.color.device
             );
-            return false;
         }
-        Err(e) => {
-            log::warn!("GDI grab of {} failed: {e:#}", m.color.device);
-            return false;
-        }
-    };
-    let hash = quick_hash(&img.data);
-    let changed = g.last_hash.is_some_and(|h| h != hash);
-    g.last_hash = Some(hash);
-    let write = if !m.got_frame {
-        log::debug!(
-            "{} delivered no duplication frame yet (static screen); seeded from GDI",
-            m.color.device
-        );
-        true
-    } else if g.active {
-        changed
-    } else if changed {
-        g.active = true;
-        log::info!(
-            "{}: duplication silent while the screen changes; capturing with GDI",
-            m.color.device
-        );
-        true
-    } else {
-        // First probe of a silent period, or still static: nothing new.
-        false
-    };
-    if !write {
-        return false;
     }
     if let Err(e) = write_rgba(ctx, stage, m.dst, &img) {
         log::warn!("GDI grab of {}: {e:#}", m.color.device);
+        // The stage may not show this grab: compare the next one against nothing.
+        g.prev = None;
         return false;
     }
+    g.prev = Some(img.data);
     m.got_frame = true;
     m.gdi.gdi_frames += 1;
     true
-}
-
-/// Cheap content hash (every 8th 64-bit word) to tell a static screen from a changing one.
-fn quick_hash(data: &[u8]) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for c in data.chunks_exact(8).step_by(8) {
-        let v = u64::from_le_bytes(c.try_into().unwrap_or_default());
-        h = (h ^ v).wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    h
 }
 
 /// Write an RGBA image into the BGRA staging texture at `dst`.
@@ -1292,5 +1330,37 @@ impl Drop for Capturer {
                 ),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gdi_seed_and_active_write_every_grab() {
+        let a = [1u8; 64];
+        assert_eq!(gdi_step(false, false, None, &a), GdiStep::Write);
+        assert_eq!(gdi_step(false, false, Some(&a), &a), GdiStep::Write);
+        // Active: even an unchanged grab is written.
+        assert_eq!(gdi_step(true, true, Some(&a), &a), GdiStep::Write);
+    }
+
+    #[test]
+    fn first_probe_of_a_silent_period_is_written() {
+        // The stage holds the duplication's last picture; the screen may have changed
+        // since, so the first grab must reach the stage.
+        assert_eq!(gdi_step(true, false, None, &[7u8; 64]), GdiStep::Write);
+    }
+
+    #[test]
+    fn a_one_pixel_change_turns_the_fallback_on() {
+        // 1920 px wide rows: a change in a column the old sampled hash skipped (x = 5).
+        let w = 1920 * 4;
+        let prev = vec![0u8; w * 4];
+        let mut cur = prev.clone();
+        cur[w * 2 + 5 * 4] = 255;
+        assert_eq!(gdi_step(true, false, Some(&prev), &cur), GdiStep::Activate);
+        assert_eq!(gdi_step(true, false, Some(&prev), &prev), GdiStep::Skip);
     }
 }

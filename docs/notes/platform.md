@@ -64,7 +64,10 @@ about 5 s here because of the WGC hang described below).
   caller on a display scaled above 100% (the 4K HDR monitor at 125%); at 100% it works, which
   is why the recorder tests passed earlier. Duplication runs inside
   `dpi::ThreadPerMonitorAware` (a guard that sets Per-Monitor-V2 on the current thread and
-  restores it), so test binaries and tools without a manifest work too.
+  restores it), so test binaries and tools without a manifest work too. The guard is held for
+  the whole of `capture_region` and `warm_up` (session creation, frame acquisition and the
+  GDI fallback), not just around `DuplicateOutput1`: a duplication made from an aware thread
+  delivers no frames to an unaware one, and GDI coordinates are rescaled for unaware callers.
 - **Silent duplications**: while the displays are idle-off, DWM feeds no frames to any
   duplication (0 frames in 2 s on both outputs with a window animating), but GDI still sees
   windows repaint. A cached session then returns its last picture forever. `capture_rect`
