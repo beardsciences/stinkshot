@@ -840,6 +840,9 @@ impl Surface for HistoryWindow {
         let typing = ctx.egui_wants_keyboard_input();
         let mut close_by_esc = false;
         let mut want_act: Option<(Act, ItemId)> = None;
+        // Ctrl+, opens Settings (the Windows convention), also while typing in the search box.
+        let want_settings = self.confirm_delete.is_none()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::Comma));
         if self.confirm_delete.is_none() {
             let (cmd_f, esc) = ctx.input(|i| {
                 (
@@ -907,6 +910,7 @@ impl Surface for HistoryWindow {
         let mut clear_filters = false;
         let mut open_folder = false;
         let mut capture_region = false;
+        let mut open_settings = want_settings;
         let mut clicked: Option<ItemId> = None;
         let mut act_req: Option<(Act, ItemId)> = want_act;
         let mut to_request: Vec<ThumbKey> = Vec::new();
@@ -1070,7 +1074,21 @@ impl Surface for HistoryWindow {
                 SIDEBAR_W - 44.0,
             );
             let footer_h = footer_g.size().y + 24.0;
-            let footer_top = sidebar.bottom() - footer_h;
+            // Link to Settings at the very bottom (same place as Settings' link to History).
+            if uc::sidebar_link(
+                ui,
+                sidebar,
+                Icon::Settings,
+                "Open Settings",
+                "Ctrl+,",
+                "Open Settings (Ctrl+,)",
+                shared.dark,
+            )
+            .clicked()
+            {
+                open_settings = true;
+            }
+            let footer_top = uc::sidebar_link_top(sidebar) - footer_h + 8.0;
             ui.painter().galley(
                 pos2(sidebar.left() + 22.0, footer_top + 12.0),
                 footer_g,
@@ -1175,25 +1193,26 @@ impl Surface for HistoryWindow {
                 Icon::Search,
                 p.text_secondary,
             );
+            // The field fills the box's full height and centres its text (hint and typed
+            // text share one alignment), so it sits on the box's centre line at any scale.
             let te_rect = Rect::from_min_max(
-                pos2(search_rect.left() + 38.0, search_rect.top() + 2.0),
-                pos2(search_rect.right() - 34.0, search_rect.bottom() - 4.0),
+                pos2(search_rect.left() + 38.0, search_rect.top()),
+                pos2(search_rect.right() - 34.0, search_rect.bottom()),
             );
-            let te = ui.scope_builder(
-                UiBuilder::new()
-                    .max_rect(te_rect)
-                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
-                |ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(search)
-                            .id(search_id)
-                            .frame(egui::Frame::NONE)
-                            .hint_text("Search Captures")
-                            .font(uc::font(14.0))
-                            .desired_width(te_rect.width()),
-                    )
-                },
-            );
+            let te = ui.scope_builder(UiBuilder::new().max_rect(te_rect), |ui| {
+                ui.add_sized(
+                    te_rect.size(),
+                    egui::TextEdit::singleline(search)
+                        .id(search_id)
+                        .frame(egui::Frame::NONE)
+                        .margin(egui::Margin::ZERO)
+                        .align(egui::Align2::LEFT_CENTER)
+                        .hint_text("Search Captures")
+                        .font(uc::font(14.0))
+                        .min_size(te_rect.size())
+                        .desired_width(te_rect.width()),
+                )
+            });
             if focus_search {
                 te.inner.request_focus();
             }
@@ -1687,6 +1706,9 @@ impl Surface for HistoryWindow {
         }
         if capture_region {
             shared.outbox.push(Command::CaptureRegion);
+        }
+        if open_settings {
+            shared.outbox.push(Command::OpenSettings);
         }
         if open_folder && let Err(e) = stinkshot_platform::system::open_path(&folder) {
             shared.outbox.push(Command::Notify {

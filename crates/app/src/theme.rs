@@ -679,6 +679,7 @@ pub enum Icon {
     History,
     Shield,
     ChevronDown,
+    Settings,
 }
 
 /// Icon vector data (24x24 design grid, stroke 1.8) and the painter that draws it.
@@ -761,6 +762,15 @@ mod icons {
                 Path("M8.5 12l2.5 2.5 4.5-5"),
             ],
             Icon::ChevronDown => &[Path("M6 9l6 6 6-6")],
+            Icon::Settings => &[
+                Path(
+                    "M18.9 13.0L21.2 14.4L20.2 16.8L17.6 16.2L16.2 17.6L16.8 20.2L14.4 21.2L13.0 18.9\
+                     L11.0 18.9L9.6 21.2L7.2 20.2L7.8 17.6L6.4 16.2L3.8 16.8L2.8 14.4L5.1 13.0\
+                     L5.1 11.0L2.8 9.6L3.8 7.2L6.4 7.8L7.8 6.4L7.2 3.8L9.6 2.8L11.0 5.1L13.0 5.1\
+                     L14.4 2.8L16.8 3.8L16.2 6.4L17.6 7.8L20.2 7.2L21.2 9.6L18.9 11.0z",
+                ),
+                Circle(12.0, 12.0, 3.0),
+            ],
         }
     }
 
@@ -1207,6 +1217,7 @@ mod icons {
                 History,
                 Shield,
                 ChevronDown,
+                Settings,
             ] {
                 assert!(!prims(icon).is_empty(), "{icon:?}");
                 for p in prims(icon) {

@@ -529,6 +529,100 @@ pub fn layer_edges(ui: &Ui, layer: Rect, radius: f32, color: Color32) {
     painter.add(egui::Shape::line(pts, Stroke::new(w, color)));
 }
 
+/// Height of the link row at the bottom of the History and Settings sidebars.
+pub const SIDEBAR_LINK_H: f32 = 36.0;
+
+/// Rect of the cross-window link row at the bottom of a sidebar (History <-> Settings).
+/// Both windows use this so the link sits in the same place in each.
+pub fn sidebar_link_rect(sidebar: Rect) -> Rect {
+    Rect::from_min_size(
+        egui::pos2(
+            sidebar.left() + 12.0,
+            sidebar.bottom() - 12.0 - SIDEBAR_LINK_H,
+        ),
+        egui::vec2(sidebar.width() - 24.0, SIDEBAR_LINK_H),
+    )
+}
+
+/// Top of the area the link row and its hairline take (content above must end here).
+pub fn sidebar_link_top(sidebar: Rect) -> f32 {
+    sidebar_link_rect(sidebar).top() - 9.0
+}
+
+/// Cross-window link at the bottom of a sidebar: hairline above, icon, label and the
+/// keyboard shortcut right-aligned, hover wash like the nav rows. Returns the response
+/// (tooltip included); the caller acts on `clicked()`.
+pub fn sidebar_link(
+    ui: &mut Ui,
+    sidebar: Rect,
+    icon: theme::Icon,
+    label: &str,
+    shortcut: &str,
+    tooltip: &str,
+    dark: bool,
+) -> egui::Response {
+    let p = theme::palette(dark);
+    let r = sidebar_link_rect(sidebar);
+    let painter = ui.painter().clone();
+    let y = painter.round_to_pixel_center(r.top() - 5.0);
+    painter.hline(
+        r.left()..=r.right(),
+        y,
+        Stroke::new(1.0 / painter.pixels_per_point(), p.stroke),
+    );
+    let resp = ui.interact(
+        r,
+        ui.scope_id().with(("sidebar_link", label)),
+        Sense::click(),
+    );
+    let t = ui
+        .ctx()
+        .animate_bool_with_time(resp.id, resp.hovered(), 0.1);
+    if t > 0.0 {
+        let wash = if dark {
+            Color32::from_white_alpha((10.0 * t).round() as u8)
+        } else {
+            Color32::from_black_alpha((8.0 * t).round() as u8)
+        };
+        painter.rect_filled(r, CornerRadius::same(6), wash);
+    }
+    if resp.is_pointer_button_down_on() {
+        let press = if dark {
+            Color32::from_white_alpha(6)
+        } else {
+            Color32::from_black_alpha(6)
+        };
+        painter.rect_filled(r, CornerRadius::same(6), press);
+    }
+    theme::widgets::paint_icon(
+        &painter,
+        Rect::from_center_size(
+            egui::pos2(r.left() + 20.0, r.center().y),
+            egui::vec2(16.0, 16.0),
+        ),
+        icon,
+        p.text_secondary,
+    );
+    painter.text(
+        egui::pos2(r.left() + 38.0, r.center().y),
+        Align2::LEFT_CENTER,
+        label,
+        font(13.0),
+        p.text,
+    );
+    painter.text(
+        egui::pos2(r.right() - 10.0, r.center().y),
+        Align2::RIGHT_CENTER,
+        shortcut,
+        font(12.0),
+        p.text_tertiary,
+    );
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp.on_hover_text(tooltip)
+}
+
 /// Paint a 1px hairline card border + fill (used for cards inside windows).
 pub fn card(ui: &Ui, rect: Rect, radius: u8, fill: Color32, stroke: Color32) {
     ui.painter()

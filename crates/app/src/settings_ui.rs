@@ -355,6 +355,12 @@ impl Surface for SettingsWindow {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
 
+        // Ctrl+H opens History, unless a hotkey field is recording (then it is the combo).
+        let mut open_history = !capturing_before
+            && !key_consumed
+            && self.capturing.is_none()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::H));
+
         let p = uc::pal(shared);
         let accent = uc::accent(shared);
         let mut section = self.section;
@@ -437,6 +443,21 @@ impl Surface for SettingsWindow {
                 }
             }
 
+            // Link to History at the very bottom (same place as History's link to Settings).
+            if uc::sidebar_link(
+                ui,
+                nav,
+                theme::Icon::History,
+                "Open History",
+                "Ctrl+H",
+                "Open History (Ctrl+H)",
+                shared.dark,
+            )
+            .clicked()
+            {
+                open_history = true;
+            }
+
             // Page.
             let area = content.shrink2(vec2(28.0, 18.0));
             let w = area.width().min(CONTENT_MAX_W);
@@ -489,6 +510,10 @@ impl Surface for SettingsWindow {
         }
         if self.section != Section::Hotkeys {
             self.capturing = None;
+        }
+
+        if open_history {
+            shared.outbox.push(Command::OpenHistory);
         }
 
         // Dirty flag: once per gesture.
