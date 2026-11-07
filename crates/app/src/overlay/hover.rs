@@ -12,8 +12,9 @@ use crate::state::RegionPurpose;
 pub struct HoverTarget {
     /// Full frame of the topmost window at the point.
     pub frame: PxRect,
-    /// The part of that frame around the point no window above covers.
-    pub visible: Option<PxRect>,
+    /// Window-level rects at the point, innermost first (`occlusion::window_levels`): its
+    /// largest uncovered part when the point is in it, then the whole frame.
+    pub levels: Vec<PxRect>,
     /// Window to ask UI Automation about; None for this process's own windows.
     pub uia: Option<Hwnd>,
     /// Frames of the windows above it (they may cover parts of its elements).
@@ -27,7 +28,7 @@ pub fn hover_target(layers: &[Layer], p: PxPoint) -> Option<HoverTarget> {
     let occluders = occlusion::occluders_above(layers, i);
     Some(HoverTarget {
         frame: l.rect,
-        visible: occlusion::visible_rect_around(l.rect, p, &occluders),
+        levels: occlusion::window_levels(l.rect, p, &occluders),
         uia: (!l.own).then_some(l.hwnd),
         occluders,
     })
@@ -217,20 +218,23 @@ mod tests {
         // Over the popup: the popup itself, not the browser behind it.
         let t = hover_target(&layers, PxPoint { x: 150, y: 150 }).unwrap();
         assert_eq!(t.uia, Some(1));
-        assert_eq!(t.visible, Some(PxRect::new(100, 100, 200, 300)));
+        assert_eq!(t.levels, vec![PxRect::new(100, 100, 200, 300)]);
         // Over our own window: a window-level target, no UIA.
         let t = hover_target(&layers, PxPoint { x: 1100, y: 100 }).unwrap();
         assert_eq!(t.uia, None);
         assert_eq!(t.frame, PxRect::new(1000, 0, 400, 400));
-        // Over the browser left of the popup: browser, clipped so it never covers the popup.
+        // Over the browser below the popup: browser, clipped so it never covers the popup,
+        // then the whole browser window.
         let p = PxPoint { x: 50, y: 500 };
         let t = hover_target(&layers, p).unwrap();
         assert_eq!(t.uia, Some(2));
-        let v = t.visible.unwrap();
+        assert_eq!(t.levels.len(), 2);
+        let v = t.levels[0];
         assert!(v.contains(p));
         for o in &t.occluders {
             assert!(v.intersect(o).is_none());
         }
+        assert_eq!(t.levels[1], t.frame);
         assert!(hover_target(&layers, PxPoint { x: 5000, y: 5000 }).is_none());
     }
 

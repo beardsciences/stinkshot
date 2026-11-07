@@ -72,15 +72,19 @@ pub fn visible_rect_around(rect: PxRect, p: PxPoint, occluders: &[PxRect]) -> Op
     Some(r)
 }
 
-/// Area of `rect` not covered by any occluder (exact, coordinate compression).
-pub fn uncovered_area(rect: PxRect, occluders: &[PxRect]) -> i64 {
+/// `rect` cut into a grid along every occluder edge inside it: column edges, row edges, and
+/// whether each cell (`free[row][col]`) is uncovered. Cells are wholly in or out.
+struct Grid {
+    xs: Vec<i32>,
+    ys: Vec<i32>,
+    free: Vec<Vec<bool>>,
+}
+
+fn grid(rect: PxRect, occluders: &[PxRect]) -> Grid {
     let clipped: Vec<PxRect> = occluders
         .iter()
         .filter_map(|o| o.intersect(&rect))
         .collect();
-    if clipped.is_empty() {
-        return rect.area();
-    }
     let mut xs: Vec<i32> = vec![rect.x, rect.right()];
     let mut ys: Vec<i32> = vec![rect.y, rect.bottom()];
     for c in &clipped {
@@ -91,44 +95,140 @@ pub fn uncovered_area(rect: PxRect, occluders: &[PxRect]) -> i64 {
     xs.dedup();
     ys.sort_unstable();
     ys.dedup();
+    let cols = xs.len().saturating_sub(1);
+    let rows = ys.len().saturating_sub(1);
+    let mut free = vec![vec![true; cols]; rows];
+    for c in &clipped {
+        // Edges are in the lists, so the searches are exact.
+        let (c0, c1) = (
+            xs.partition_point(|&x| x < c.x),
+            xs.partition_point(|&x| x < c.right()),
+        );
+        let (r0, r1) = (
+            ys.partition_point(|&y| y < c.y),
+            ys.partition_point(|&y| y < c.bottom()),
+        );
+        for row in &mut free[r0..r1] {
+            for cell in &mut row[c0..c1] {
+                *cell = false;
+            }
+        }
+    }
+    Grid { xs, ys, free }
+}
+
+/// Area of `rect` not covered by any occluder (exact, coordinate compression).
+pub fn uncovered_area(rect: PxRect, occluders: &[PxRect]) -> i64 {
+    let g = grid(rect, occluders);
     let mut free = 0i64;
-    for xw in xs.windows(2) {
-        for yw in ys.windows(2) {
-            let (cx, cy) = (xw[0], yw[0]);
-            let covered = clipped
-                .iter()
-                .any(|c| cx >= c.x && cx < c.right() && cy >= c.y && cy < c.bottom());
-            if !covered {
-                free += (xw[1] - xw[0]) as i64 * (yw[1] - yw[0]) as i64;
+    for (r, row) in g.free.iter().enumerate() {
+        let h = (g.ys[r + 1] - g.ys[r]) as i64;
+        for (c, &f) in row.iter().enumerate() {
+            if f {
+                free += (g.xs[c + 1] - g.xs[c]) as i64 * h;
             }
         }
     }
     free
 }
 
-/// A level whose visible part around the cursor is less than this share of its full rect
-/// is dropped (the next level outward is offered instead).
+/// The largest rectangle inside `rect` that no occluder overlaps, independent of where the
+/// cursor is (exact: histogram scan over the compressed grid). None when fully covered.
+pub fn largest_uncovered_rect(rect: PxRect, occluders: &[PxRect]) -> Option<PxRect> {
+    if rect.is_empty() {
+        return None;
+    }
+    let g = grid(rect, occluders);
+    let cols = g.xs.len() - 1;
+    let mut heights = vec![0i32; cols];
+    let mut best: Option<PxRect> = None;
+    let mut consider = |c: PxRect| {
+        if c.w > 0 && c.h > 0 && best.is_none_or(|b| c.area() > b.area()) {
+            best = Some(c);
+        }
+    };
+    for (r, row) in g.free.iter().enumerate() {
+        let bottom = g.ys[r + 1];
+        let row_h = bottom - g.ys[r];
+        for (h, &f) in heights.iter_mut().zip(row) {
+            *h = if f { *h + row_h } else { 0 };
+        }
+        // Largest rectangle under a histogram with uneven bar widths.
+        let mut stack: Vec<(i32, i32)> = Vec::new(); // (left x, height)
+        // A zero-height sentinel at the right edge flushes the stack.
+        let bars = heights.iter().copied().chain(std::iter::once(0));
+        for (&x, h) in g.xs.iter().zip(bars) {
+            let mut left = x;
+            while let Some(&(sx, sh)) = stack.last() {
+                if sh < h {
+                    break;
+                }
+                stack.pop();
+                consider(PxRect::new(sx, bottom - sh, x - sx, sh));
+                left = sx;
+            }
+            if h > 0 {
+                stack.push((left, h));
+            }
+        }
+    }
+    best
+}
+
+/// A level whose uncovered area is less than this share of its full rect is dropped (the
+/// next level outward is offered instead). Also the share of a window's uncovered area its
+/// largest uncovered rectangle must reach to be offered as the clipped window level.
 pub const MIN_VISIBLE_SHARE: f64 = 0.3;
 
+/// Window-level rects to offer at `p`, innermost first: the largest uncovered rectangle of
+/// `frame` when it contains `p` and holds a fair share of what is visible, then the whole
+/// frame (what the user sees as "that window"). The clipped rect depends only on the window
+/// and its occluders, so moving the cursor inside it never reshapes it. Empty when `p` is
+/// outside `frame` or covered.
+pub fn window_levels(frame: PxRect, p: PxPoint, occluders: &[PxRect]) -> Vec<PxRect> {
+    if !frame.contains(p) || occluders.iter().any(|o| o.contains(p)) {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(2);
+    if let Some(m) = largest_uncovered_rect(frame, occluders)
+        && m != frame
+        && m.contains(p)
+        && m.area() as f64 >= MIN_VISIBLE_SHARE * uncovered_area(frame, occluders) as f64
+    {
+        out.push(m);
+    }
+    out.push(frame);
+    out
+}
+
 /// Clip a snap chain (innermost element first, top-level window last) to what is visible
-/// at `p`. Returns `(index into rects, clipped rect)` pairs in the same order, deduplicated
-/// after clipping. Levels that are mostly hidden are dropped, except the outermost one,
-/// which is always offered clipped so the window itself stays selectable.
+/// at `p`. Returns `(index into rects, rect)` pairs in the same order, deduplicated after
+/// clipping. Inner levels are cut to the visible band around `p` and dropped when mostly
+/// hidden (judged by their real uncovered area, so levels do not come and go as the cursor
+/// moves). The outermost level becomes `window_levels`: a stable clipped rect when one fits,
+/// then the whole window, so the window itself is always selectable.
 pub fn clip_chain(rects: &[PxRect], p: PxPoint, occluders: &[PxRect]) -> Vec<(usize, PxRect)> {
     let mut out: Vec<(usize, PxRect)> = Vec::new();
-    let last = rects.len().saturating_sub(1);
-    for (i, r) in rects.iter().enumerate() {
+    let mut push = |i: usize, v: PxRect| {
+        if !out.last().is_some_and(|(_, prev)| *prev == v) {
+            out.push((i, v));
+        }
+    };
+    let Some(last) = rects.len().checked_sub(1) else {
+        return Vec::new();
+    };
+    for (i, r) in rects[..last].iter().enumerate() {
         let Some(v) = visible_rect_around(*r, p, occluders) else {
             continue;
         };
-        let share = v.area() as f64 / r.area().max(1) as f64;
-        if share < MIN_VISIBLE_SHARE && i != last {
+        let share = uncovered_area(*r, occluders) as f64 / r.area().max(1) as f64;
+        if share < MIN_VISIBLE_SHARE {
             continue;
         }
-        if out.last().is_some_and(|(_, prev)| *prev == v) {
-            continue;
-        }
-        out.push((i, v));
+        push(i, v);
+    }
+    for v in window_levels(rects[last], p, occluders) {
+        push(last, v);
     }
     out
 }
@@ -262,15 +362,20 @@ mod tests {
         let p = pt(105, 120);
         let c = clip_chain(&[button, toolbar, window], p, &popup);
         // Button: 10/100 wide visible -> dropped. Toolbar: 110/400 visible < 30% -> dropped.
-        // Window: clipped to the left of the popup.
-        assert_eq!(c, vec![(2, PxRect::new(0, 0, 110, 600))]);
+        // Window: the cursor is on the thin strip left of the popup, not in the window's
+        // biggest uncovered part (right of the popup), so the whole window is offered.
+        assert_eq!(c, vec![(2, window)]);
 
-        // With the popup further right, the button and toolbar survive (clipped).
+        // With the popup further right, the button and toolbar survive (clipped), and the
+        // window comes clipped (everything below the popup) and then whole.
         let popup = [PxRect::new(180, 0, 300, 120)];
         let c = clip_chain(&[button, toolbar, window], p, &popup);
         assert_eq!(c[0], (0, PxRect::new(100, 100, 80, 40)));
-        assert_eq!(c.last().unwrap().0, 2);
-        for (_, r) in &c {
+        assert_eq!(
+            &c[c.len() - 2..],
+            &[(2, PxRect::new(0, 120, 800, 480)), (2, window)]
+        );
+        for (_, r) in &c[..c.len() - 1] {
             assert!(r.contains(p));
             assert!(r.intersect(&popup[0]).is_none());
         }
@@ -282,7 +387,55 @@ mod tests {
         let outer = PxRect::new(0, 0, 200, 100);
         let occ = [PxRect::new(100, 0, 200, 200)];
         let c = clip_chain(&[inner, outer], pt(10, 10), &occ);
-        assert_eq!(c, vec![(0, inner)]);
+        // The clipped window equals `inner`; the whole window follows.
+        assert_eq!(c, vec![(0, inner), (1, outer)]);
+    }
+
+    #[test]
+    fn largest_uncovered_rect_is_exact() {
+        let r = PxRect::new(0, 0, 100, 100);
+        assert_eq!(largest_uncovered_rect(r, &[]), Some(r));
+        assert_eq!(
+            largest_uncovered_rect(r, &[PxRect::new(-5, -5, 200, 200)]),
+            None
+        );
+        // Hole in the middle: one of the 100x40 bands.
+        let m = largest_uncovered_rect(r, &[PxRect::new(40, 40, 20, 20)]).unwrap();
+        assert_eq!(m.area(), 4_000);
+        // L-shaped free area: the tall left column beats the short bottom row.
+        let m = largest_uncovered_rect(r, &[PxRect::new(30, 0, 70, 80)]).unwrap();
+        assert_eq!(m, PxRect::new(0, 0, 30, 100));
+        // A free block that spans several grid columns and rows.
+        let occ = [
+            PxRect::new(0, 0, 10, 10),
+            PxRect::new(90, 90, 10, 10),
+            PxRect::new(50, 0, 5, 5),
+        ];
+        let m = largest_uncovered_rect(r, &occ).unwrap();
+        assert_eq!(m.area(), 8_100);
+        for o in &occ {
+            assert!(m.intersect(o).is_none());
+        }
+    }
+
+    #[test]
+    fn window_level_is_stable_as_the_cursor_moves() {
+        // Live stack: Firefox under Discord (right half) and History (inside the left half).
+        let firefox = PxRect::new(0, 0, 3840, 2100);
+        let occ = [
+            PxRect::new(1920, 0, 1920, 2100),
+            PxRect::new(208, 200, 1602, 1064),
+        ];
+        // On the tab strip, left or right of History's edge: the same, whole window.
+        assert_eq!(window_levels(firefox, pt(100, 150), &occ), vec![firefox]);
+        assert_eq!(window_levels(firefox, pt(300, 150), &occ), vec![firefox]);
+        // Anywhere in the big free block below History: that block, then the window.
+        let block = PxRect::new(0, 1264, 1920, 836);
+        for p in [pt(10, 1300), pt(1900, 2000), pt(960, 1700)] {
+            assert_eq!(window_levels(firefox, p, &occ), vec![block, firefox]);
+        }
+        // Uncovered window: just the window.
+        assert_eq!(window_levels(firefox, pt(10, 10), &[]), vec![firefox]);
     }
 
     #[test]

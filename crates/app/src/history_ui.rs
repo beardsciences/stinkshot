@@ -911,6 +911,7 @@ impl Surface for HistoryWindow {
         let mut open_folder = false;
         let mut capture_region = false;
         let mut open_settings = want_settings;
+        let mut open_retention = false;
         let mut clicked: Option<ItemId> = None;
         let mut act_req: Option<(Act, ItemId)> = want_act;
         let mut to_request: Vec<ThumbKey> = Vec::new();
@@ -1089,10 +1090,39 @@ impl Surface for HistoryWindow {
                 open_settings = true;
             }
             let footer_top = uc::sidebar_link_top(sidebar) - footer_h + 8.0;
+            // The retention summary links straight to Settings > History, where it is changed.
+            let footer_link = Rect::from_min_size(
+                pos2(sidebar.left() + 12.0, footer_top + 4.0),
+                vec2(SIDEBAR_W - 24.0, footer_g.size().y + 16.0),
+            );
+            let footer_resp = ui
+                .interact(
+                    footer_link,
+                    ui.scope_id().with("hist_retention"),
+                    Sense::click(),
+                )
+                .on_hover_text("Change History Retention");
+            if footer_resp.hovered() {
+                ui.painter().rect_filled(
+                    footer_link,
+                    CornerRadius::same(6),
+                    theme::subtle_fill(
+                        shared.dark,
+                        1 + footer_resp.is_pointer_button_down_on() as u8,
+                    ),
+                );
+            }
+            if footer_resp.clicked() {
+                open_retention = true;
+            }
             ui.painter().galley(
                 pos2(sidebar.left() + 22.0, footer_top + 12.0),
                 footer_g,
-                p.text_tertiary,
+                if footer_resp.hovered() {
+                    p.text_secondary
+                } else {
+                    p.text_tertiary
+                },
             );
             let list_rect = Rect::from_min_max(
                 pos2(sidebar.left(), y),
@@ -1707,7 +1737,11 @@ impl Surface for HistoryWindow {
         if capture_region {
             shared.outbox.push(Command::CaptureRegion);
         }
-        if open_settings {
+        if open_retention {
+            shared.outbox.push(Command::OpenSettingsAt(
+                crate::settings_ui::Section::History,
+            ));
+        } else if open_settings {
             shared.outbox.push(Command::OpenSettings);
         }
         if open_folder && let Err(e) = stinkshot_platform::system::open_path(&folder) {

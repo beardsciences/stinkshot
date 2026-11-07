@@ -695,7 +695,8 @@ impl Shell {
             Command::RecordMp4 => self.record_command(false),
             Command::RecordGif => self.record_command(true),
             Command::OpenHistory => self.open_history(),
-            Command::OpenSettings => self.open_settings(),
+            Command::OpenSettings => self.open_settings(None),
+            Command::OpenSettingsAt(section) => self.open_settings(Some(section)),
             Command::EditItem(id) => workers::edit_item(&self.env(), id),
             Command::PinItem(id) => workers::pin_item(&self.env(), id),
             Command::CaptureDone(out) => self.capture_done(out),
@@ -1032,13 +1033,20 @@ impl Shell {
         self.touch();
     }
 
-    fn open_settings(&mut self) {
-        if self.settings.is_some() {
+    fn open_settings(&mut self, section: Option<crate::settings_ui::Section>) {
+        if let Some(s) = &mut self.settings {
+            if let Some(sec) = section {
+                s.s.show_section(sec);
+                self.touch();
+            }
             Self::focus_window("StinkShot Settings");
             return;
         }
         let mut w = SettingsWindow::new(&self.shared);
         w.set_hotkey_errors(self.hotkey_errors.clone());
+        if let Some(sec) = section {
+            w.show_section(sec);
+        }
         self.settings = Some(Slot::new(w));
         self.touch();
     }

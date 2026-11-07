@@ -35,8 +35,9 @@ const CONTENT_MAX_W: f32 = 760.0;
 const REPO_URL: &str = "https://code.mccullough.dev/beard/stinkshot";
 const DEFAULT_ACCENTS: [&str; 4] = ["#7fd36a", "#4cc2ff", "#ffb454", "#c49cff"];
 
+/// A page of the Settings window (`Command::OpenSettingsAt` opens one directly).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Section {
+pub enum Section {
     General,
     Hotkeys,
     Capture,
@@ -196,6 +197,14 @@ impl SettingsWindow {
             hwnd: None,
             update_requested_at: None,
             copied_url_at: None,
+        }
+    }
+
+    /// Switch to `section` (another window asked for a specific page).
+    pub fn show_section(&mut self, section: Section) {
+        if section != self.section {
+            self.section = section;
+            self.stats_at = None;
         }
     }
 

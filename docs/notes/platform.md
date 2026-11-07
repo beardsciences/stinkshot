@@ -89,8 +89,10 @@ about 5 s here because of the WGC hang described below).
   --ignored --nocapture` prints the live stack for diagnosis.
 - `occlusion` (pure, unit tested): `top_layer_at`, `occluders_above`, `visible_rect_around`
   (biggest rect around the point that no window above overlaps; greedy, largest overlap
-  first), `uncovered_area`, and `clip_chain` (clips a UIA chain to the visible part, drops
-  levels with less than 30 % visible except the window level, dedups after clipping).
+  first), `uncovered_area`, `largest_uncovered_rect` (exact, histogram over the compressed
+  grid), `window_levels` (stable clipped window rect when the point is in it, then the whole
+  frame), and `clip_chain` (clips inner UIA levels to the band around the point, drops those
+  with under 30 % uncovered area, ends with `window_levels`, dedups after clipping).
 
 ### UI Automation
 - Electron/Chromium apps (Claude, Discord, VS Code) expose no UIA children until an assistive

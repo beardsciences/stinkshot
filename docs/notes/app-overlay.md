@@ -108,10 +108,16 @@ Now: `OverlayRequest::layers` carries `windows_enum::layers()` (full Z-ordered s
 the same frame as the freeze; empty for Annotate mode, then built from `windows`).
 `hover::hover_target` picks the topmost layer at the cursor; UIA is asked only about that
 window (never our own windows: they are window-level targets). The UIA chain goes through
-`occlusion::clip_chain` with the windows above as occluders: each rect is cut to the biggest
-unoccluded rect around the cursor, levels under 30 % visible are dropped (the window level is
-always offered, clipped), and duplicates after clipping collapse. The window fallback is the
-clipped visible part too; the desktop still falls back to the whole monitor. Source info for a
+`occlusion::clip_chain` with the windows above as occluders: each inner rect is cut to the
+biggest unoccluded rect around the cursor, levels whose real uncovered area is under 30 % are
+dropped (measured on the whole element, so levels do not come and go as the cursor moves),
+and duplicates after clipping collapse. The window level comes from `occlusion::window_levels`:
+the window's largest uncovered rectangle (independent of the cursor) when the cursor is in it
+and it holds at least 30 % of the visible area, then the whole frame as one more wheel-up
+level. Before, the window level was the cursor-dependent band, so moving a few px on
+Firefox's tab strip flipped it between a 208 px vertical sliver and a 200 px strip, and a
+click captured only that. With no UIA chain (snapping off, own windows, result pending) the
+window levels are the snap rects; the desktop still falls back to the whole monitor. Source info for a
 selection uses the same topmost-layer rule. Tests: `hover::tests` (target choice, stale result
 check) and `stinkshot_platform::occlusion::tests`.
 

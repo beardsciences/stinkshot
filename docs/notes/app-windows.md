@@ -60,7 +60,10 @@ Files: `crates/app/src/{toast,pin,history_ui,settings_ui,record_ui}.rs` plus new
   in the search box, not while the delete dialog is up), Ctrl+H in Settings (not while a
   hotkey field is recording). They push `OpenSettings` / `OpenHistory`; the shell focuses the
   window if it is open (restoring it when minimized), otherwise opens it. The retention
-  summary in History now sits above the link.
+  summary in History now sits above the link and is itself a link (hover wash, tooltip
+  "Change History Retention"): it pushes `OpenSettingsAt(Section::History)`, which opens
+  Settings on the History page or switches an open Settings window to it
+  (`SettingsWindow::show_section`) before focusing it.
 - Search box: the `TextEdit` was laid out top-aligned inside a 30 pt row offset 1 pt up, so
   hint and typed text sat about 4-5 pt above the box centre. It now fills the box height with
   zero margin and `align(LEFT_CENTER)` (hint and typed text share it). Measured: at 125 % and
@@ -90,7 +93,10 @@ state) the window is placed with `window_util::set_rect` at press rect + cursor 
 intended size (image size x zoom), once the cursor moved more than 4 px on either axis. The
 size is re-asserted when Windows rescales it on a DPI change, during the drag and after it
 (`size_fix`). A press without that travel stays a click: double-click opens the editor
-(ignored for 400 ms after a drag) and right-click still opens the menu. Wheel zoom is ignored
+(ignored for 400 ms after a drag) and right-click still opens the menu. egui reports the
+background as hovered under the toolbar buttons too (a click widget over a drag widget hits
+both), so a press inside the toolbar rect is excluded from the drag explicitly, and toolbar
+clicks are ignored mid-drag and for 400 ms after one (same guard as double-click). Wheel zoom is ignored
 mid-drag. Tests: `drag_threshold_is_per_axis_and_exclusive`,
 `drag_moves_by_cursor_travel_and_keeps_size`, `size_fix_restores_intended_size_only`.
 

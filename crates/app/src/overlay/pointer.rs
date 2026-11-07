@@ -178,6 +178,20 @@ impl Overlay {
             }
         }
 
+        // No element chain (snapping off, our own window, UIA pending or failed): still
+        // offer the window levels, so wheel-up reaches the whole window.
+        if rects.is_empty()
+            && let Some(t) = target.as_ref()
+        {
+            for r in &t.levels {
+                rects.push(*r);
+                labels.push(stinkshot_platform::uia::ElementLabel {
+                    control: "Window",
+                    name: String::new(),
+                });
+            }
+        }
+
         let sig = rects.first().copied();
         if sig != self.snap_sig {
             self.snap_sig = sig;
@@ -193,7 +207,7 @@ impl Overlay {
             &rects,
             self.snap_level,
             abs,
-            target.as_ref().and_then(|t| t.visible),
+            target.as_ref().and_then(|t| t.levels.first().copied()),
             Some(mon_abs),
         );
         self.hover = picked.and_then(|(r, lvl)| {

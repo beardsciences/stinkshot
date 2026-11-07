@@ -42,6 +42,8 @@ pub enum Command {
     RecordGif,
     OpenHistory,
     OpenSettings,
+    /// Open Settings on a given page, or switch an open Settings window to it.
+    OpenSettingsAt(crate::settings_ui::Section),
     /// Re-open a history item in the overlay editor (annotations editable).
     EditItem(ItemId),
     PinItem(ItemId),

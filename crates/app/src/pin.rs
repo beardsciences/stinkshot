@@ -95,7 +95,7 @@ pub fn zoom_anchor(
 /// Cursor travel (physical px, either axis) before a press on the pin becomes a drag. Below
 /// it the press stays a click, so double-click and the context menu keep working.
 pub const DRAG_THRESHOLD_PX: i32 = 4;
-/// A double click whose second press ends a drag this recently is not an edit request.
+/// A double click or toolbar click that lands this soon after a drag ends is ignored.
 const DRAG_CLICK_GUARD: Duration = Duration::from_millis(400);
 
 /// True once the cursor moved more than `threshold` px on either axis since the press.
@@ -470,10 +470,29 @@ impl Surface for Pin {
                     .rect_filled(rect, radius, p.layer.gamma_multiply(opacity));
             }
 
+            // Mini toolbar, top right (shown while hovered, when the pin is big enough).
+            let tb_w = TOOL_PAD * 2.0 + TOOL_BTN * 3.0 + TOOL_GAP * 2.0;
+            let tb_h = TOOL_PAD * 2.0 + TOOL_BTN;
+            let tb = Rect::from_min_size(
+                pos2(
+                    (rect.right() - 6.0 - tb_w).max(rect.left()),
+                    rect.top() + 6.0,
+                ),
+                vec2(tb_w, tb_h),
+            );
+            let tb_fits = rect.width() >= tb_w + 12.0 && rect.height() >= tb_h + 12.0;
+
             let bg = ui.interact(rect, ui.scope_id().with("pin_bg"), Sense::click_and_drag());
-            // Toolbar buttons were registered on top of the background last frame, so a press
-            // on one of them does not count as hovering the background.
-            if bg.hovered() && ui.input(|i| i.pointer.button_pressed(PointerButton::Primary)) {
+            // egui reports the background as hovered under the toolbar buttons too (a click
+            // widget over a drag widget hits both), so presses inside the toolbar are kept out
+            // of the drag explicitly.
+            let press = ui.input(|i| {
+                i.pointer
+                    .button_pressed(PointerButton::Primary)
+                    .then(|| i.pointer.press_origin())
+                    .flatten()
+            });
+            if bg.hovered() && press.is_some_and(|pos| !(tb_fits && tb.contains(pos))) {
                 press_bg = true;
             }
             if bg.double_clicked() && item.is_some() && !recent_drag {
@@ -507,17 +526,7 @@ impl Surface for Pin {
                     StrokeKind::Inside,
                 );
 
-                // Mini toolbar, top right.
-                let tb_w = TOOL_PAD * 2.0 + TOOL_BTN * 3.0 + TOOL_GAP * 2.0;
-                let tb_h = TOOL_PAD * 2.0 + TOOL_BTN;
-                let tb = Rect::from_min_size(
-                    pos2(
-                        (rect.right() - 6.0 - tb_w).max(rect.left()),
-                        rect.top() + 6.0,
-                    ),
-                    vec2(tb_w, tb_h),
-                );
-                if rect.width() >= tb_w + 12.0 && rect.height() >= tb_h + 12.0 {
+                if tb_fits {
                     let bar_fill = Color32::from_rgba_unmultiplied(32, 32, 32, 230);
                     ui.painter()
                         .rect_filled(tb, CornerRadius::same(6), bar_fill);
@@ -547,7 +556,9 @@ impl Surface for Pin {
                                     uc::font(11.0),
                                     icon_col,
                                 );
-                                if resp.on_hover_text("Opacity (Ctrl+scroll)").clicked() {
+                                if resp.on_hover_text("Opacity (Ctrl+scroll)").clicked()
+                                    && !recent_drag
+                                {
                                     cycle = true;
                                 }
                             }
@@ -558,7 +569,7 @@ impl Surface for Pin {
                                     Icon::Copy,
                                     icon_col,
                                 );
-                                if resp.on_hover_text("Copy (Ctrl+C)").clicked() {
+                                if resp.on_hover_text("Copy (Ctrl+C)").clicked() && !recent_drag {
                                     want_copy = true;
                                 }
                             }
@@ -569,7 +580,7 @@ impl Surface for Pin {
                                     Icon::Close,
                                     icon_col,
                                 );
-                                if resp.on_hover_text("Close Pin (Esc)").clicked() {
+                                if resp.on_hover_text("Close Pin (Esc)").clicked() && !recent_drag {
                                     close = true;
                                 }
                             }
