@@ -124,20 +124,13 @@ fn snip_status_line(status: &SnipStatus, h: &Hotkeys, routes: [HotkeyField; 2]) 
     let replace = h.replace_snipping_tool;
     match (replace, status) {
         (false, SnipStatus::Active) => ("Turning off\u{2026}".into(), Tone::Neutral),
-        (false, _) => (
-            "Off. Win+Shift+S and Win+Shift+R open the Snipping Tool.".into(),
-            Tone::Neutral,
-        ),
+        (false, _) => (String::new(), Tone::Neutral),
         (true, SnipStatus::Off) => ("Turning on\u{2026}".into(), Tone::Neutral),
         (true, SnipStatus::Unavailable(why)) => (why.clone(), Tone::Bad),
-        (true, SnipStatus::Active) => (
-            format!(
-                "Active. Win+Shift+S opens {}, Win+Shift+R opens {}.",
-                routes[0].label(),
-                routes[1].label()
-            ),
-            Tone::Good,
-        ),
+        (true, SnipStatus::Active) => {
+            let _ = routes;
+            ("Active".into(), Tone::Good)
+        }
     }
 }
 
@@ -145,7 +138,7 @@ fn snip_status_line(status: &SnipStatus, h: &Hotkeys, routes: [HotkeyField; 2]) 
 /// the key cannot be taken over.
 fn snip_prtsc_note(h: &Hotkeys) -> Option<&'static str> {
     (h.replace_snipping_tool && !printscreen_bound(h))
-        .then_some("PrtSc is not set for any shortcut below, so it still opens the Snipping Tool.")
+        .then_some("PrtSc isn't bound, so Snipping Tool keeps it.")
 }
 
 /// Title and description of a Snipping Tool chord row in the shortcut list.
@@ -155,12 +148,9 @@ fn snip_chord_row(chord: SnipChord, action: HotkeyField, replace: bool) -> (Stri
         SnipChord::Record => "Snipping Tool Recording",
     };
     let desc = if replace {
-        format!("Routed to Stinkshot: opens {}.", action.label())
+        action.label().to_string()
     } else {
-        format!(
-            "Opens the Snipping Tool. Turn on Replace Snipping Tool to open {} instead.",
-            action.label()
-        )
+        "Snipping Tool".to_string()
     };
     (title.to_string(), desc)
 }
@@ -890,7 +880,7 @@ impl SettingsWindow {
         toggle_row(
             ui,
             "Replace Snipping Tool",
-            "Win+Shift+S, Win+Shift+R and PrtSc open Stinkshot instead of the Snipping Tool.",
+            "Win+Shift+S, Win+Shift+R and PrtSc open Stinkshot.",
             &mut shared.config.hotkeys.replace_snipping_tool,
         );
         let routes = crate::hotkeys::snip_routes(&shared.config.hotkeys);
@@ -904,7 +894,10 @@ impl SettingsWindow {
             Tone::Bad => p.danger,
             Tone::Neutral => p.text_tertiary,
         };
-        let mut lines = vec![(status, color)];
+        let mut lines = Vec::new();
+        if !status.is_empty() {
+            lines.push((status, color));
+        }
         if let Some(note) = snip_prtsc_note(&shared.config.hotkeys) {
             lines.push((note.to_string(), p.text_tertiary));
         }
@@ -927,7 +920,7 @@ impl SettingsWindow {
                 toggle_row(
                     ui,
                     "Take Over PrintScreen",
-                    "Included in Replace Snipping Tool.",
+                    "Set by Replace Snipping Tool.",
                     &mut on,
                 );
             });
@@ -935,7 +928,7 @@ impl SettingsWindow {
             toggle_row(
                 ui,
                 "Take Over PrintScreen",
-                "Replace the Windows Snipping Tool shortcut with Stinkshot's region capture.",
+                "PrtSc opens Stinkshot.",
                 &mut shared.config.hotkeys.take_over_printscreen,
             );
         }
@@ -1940,14 +1933,11 @@ mod tests {
         let routes = [HotkeyField::Region, HotkeyField::RecordMp4];
         let mut h = Hotkeys::default();
         let (s, t) = snip_status_line(&SnipStatus::Off, &h, routes);
-        assert!(s.starts_with("Off.") && t == Tone::Neutral, "{s}");
+        assert!(s.is_empty() && t == Tone::Neutral, "{s}");
         h.replace_snipping_tool = true;
         let (s, t) = snip_status_line(&SnipStatus::Active, &h, routes);
         assert_eq!(t, Tone::Good);
-        assert_eq!(
-            s,
-            "Active. Win+Shift+S opens Region, Win+Shift+R opens Record MP4."
-        );
+        assert_eq!(s, "Active");
         let why = SnipStatus::Unavailable("Nope. Try again.".into());
         assert_eq!(
             snip_status_line(&why, &h, routes),
@@ -1962,7 +1952,7 @@ mod tests {
         for f in HOTKEY_FIELDS {
             f.hotkey_mut(&mut h).clear();
         }
-        assert!(snip_prtsc_note(&h).is_some_and(|n| n.contains("PrtSc is not set")));
+        assert!(snip_prtsc_note(&h).is_some_and(|n| n.contains("PrtSc isn't bound")));
         h.replace_snipping_tool = false;
         assert_eq!(snip_prtsc_note(&h), None);
         assert_eq!(
@@ -1975,9 +1965,9 @@ mod tests {
     fn snip_chord_rows() {
         let (t, d) = snip_chord_row(SnipChord::Region, HotkeyField::Region, true);
         assert_eq!(t, "Snipping Tool Snip");
-        assert_eq!(d, "Routed to Stinkshot: opens Region.");
+        assert_eq!(d, "Region");
         let (t, d) = snip_chord_row(SnipChord::Record, HotkeyField::RecordMp4, false);
         assert_eq!(t, "Snipping Tool Recording");
-        assert!(d.starts_with("Opens the Snipping Tool.") && d.contains("Record MP4"));
+        assert_eq!(d, "Snipping Tool");
     }
 }
