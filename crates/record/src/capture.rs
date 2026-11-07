@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use stinkshot_core::PxRect;
+use stinkshot_platform::hdr;
 use windows::Foundation::TimeSpan;
 use windows::Graphics::Capture::{
     Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession,
@@ -24,8 +25,8 @@ use windows::Win32::Foundation::{HMODULE, LPARAM, RECT, TRUE};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN};
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_MODE_ROTATION_IDENTITY, DXGI_MODE_ROTATION_UNSPECIFIED,
-    DXGI_SAMPLE_DESC,
+    DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT,
+    DXGI_MODE_ROTATION_IDENTITY, DXGI_MODE_ROTATION_UNSPECIFIED, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::Graphics::Gdi::{
@@ -121,6 +122,86 @@ struct MonCap {
     src: PxRect,
     /// Where that intersection lands inside the region.
     dst: (u32, u32),
+    /// Set for HDR monitors: frames arrive as FP16 scRGB, are copied here and converted to
+    /// SDR BGRA into the shared stage on the CPU.
+    hdr: Option<HdrStage>,
+}
+
+/// FP16 staging copy of one HDR monitor's part of the region.
+struct HdrStage {
+    tex: ID3D11Texture2D,
+    conv: Arc<hdr::ScrgbToSrgb>,
+    /// A new frame was copied into `tex` and not yet converted.
+    pending: bool,
+}
+
+impl HdrStage {
+    fn new(device: &ID3D11Device, src: PxRect, color: &hdr::DisplayColor) -> Result<HdrStage> {
+        log::info!(
+            "{} is HDR (SDR white {} nits); capturing FP16 and converting to SDR",
+            color.device,
+            color.sdr_white_nits
+        );
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: src.w as u32,
+            Height: src.h as u32,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_STAGING,
+            BindFlags: 0,
+            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+            MiscFlags: 0,
+        };
+        let mut tex: Option<ID3D11Texture2D> = None;
+        unsafe { device.CreateTexture2D(&desc, None, Some(&mut tex)) }
+            .context("CreateTexture2D(HDR staging)")?;
+        Ok(HdrStage {
+            tex: tex.context("no HDR staging texture")?,
+            conv: hdr::ScrgbToSrgb::shared(color.sdr_white_nits),
+            pending: false,
+        })
+    }
+
+    /// Convert the pending FP16 picture into `stage` (BGRA8) at `dst`.
+    fn resolve(
+        &mut self,
+        ctx: &ID3D11DeviceContext,
+        stage: &ID3D11Texture2D,
+        src: PxRect,
+        dst: (u32, u32),
+    ) -> Result<()> {
+        if !self.pending {
+            return Ok(());
+        }
+        self.pending = false;
+        let (w, h) = (src.w as usize, src.h as usize);
+        unsafe {
+            let mut from = D3D11_MAPPED_SUBRESOURCE::default();
+            ctx.Map(&self.tex, 0, D3D11_MAP_READ, 0, Some(&mut from))
+                .context("Map(HDR staging)")?;
+            let mut to = D3D11_MAPPED_SUBRESOURCE::default();
+            if let Err(e) = ctx.Map(stage, 0, D3D11_MAP_READ_WRITE, 0, Some(&mut to)) {
+                ctx.Unmap(&self.tex, 0);
+                return Err(e).context("Map(staging for HDR)");
+            }
+            let fp = from.RowPitch as usize;
+            let tp = to.RowPitch as usize;
+            let src_bytes =
+                std::slice::from_raw_parts(from.pData as *const u8, fp * (h - 1) + w * 8);
+            let base = (to.pData as *mut u8).add(dst.1 as usize * tp + dst.0 as usize * 4);
+            let dst_bytes = std::slice::from_raw_parts_mut(base, tp * (h - 1) + w * 4);
+            self.conv
+                .convert_parallel(src_bytes, fp, w, h, dst_bytes, tp, true);
+            ctx.Unmap(stage, 0);
+            ctx.Unmap(&self.tex, 0);
+        }
+        Ok(())
+    }
 }
 
 pub struct Capturer {
@@ -319,6 +400,13 @@ impl Capturer {
 
             let mut mons = Vec::new();
             for (m, src, dst) in plan {
+                let color = hdr::display_for_monitor(m.handle);
+                let hdr_stage = if color.advanced_color {
+                    Some(HdrStage::new(&device, *src, &color)?)
+                } else {
+                    None
+                };
+                let pixel_format = wgc_format(hdr_stage.is_some());
                 let item: GraphicsCaptureItem = interop
                     .CreateForMonitor(HMONITOR(m.handle as *mut _))
                     .context("CreateForMonitor")?;
@@ -334,7 +422,7 @@ impl Capturer {
                 }
                 let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
                     &winrt_device,
-                    DirectXPixelFormat::B8G8R8A8UIntNormalized,
+                    pixel_format,
                     3,
                     size,
                 )
@@ -360,6 +448,7 @@ impl Capturer {
                     got_frame: false,
                     src: *src,
                     dst: *dst,
+                    hdr: hdr_stage,
                 });
             }
             let stage = create_stage(&device, &ctx, region.w as u32, region.h as u32)?;
@@ -433,9 +522,15 @@ impl Capturer {
             let ctx = ctx.context("no D3D11 context")?;
             let mut mons = Vec::new();
             for (out, pi) in outs {
-                let dup = duplicate_output(&out, &device)
+                let (m, src, dst) = &plan[pi];
+                let color = hdr::display_for_monitor(m.handle);
+                let hdr_stage = if color.advanced_color {
+                    Some(HdrStage::new(&device, *src, &color)?)
+                } else {
+                    None
+                };
+                let dup = duplicate_output(&out, &device, hdr_stage.is_some())
                     .context("DuplicateOutput (secure desktop or another duplication in use?)")?;
-                let (_, src, dst) = &plan[pi];
                 mons.push(MonCap {
                     backend: Backend::Dup {
                         output: out,
@@ -445,6 +540,7 @@ impl Capturer {
                     got_frame: false,
                     src: *src,
                     dst: *dst,
+                    hdr: hdr_stage,
                 });
             }
             let stage = create_stage(&device, &ctx, region.w as u32, region.h as u32)?;
@@ -521,18 +617,30 @@ impl Capturer {
     pub fn poll(&mut self) -> Result<PollStats> {
         let mut stats = PollStats::default();
         for m in &mut self.mons {
+            // HDR monitors copy into their FP16 staging texture at its origin instead.
+            let target = match &m.hdr {
+                Some(h) => CopyTarget {
+                    tex: &h.tex,
+                    dst: (0, 0),
+                    format: DXGI_FORMAT_R16G16B16A16_FLOAT,
+                },
+                None => CopyTarget {
+                    tex: &self.stage,
+                    dst: m.dst,
+                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                },
+            };
             let got = match &mut m.backend {
                 Backend::Wgc {
                     pool, size, closed, ..
                 } => poll_wgc(
                     &self.ctx,
-                    &self.stage,
+                    &target,
                     self.winrt_device.as_ref(),
                     pool,
                     size,
                     closed,
                     m.src,
-                    m.dst,
                     &mut stats,
                 )?,
                 Backend::Dup {
@@ -542,17 +650,20 @@ impl Capturer {
                 } => poll_dup(
                     &self.device,
                     &self.ctx,
-                    &self.stage,
+                    &target,
                     output,
                     dup,
                     bad_format,
                     m.src,
-                    m.dst,
                     &mut stats,
                 )?,
             };
             if got {
                 m.got_frame = true;
+                if let Some(h) = &mut m.hdr {
+                    h.pending = true;
+                    h.resolve(&self.ctx, &self.stage, m.src, m.dst)?;
+                }
             }
         }
         Ok(stats)
@@ -574,16 +685,34 @@ impl Capturer {
     }
 }
 
+/// Where a monitor's frames are copied: the shared BGRA stage, or an HDR monitor's FP16
+/// staging texture.
+struct CopyTarget<'a> {
+    tex: &'a ID3D11Texture2D,
+    dst: (u32, u32),
+    /// The frame format this target expects.
+    format: DXGI_FORMAT,
+}
+
+/// WGC pool format for a monitor: FP16 scRGB on HDR monitors (converted on the CPU with the
+/// display's SDR white level), BGRA8 otherwise.
+fn wgc_format(hdr: bool) -> DirectXPixelFormat {
+    if hdr {
+        DirectXPixelFormat::R16G16B16A16Float
+    } else {
+        DirectXPixelFormat::B8G8R8A8UIntNormalized
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn poll_wgc(
     ctx: &ID3D11DeviceContext,
-    stage: &ID3D11Texture2D,
+    target: &CopyTarget,
     winrt_device: Option<&IDirect3DDevice>,
     pool: &Direct3D11CaptureFramePool,
     size: &mut SizeInt32,
     closed: &AtomicBool,
     src: PxRect,
-    dst: (u32, u32),
     stats: &mut PollStats,
 ) -> Result<bool> {
     if closed.load(Ordering::Relaxed) {
@@ -612,14 +741,23 @@ fn poll_wgc(
             *size = content;
             let _ = frame.Close();
             if let Some(d) = winrt_device {
-                let _ = pool.Recreate(d, DirectXPixelFormat::B8G8R8A8UIntNormalized, 3, content);
+                let hdr = target.format == DXGI_FORMAT_R16G16B16A16_FLOAT;
+                let _ = pool.Recreate(d, wgc_format(hdr), 3, content);
             }
             return Ok(false);
         }
         let surface = frame.Surface().context("frame surface")?;
         let access: IDirect3DDxgiInterfaceAccess = surface.cast()?;
         let tex: ID3D11Texture2D = access.GetInterface().context("frame texture")?;
-        copy_region(ctx, stage, &tex, src, dst, content.Width, content.Height);
+        copy_region(
+            ctx,
+            target.tex,
+            &tex,
+            src,
+            target.dst,
+            content.Width,
+            content.Height,
+        );
         let _ = frame.Close();
     }
     stats.new_frames += 1;
@@ -630,18 +768,18 @@ fn poll_wgc(
 fn poll_dup(
     device: &ID3D11Device,
     ctx: &ID3D11DeviceContext,
-    stage: &ID3D11Texture2D,
+    target: &CopyTarget,
     output: &IDXGIOutput1,
     dup: &mut Option<IDXGIOutputDuplication>,
     bad_format: &mut u32,
     src: PxRect,
-    dst: (u32, u32),
     stats: &mut PollStats,
 ) -> Result<bool> {
     let mut got = false;
+    let hdr = target.format == DXGI_FORMAT_R16G16B16A16_FLOAT;
     if dup.is_none() {
         // lost earlier (mode change, UAC desktop): try to re-establish quietly
-        *dup = duplicate_output(output, device).ok();
+        *dup = duplicate_output(output, device, hdr).ok();
     }
     let Some(d) = dup.as_ref() else {
         return Ok(false);
@@ -657,9 +795,10 @@ fn poll_dup(
                 {
                     let mut desc = D3D11_TEXTURE2D_DESC::default();
                     unsafe { tex.GetDesc(&mut desc) };
-                    if desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM {
+                    if desc.Format != target.format {
                         // Copying e.g. an HDR (FP16) surface into the BGRA8 stage fails
-                        // silently and would record black.
+                        // silently and would record black (and an 8-bit frame of an HDR
+                        // monitor is blown out).
                         *bad_format += 1;
                         let fatal = *bad_format > MAX_BAD_FORMAT_FRAMES;
                         unsafe {
@@ -676,10 +815,10 @@ fn poll_dup(
                     *bad_format = 0;
                     copy_region(
                         ctx,
-                        stage,
+                        target.tex,
                         &tex,
                         src,
-                        dst,
+                        target.dst,
                         desc.Width as i32,
                         desc.Height as i32,
                     );
@@ -706,20 +845,29 @@ fn poll_dup(
     Ok(got)
 }
 
-/// Duplicate `output`, asking for plain BGRA8 so HDR outputs are tone-mapped to SDR by the
-/// system, and refusing rotated outputs (the duplicated surface is unrotated, so the crop
-/// would be wrong; WGC handles those).
+/// Duplicate `output` as BGRA8, or as FP16 scRGB for an HDR output (an 8-bit duplication of
+/// an HDR output is clipped without the SDR white scaling, so it looks blown out), and refuse
+/// rotated outputs (the duplicated surface is unrotated, so the crop would be wrong; WGC
+/// handles those).
 fn duplicate_output(
     output: &IDXGIOutput1,
     device: &ID3D11Device,
+    hdr: bool,
 ) -> Result<IDXGIOutputDuplication> {
     unsafe {
-        let dup = match output
-            .cast::<IDXGIOutput5>()
-            .and_then(|o5| o5.DuplicateOutput1(device, 0, &[DXGI_FORMAT_B8G8R8A8_UNORM]))
-        {
-            Ok(d) => d,
-            Err(_) => output.DuplicateOutput(device)?,
+        let dup = if hdr {
+            output
+                .cast::<IDXGIOutput5>()
+                .and_then(|o5| o5.DuplicateOutput1(device, 0, &[DXGI_FORMAT_R16G16B16A16_FLOAT]))
+                .context("DuplicateOutput1(FP16) for an HDR display")?
+        } else {
+            match output
+                .cast::<IDXGIOutput5>()
+                .and_then(|o5| o5.DuplicateOutput1(device, 0, &[DXGI_FORMAT_B8G8R8A8_UNORM]))
+            {
+                Ok(d) => d,
+                Err(_) => output.DuplicateOutput(device)?,
+            }
         };
         let rot = dup.GetDesc().Rotation;
         if rot != DXGI_MODE_ROTATION_IDENTITY && rot != DXGI_MODE_ROTATION_UNSPECIFIED {

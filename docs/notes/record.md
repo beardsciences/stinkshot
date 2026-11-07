@@ -60,6 +60,11 @@ Modules (all private except the re-exports in `lib.rs`):
   the bounding box of changed pixels, unchanged pixels inside it become transparent, and the crop is
   quantized with imagequant (dithering 1.0). Change detection compares against the source value
   each pixel last changed to, so slow gradients do not freeze.
+- **HDR monitors** (Nov 6 2026): captured as FP16 scRGB (DXGI `DuplicateOutput1` FP16, WGC
+  `R16G16B16A16Float` pool) into a per-monitor FP16 staging texture, then converted on the CPU
+  into the BGRA stage with the display's SDR white level (`stinkshot_platform::hdr`). An 8-bit
+  duplication of an HDR monitor is clipped, not tone-mapped, and recorded blown out. Verified on
+  the DXGI path only (WGC hangs here). See `docs/notes/hdr.md`.
 
 ## Contract changes (additive)
 

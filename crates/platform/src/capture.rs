@@ -55,6 +55,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{Interface, factory};
 
 use crate::Hwnd;
+use crate::hdr::{self, DisplayColor};
 use crate::monitors::{self, rect_from_win};
 
 #[derive(Clone, Debug)]
@@ -112,46 +113,6 @@ pub fn capture_rect(rect: PxRect, include_cursor: bool) -> anyhow::Result<Rgba> 
 // Pixel format conversion (pure, unit tested)
 // ---------------------------------------------------------------------------------------
 
-fn half_to_f32(h: u16) -> f32 {
-    let sign = if h & 0x8000 != 0 { -1.0f32 } else { 1.0 };
-    let exp = ((h >> 10) & 0x1f) as i32;
-    let man = (h & 0x3ff) as f32;
-    if exp == 0 {
-        sign * man * 2f32.powi(-24)
-    } else if exp == 31 {
-        if man == 0.0 {
-            sign * f32::INFINITY
-        } else {
-            f32::NAN
-        }
-    } else {
-        sign * (1.0 + man / 1024.0) * 2f32.powi(exp - 15)
-    }
-}
-
-fn srgb_lut() -> &'static [u8; 4097] {
-    static LUT: std::sync::OnceLock<[u8; 4097]> = std::sync::OnceLock::new();
-    LUT.get_or_init(|| {
-        let mut t = [0u8; 4097];
-        for (i, v) in t.iter_mut().enumerate() {
-            let l = i as f32 / 4096.0;
-            let s = if l <= 0.003_130_8 {
-                l * 12.92
-            } else {
-                1.055 * l.powf(1.0 / 2.4) - 0.055
-            };
-            *v = (s * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-        }
-        t
-    })
-}
-
-/// Linear scRGB float to an sRGB byte (clamped; values above 1.0 clip to white).
-fn linear_to_srgb8(v: f32) -> u8 {
-    let v = if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
-    srgb_lut()[(v * 4096.0 + 0.5) as usize]
-}
-
 fn bytes_per_pixel(fmt: DXGI_FORMAT) -> Option<usize> {
     match fmt {
         DXGI_FORMAT_B8G8R8A8_UNORM
@@ -203,15 +164,7 @@ fn convert_rows(
                     d[3] = 255;
                 }
             }
-            DXGI_FORMAT_R16G16B16A16_FLOAT => {
-                for (d, s) in drow.chunks_exact_mut(4).zip(srow.chunks_exact(8)) {
-                    let c = |i: usize| half_to_f32(u16::from_le_bytes([s[i * 2], s[i * 2 + 1]]));
-                    d[0] = linear_to_srgb8(c(0));
-                    d[1] = linear_to_srgb8(c(1));
-                    d[2] = linear_to_srgb8(c(2));
-                    d[3] = 255;
-                }
-            }
+            // FP16 is handled by `hdr::ScrgbToSrgb` in `convert_to_rgba_hdr`.
             _ => {}
         }
     }
@@ -219,6 +172,8 @@ fn convert_rows(
 
 /// Convert a mapped `w` x `h` surface to straight-alpha RGBA8, splitting rows across threads.
 /// Returns None for formats this module does not understand.
+/// FP16 surfaces are assumed to be scRGB with SDR white at 80 nits; use
+/// `convert_to_rgba_hdr` for a display with another white level.
 pub(crate) fn convert_to_rgba(
     fmt: DXGI_FORMAT,
     src: &[u8],
@@ -227,9 +182,35 @@ pub(crate) fn convert_to_rgba(
     h: usize,
     keep_alpha: bool,
 ) -> Option<Rgba> {
+    convert_to_rgba_hdr(fmt, src, pitch, w, h, keep_alpha, hdr::SCRGB_UNIT_NITS)
+}
+
+/// `convert_to_rgba` for a surface from a display whose SDR white sits at `sdr_white_nits`
+/// (only matters for FP16 scRGB surfaces: SDR content maps back to its original sRGB values).
+pub(crate) fn convert_to_rgba_hdr(
+    fmt: DXGI_FORMAT,
+    src: &[u8],
+    pitch: usize,
+    w: usize,
+    h: usize,
+    keep_alpha: bool,
+    sdr_white_nits: f32,
+) -> Option<Rgba> {
     bytes_per_pixel(fmt)?;
     let mut out = Rgba::new(w as u32, h as u32);
     if w == 0 || h == 0 {
+        return Some(out);
+    }
+    if fmt == DXGI_FORMAT_R16G16B16A16_FLOAT {
+        hdr::ScrgbToSrgb::shared(sdr_white_nits).convert_parallel(
+            src,
+            pitch,
+            w,
+            h,
+            &mut out.data,
+            w * 4,
+            false,
+        );
         return Some(out);
     }
     let threads = if w * h < 300_000 {
@@ -378,12 +359,35 @@ struct OutputDup {
     has_image: bool,
     /// Whether the first (untrusted) duplication frame has been consumed.
     seen_first: bool,
+    /// HDR state and SDR white level. With advanced color on, the duplication delivers FP16
+    /// scRGB and the shadow texture is FP16 too.
+    color: DisplayColor,
+}
+
+impl OutputDup {
+    fn hdr(&self) -> bool {
+        self.color.advanced_color
+    }
+
+    /// Texture format the shadow holds for this output.
+    fn shadow_format(&self) -> DXGI_FORMAT {
+        if self.hdr() {
+            DXGI_FORMAT_R16G16B16A16_FLOAT
+        } else {
+            DXGI_FORMAT_B8G8R8A8_UNORM
+        }
+    }
 }
 
 struct Session {
     layout: Vec<PxRect>,
     outputs: Vec<OutputDup>,
+    /// When the displays' color state was last read (SDR white can change at any time).
+    color_checked: std::time::Instant,
 }
+
+/// How often a cached session re-reads HDR state and SDR white levels.
+const COLOR_RECHECK: std::time::Duration = std::time::Duration::from_millis(1000);
 
 // SAFETY: D3D11/DXGI objects are free-threaded COM objects; all access to a Session goes
 // through the SESSION mutex, so the immediate context is never used concurrently.
@@ -405,6 +409,7 @@ impl Session {
         // SAFETY: standard DXGI enumeration; every returned interface is owned by RAII wrappers.
         unsafe {
             let factory: IDXGIFactory1 = CreateDXGIFactory1()?;
+            let colors = hdr::displays();
             let mut outputs = Vec::new();
             let mut ai = 0;
             loop {
@@ -424,7 +429,13 @@ impl Session {
                     if let Ok(desc) = output.GetDesc()
                         && desc.AttachedToDesktop.as_bool()
                     {
-                        attached.push((output, rect_from_win(&desc.DesktopCoordinates)));
+                        let name = hdr::device_name(&desc.DeviceName);
+                        let color = colors
+                            .iter()
+                            .find(|c| c.device.eq_ignore_ascii_case(&name))
+                            .cloned()
+                            .unwrap_or_else(|| hdr::display_for_device(&name));
+                        attached.push((output, rect_from_win(&desc.DesktopCoordinates), color));
                     }
                 }
                 if attached.is_empty() {
@@ -449,8 +460,15 @@ impl Session {
                 let (Some(device), Some(ctx)) = (device, ctx) else {
                     continue;
                 };
-                for (output, rect) in attached {
-                    let dup = duplicate(&output, &device);
+                for (output, rect, color) in attached {
+                    if color.advanced_color {
+                        log::debug!(
+                            "output {} is HDR (SDR white {} nits); duplicating as FP16",
+                            color.device,
+                            color.sdr_white_nits
+                        );
+                    }
+                    let dup = duplicate(&output, &device, color.advanced_color);
                     outputs.push(OutputDup {
                         rect,
                         dup,
@@ -461,14 +479,38 @@ impl Session {
                         staging: None,
                         has_image: false,
                         seen_first: false,
+                        color,
                     });
                 }
             }
             Ok(Session {
                 layout: current_layout(),
                 outputs,
+                color_checked: std::time::Instant::now(),
             })
         }
+    }
+
+    /// Pick up SDR white level changes. Returns false when an output's HDR state changed
+    /// (the session must be rebuilt: the duplication format depends on it).
+    fn recheck_colors(&mut self) -> bool {
+        if self.color_checked.elapsed() < COLOR_RECHECK {
+            return true;
+        }
+        self.color_checked = std::time::Instant::now();
+        let colors = hdr::displays();
+        if colors.is_empty() {
+            return true;
+        }
+        for out in &mut self.outputs {
+            if let Some(c) = colors.iter().find(|c| c.device == out.color.device) {
+                if c.advanced_color != out.color.advanced_color {
+                    return false;
+                }
+                out.color.sdr_white_nits = c.sdr_white_nits;
+            }
+        }
+        true
     }
 
     fn capture(&mut self, rect: PxRect, first: bool) -> anyhow::Result<Rgba> {
@@ -492,15 +534,26 @@ impl Session {
 unsafe fn duplicate(
     output: &windows::Win32::Graphics::Dxgi::IDXGIOutput,
     device: &ID3D11Device,
+    hdr: bool,
 ) -> Option<IDXGIOutputDuplication> {
     // SAFETY: caller guarantees `output` and `device` are live.
     unsafe {
         let attempt = (|| -> windows::core::Result<IDXGIOutputDuplication> {
-            if let Ok(o5) = output.cast::<IDXGIOutput5>() {
-                // Ask for plain 8-bit BGRA so HDR outputs are tone-mapped to SDR by the system.
-                if let Ok(d) = o5.DuplicateOutput1(device, 0, &[DXGI_FORMAT_B8G8R8A8_UNORM]) {
-                    return Ok(d);
-                }
+            if hdr {
+                // An 8-bit duplication of an HDR output is the FP16 desktop clipped to 0..1
+                // without the SDR white scaling, so everything above 80 nits blows out
+                // (measured: #808080 at 480-nit SDR white came back as #FFFFFF). Take the FP16
+                // surface and convert it ourselves; without it, GDI (which is correct) is used.
+                return output.cast::<IDXGIOutput5>()?.DuplicateOutput1(
+                    device,
+                    0,
+                    &[DXGI_FORMAT_R16G16B16A16_FLOAT],
+                );
+            }
+            if let Ok(o5) = output.cast::<IDXGIOutput5>()
+                && let Ok(d) = o5.DuplicateOutput1(device, 0, &[DXGI_FORMAT_B8G8R8A8_UNORM])
+            {
+                return Ok(d);
             }
             output.cast::<IDXGIOutput1>()?.DuplicateOutput(device)
         })();
@@ -555,6 +608,10 @@ impl OutputDup {
                     let mut fd = D3D11_TEXTURE2D_DESC::default();
                     // SAFETY: out pointer is a live local.
                     unsafe { tex.GetDesc(&mut fd) };
+                    if self.hdr() && fd.Format != DXGI_FORMAT_R16G16B16A16_FLOAT {
+                        // An 8-bit frame of an HDR output would be blown out (see `duplicate`).
+                        anyhow::bail!("HDR output delivered {:?} frames", fd.Format);
+                    }
                     self.ensure_textures(fd.Width, fd.Height, fd.Format)?;
                     if let Some(shadow) = &self.shadow {
                         // SAFETY: both textures belong to this device and now have identical
@@ -593,6 +650,10 @@ impl OutputDup {
             return Ok(());
         }
         self.has_image = false;
+        log::debug!(
+            "duplication shadow for {}: {width}x{height} {format:?}",
+            self.color.device
+        );
         let desc = D3D11_TEXTURE2D_DESC {
             Width: width,
             Height: height,
@@ -664,26 +725,49 @@ impl OutputDup {
     /// Ok(false) when the format does not allow a direct upload.
     fn seed_from_gdi(&mut self) -> anyhow::Result<bool> {
         if self.shadow.is_none() {
-            self.ensure_textures(
-                self.rect.w as u32,
-                self.rect.h as u32,
-                DXGI_FORMAT_B8G8R8A8_UNORM,
-            )?;
+            self.ensure_textures(self.rect.w as u32, self.rect.h as u32, self.shadow_format())?;
         }
         let (Some(shadow), Some(desc)) = (&self.shadow, &self.desc) else {
             return Ok(false);
         };
-        if desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM
-            && desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
-        {
-            return Ok(false);
-        }
         let full = PxRect::new(
             self.rect.x,
             self.rect.y,
             desc.Width as i32,
             desc.Height as i32,
         );
+        if desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT {
+            // GDI returns correct SDR values on an HDR output (verified); lift them into scRGB
+            // at the display's SDR white so they match what later FP16 frames contain.
+            let img = gdi_capture(full)?;
+            let table = hdr::srgb8_to_scrgb_half(self.color.sdr_white_nits);
+            let one = hdr::f32_to_half(1.0);
+            let mut halves = vec![0u16; img.data.len()];
+            for (d, s) in halves.chunks_exact_mut(4).zip(img.data.chunks_exact(4)) {
+                d[0] = table[s[0] as usize];
+                d[1] = table[s[1] as usize];
+                d[2] = table[s[2] as usize];
+                d[3] = one;
+            }
+            // SAFETY: `halves` holds Width*Height tightly packed RGBA16F pixels.
+            unsafe {
+                self.ctx.UpdateSubresource(
+                    shadow,
+                    0,
+                    None,
+                    halves.as_ptr() as *const _,
+                    desc.Width * 8,
+                    0,
+                );
+            }
+            self.has_image = true;
+            return Ok(true);
+        }
+        if desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM
+            && desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
+        {
+            return Ok(false);
+        }
         let mut img = gdi_capture(full)?;
         for p in img.data.chunks_exact_mut(4) {
             p.swap(0, 2);
@@ -724,17 +808,34 @@ impl OutputDup {
         // SAFETY: the staging texture is mapped only for the conversion and unmapped right after;
         // the slice covers rows [0, h) of the mapped region written by the copy above.
         unsafe {
+            let t0 = std::time::Instant::now();
             self.ctx
                 .CopySubresourceRegion(staging, 0, 0, 0, 0, shadow, 0, Some(&b));
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
             self.ctx
                 .Map(staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
+            let t_map = t0.elapsed();
             let (w, h) = (local.w as usize, local.h as usize);
             let pitch = mapped.RowPitch as usize;
             let len = pitch * (h - 1) + w * bpp;
             let src = std::slice::from_raw_parts(mapped.pData as *const u8, len);
-            let img = convert_to_rgba(desc.Format, src, pitch, w, h, false);
+            let img = convert_to_rgba_hdr(
+                desc.Format,
+                src,
+                pitch,
+                w,
+                h,
+                false,
+                self.color.sdr_white_nits,
+            );
             self.ctx.Unmap(staging, 0);
+            log::trace!(
+                "read_back {}x{} {:?}: copy+map {t_map:?}, convert {:?}",
+                w,
+                h,
+                desc.Format,
+                t0.elapsed() - t_map
+            );
             Ok(img)
         }
     }
@@ -743,7 +844,9 @@ impl OutputDup {
 fn capture_region(rect: PxRect) -> anyhow::Result<Rgba> {
     let mut guard = SESSION.lock().unwrap_or_else(|p| p.into_inner());
     for attempt in 0..2 {
-        let stale = guard.as_ref().is_none_or(|s| s.layout != current_layout());
+        let stale = guard
+            .as_mut()
+            .is_none_or(|s| s.layout != current_layout() || !s.recheck_colors());
         let first = stale;
         if stale {
             *guard = match Session::create() {
@@ -1269,21 +1372,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn half_floats() {
-        assert_eq!(half_to_f32(0x3C00), 1.0);
-        assert_eq!(half_to_f32(0x0000), 0.0);
-        assert_eq!(half_to_f32(0xC000), -2.0);
-        assert!((half_to_f32(0x3800) - 0.5).abs() < 1e-6);
-    }
-
-    #[test]
-    fn srgb_endpoints() {
-        assert_eq!(linear_to_srgb8(0.0), 0);
-        assert_eq!(linear_to_srgb8(1.0), 255);
-        assert_eq!(linear_to_srgb8(4.0), 255);
-        assert_eq!(linear_to_srgb8(f32::NAN), 0);
-        // linear 0.5 is about sRGB 188
-        assert!((linear_to_srgb8(0.5) as i32 - 188).abs() <= 2);
+    fn fp16_uses_white_level() {
+        // #808080 as composed on a 480-nit SDR white display: linear 0.2158 * 6.
+        let h = hdr::f32_to_half(hdr::srgb_decode(128.0 / 255.0) * 6.0);
+        let mut src = Vec::new();
+        for v in [h, h, h, hdr::f32_to_half(1.0)] {
+            src.extend_from_slice(&v.to_le_bytes());
+        }
+        let img = convert_to_rgba_hdr(DXGI_FORMAT_R16G16B16A16_FLOAT, &src, 8, 1, 1, false, 480.0)
+            .unwrap();
+        assert_eq!(img.pixel(0, 0), [128, 128, 128, 255]);
+        // the same pixel read as 80-nit scRGB is blown out to white
+        let img = convert_to_rgba(DXGI_FORMAT_R16G16B16A16_FLOAT, &src, 8, 1, 1, false).unwrap();
+        assert_eq!(img.pixel(0, 0), [255, 255, 255, 255]);
     }
 
     #[test]
