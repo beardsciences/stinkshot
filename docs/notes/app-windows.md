@@ -17,8 +17,7 @@ Files: `crates/app/src/{toast,pin,history_ui,settings_ui,record_ui}.rs` plus new
   disabled when `shared.ocr` is None. Actions push `EditItem` / `PinItem` / `CopyItemText` /
   `RevealItem` / `OpenItem` and close the toast.
 - **Pin** (`pin.rs`): borderless transparent topmost window showing the image at 1:1 physical
-  size. Drag with `ViewportCommand::StartDrag` (only after egui's drag threshold so
-  double-click still works), wheel zoom 10%..800% anchored on the cursor (window resized with
+  size. Drag with our own loop (see "Pin drag" below), wheel zoom 10%..800% anchored on the cursor (window resized with
   `set_rect` in physical px), Ctrl+wheel opacity 20%..100% (`ViewportCommand::Transparent` +
   painter tint alpha), hover accent outline and mini toolbar (opacity cycle, copy, close),
   double-click = `EditItem` when the pin came from history, Ctrl+C copies via
@@ -50,6 +49,55 @@ Files: `crates/app/src/{toast,pin,history_ui,settings_ui,record_ui}.rs` plus new
   repo URL.
 - **record_ui.rs**: `Countdown`, `RecordFrame`, `RecordHud`, `TrimWindow`, `ScrollHud` as
   specified (details below).
+
+## Cross-window links and search box (Nov 6 2026)
+
+- History and Settings each end their sidebar with a link to the other window
+  (`ui_common::sidebar_link`, same rect in both: 36 pt row 12 pt above the bottom, hairline
+  above, icon, label, shortcut right-aligned): "Open Settings" (gear, `Icon::Settings`) in
+  History, "Open History" (clock) in Settings. Tooltips "Open Settings (Ctrl+,)" and "Open
+  History (Ctrl+H)". The shortcuts work from the window: Ctrl+, in History (also while typing
+  in the search box, not while the delete dialog is up), Ctrl+H in Settings (not while a
+  hotkey field is recording). They push `OpenSettings` / `OpenHistory`; the shell focuses the
+  window if it is open (restoring it when minimized), otherwise opens it. The retention
+  summary in History now sits above the link.
+- Search box: the `TextEdit` was laid out top-aligned inside a 30 pt row offset 1 pt up, so
+  hint and typed text sat about 4-5 pt above the box centre. It now fills the box height with
+  zero margin and `align(LEFT_CENTER)` (hint and typed text share it). Measured: at 125 % and
+  100 %, dark and light, the text baseline matches the "Any Time" combo and "Open Folder"
+  button next to it to the pixel; the search icon and clear button are within 1 px of the box
+  centre. 150 % was not available on this desktop (the 4K monitor is at 125 %); the layout is
+  point-based with egui pixel snapping, so it is expected to hold within 1 px there too.
+
+## Pin drag (Nov 6 2026)
+
+User report: dragging a pin between monitors, or sometimes within one, wiggles. Causes:
+
+1. `ViewportCommand::StartDrag` only fired after egui's drag threshold, so the window jumped
+   to catch up with the cursor.
+2. `self.rect` was rewritten every frame from `outer_rect * native_pixels_per_point`, which is
+   stale or mixed-scale mid-drag. Worse, `viewport_builder` reported `self.rect`, and egui
+   turns every builder change into `OuterPosition` / `InnerSize` commands in points; winit
+   converts those with the window's current scale, so every frame fought the OS drag (and on
+   the other monitor used the wrong scale).
+3. Crossing a 100 % / 125-150 % boundary, Windows resizes the window (WM_DPICHANGED), so the
+   pin lost its 1:1 size.
+
+Now: the builder always reports the creation rect (`initial`), so egui never sends move or
+size commands. A primary press on the background (not the toolbar) records the global
+physical cursor and the window rect; while the button is held (egui plus the async button
+state) the window is placed with `window_util::set_rect` at press rect + cursor travel, at the
+intended size (image size x zoom), once the cursor moved more than 4 px on either axis. The
+size is re-asserted when Windows rescales it on a DPI change, during the drag and after it
+(`size_fix`). A press without that travel stays a click: double-click opens the editor
+(ignored for 400 ms after a drag) and right-click still opens the menu. Wheel zoom is ignored
+mid-drag. Tests: `drag_threshold_is_per_axis_and_exclusive`,
+`drag_moves_by_cursor_travel_and_keeps_size`, `size_fix_restores_intended_size_only`.
+
+Verified live with synthetic input on the dev build: a 400 x 300 pin pressed and moved 3 px
+did not move; dragged from the 100 % monitor onto the 125 % monitor and back it followed the
+cursor at a constant offset on every sample and stayed 400 x 300 physical px throughout.
+Double-click-to-edit and the context menu were checked by reading the code only.
 
 ## Design decisions
 
@@ -163,7 +211,8 @@ Pin
 - [ ] Drag, wheel zoom around the cursor, Ctrl+wheel opacity, toolbar buttons, Esc, Ctrl+C
       (paste into Paint), double-click opens the editor for a history item.
 - [ ] Transparent window has rounded corners and no dark rectangle (clear color request).
-- [ ] Pin on a secondary monitor with a different scale keeps its physical size.
+- [x] Pin on a secondary monitor with a different scale keeps its physical size (Nov 6:
+      dragged 100 % <-> 125 %, stays 400 x 300).
 
 History
 - [ ] 2,000+ items scroll smoothly; thumbnails fill in lazily and quickly after a fast scroll.

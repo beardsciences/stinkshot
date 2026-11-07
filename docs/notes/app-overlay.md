@@ -91,6 +91,36 @@ pill shows meanwhile). Pushes `Command::CaptureDone`. Remembers `capture.last_re
 - `#![allow(dead_code)]` sits at the top of `overlay/mod.rs` only because the shell does not
   construct `Overlay` yet. Delete it after wiring.
 
+## Snapping only to what is visible (Nov 6 2026)
+
+User report: with windows in the foreground, the overlay still highlighted elements of windows
+behind them. Causes found:
+
+1. The hover target came from `window_at(req.windows)`, and `visible_windows()` leaves out
+   untitled windows (context menus, popups, Electron/tool surfaces) and all of StinkShot's own
+   windows. Hovering an open menu or the History/Settings window picked the window behind it.
+2. UIA element rects were clipped to their window only, so an element of a partly covered
+   window was outlined right across the window on top of it (and children of scrolled lists
+   ran past their viewport).
+3. Nothing rejected an element that is mostly hidden.
+
+Now: `OverlayRequest::layers` carries `windows_enum::layers()` (full Z-ordered stack, taken in
+the same frame as the freeze; empty for Annotate mode, then built from `windows`).
+`hover::hover_target` picks the topmost layer at the cursor; UIA is asked only about that
+window (never our own windows: they are window-level targets). The UIA chain goes through
+`occlusion::clip_chain` with the windows above as occluders: each rect is cut to the biggest
+unoccluded rect around the cursor, levels under 30 % visible are dropped (the window level is
+always offered, clipped), and duplicates after clipping collapse. The window fallback is the
+clipped visible part too; the desktop still falls back to the whole monitor. Source info for a
+selection uses the same topmost-layer rule. Tests: `hover::tests` (target choice, stale result
+check) and `stinkshot_platform::occlusion::tests`.
+
+Verified live (125 % 4K monitor, overlay temporarily made capturable): hovering History where
+Settings covers part of it outlines only History's uncovered strip; hovering Settings outlines
+Settings (no UIA); hovering Discord snaps to its element. Popup menus were not opened
+(synthetic input), so the untitled-window case is covered by the unit tests and the stack
+dump only.
+
 ## Contract changes
 
 None. No public signature changed. Additive: `overlay` internals only; `Overlay::is_untouched`

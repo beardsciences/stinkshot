@@ -104,3 +104,12 @@ All open findings fixed (notes in the table). Verification:
 - Toast Copy tooltip: "Copy the Image to the Clipboard" / "Copy the File to the Clipboard".
 - "Could Not Find That Item" body: "It may have been moved or deleted." (History has no
   refresh control).
+
+## User requests (Nov 6 2026)
+
+| Request | Fix |
+|---|---|
+| Go from History to Settings and back with good UX | Sidebar link at the bottom of both windows (same place), with icon, shortcut hint and tooltip; Ctrl+, in History, Ctrl+H in Settings; focuses the window if open. See app-windows.md. |
+| "Search Captures" not centred in the input | The field fills the box and centres hint and typed text; baseline now matches the neighbouring combo and button. Measured at 100 % and 125 %, dark and light. |
+| Overlay highlights background elements under foreground windows | Hover hit-tests the full Z-ordered window stack (untitled popups and our own windows included) and clips element rects to the unoccluded part of the topmost window. See app-overlay.md. |
+| Pinned image wiggles while dragging, especially across monitors | Own drag loop in physical px, builder no longer re-sends position/size, 1:1 size re-asserted after DPI changes. See app-windows.md. |

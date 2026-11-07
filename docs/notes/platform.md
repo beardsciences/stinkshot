@@ -77,12 +77,29 @@ about 5 s here because of the WGC hang described below).
   styles and otherwise wins `window_at` for every point on the primary monitor.
 - Taskbars (`Shell_TrayWnd`, `Shell_SecondaryTrayWnd`) are included with `title == "taskbar"`
   and `process == "taskbar"`.
+- `visible_windows()` is the list of capture *targets*. For hit testing it is not enough: it
+  drops untitled windows (popup menus `#32768`, Electron/tool surfaces, flyouts) and every
+  window of this process, so anything behind such a window "showed through" in the overlay.
+  `windows_enum::layers()` is the full Z-ordered occlusion stack: every visible, non-cloaked,
+  non-minimized top-level window including untitled ones and our own capturable windows
+  (History, Settings; `Layer::own`, titles never read). Skipped: Progman/WorkerW,
+  click-through and GPU-overlay styles (same rule as above, `is_overlay_style`), layered
+  windows set to alpha 0 (`LWA_ALPHA`), and own windows with a display affinity (overlay,
+  toasts, HUDs are not in a frozen image). `cargo test -p stinkshot-platform dump_layers --
+  --ignored --nocapture` prints the live stack for diagnosis.
+- `occlusion` (pure, unit tested): `top_layer_at`, `occluders_above`, `visible_rect_around`
+  (biggest rect around the point that no window above overlaps; greedy, largest overlap
+  first), `uncovered_area`, and `clip_chain` (clips a UIA chain to the visible part, drops
+  levels with less than 30 % visible except the window level, dedups after clipping).
 
 ### UI Automation
 - Electron/Chromium apps (Claude, Discord, VS Code) expose no UIA children until an assistive
   technology flag is set, so snapping falls back to the window rect for them. Native and
   Firefox windows produce inner rects (verified: 3 nested rects for Firefox). Nothing to fix in
   this crate; the overlay can still snap to the window.
+- Element rects are clipped to their (clipped) parent, not only to the window
+  (`clip_to_ancestors`): items of a scrolled list or a clipped panel report rects that run past
+  their viewport, where something else is drawn.
 
 ### OCR
 - One `OcrEngine` instance rejects overlapping `RecognizeAsync` calls ("Another RecognizeAsync
@@ -125,6 +142,11 @@ about 5 s here because of the WGC hang described below).
 - Private `util` module (COM init, wide strings, registry helpers).
 - `uia::SnapResult.labels: Vec<ElementLabel>` (same order as `rects`; UIA control type and
   name, cached with the rect), `uia::ElementLabel`, `uia::control_type_name(id)`.
+- `occlusion` module (`Layer`, hit-test and clipping helpers) and `windows_enum::layers()`
+  (see "Window list").
+- `window_util::get_rect(hwnd)` (GetWindowRect, physical px), `input::try_cursor_pos()`
+  (None instead of 0,0 on failure) and `input::primary_button_down()` (async state, honours
+  swapped buttons). Used by the pin's drag loop.
 
 ## Contract requests
 

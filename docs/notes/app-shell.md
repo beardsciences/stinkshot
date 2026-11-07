@@ -72,6 +72,8 @@ Files: `crates/app/src/{main,shell,cli,tray,hotkeys,update,theme,state}.rs`, new
 - `Command::TrayClick`, `Command::TrayDoubleClick` (tray icon clicks, see tray above).
 - `FinishAction::Quick` (finished without the editor).
 - `OverlayRequest::notice` (hint-bar notice) and `OverlayRequest::from_tray_click`.
+- `OverlayRequest::layers`: full Z-ordered occlusion stack (`windows_enum::layers()`), filled
+  by `open_overlay` for Capture and SelectRegion modes (empty for Annotate).
 
 ## Contract requests
 
