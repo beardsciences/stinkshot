@@ -55,6 +55,13 @@ const WGC_COOLDOWN: Duration = Duration::from_secs(300);
 /// Consecutive duplicated frames in an unsupported pixel format before giving up.
 const MAX_BAD_FORMAT_FRAMES: u32 = 30;
 
+/// How often a recording re-reads each display's HDR state and SDR white level, so turning
+/// HDR on or off or moving the SDR brightness slider mid-recording keeps the colors right.
+const COLOR_RECHECK: Duration = Duration::from_secs(1);
+/// Soonest re-read after a sign that the color state changed (lost duplication, frames in an
+/// unexpected format).
+const COLOR_RECHECK_URGENT: Duration = Duration::from_millis(100);
+
 #[derive(Clone, Copy, Debug)]
 pub struct MonitorRect {
     pub handle: isize,
@@ -125,6 +132,8 @@ struct MonCap {
     /// Set for HDR monitors: frames arrive as FP16 scRGB, are copied here and converted to
     /// SDR BGRA into the shared stage on the CPU.
     hdr: Option<HdrStage>,
+    /// The display's color state as last read (device name, HDR on, SDR white level).
+    color: hdr::DisplayColor,
 }
 
 /// FP16 staging copy of one HDR monitor's part of the region.
@@ -217,6 +226,10 @@ pub struct Capturer {
     /// The backend cannot draw the pointer itself and the user wants it: the video loop
     /// composites it with `composite_cursor`.
     cursor_overlay: bool,
+    /// When the displays' color state was last read.
+    color_checked: Instant,
+    /// Something suggests the color state changed: re-read it soon.
+    color_due: bool,
 }
 
 // Used from the single video thread only; moved there once after construction.
@@ -449,6 +462,7 @@ impl Capturer {
                     src: *src,
                     dst: *dst,
                     hdr: hdr_stage,
+                    color,
                 });
             }
             let stage = create_stage(&device, &ctx, region.w as u32, region.h as u32)?;
@@ -466,6 +480,8 @@ impl Capturer {
                 backend_name: "Windows Graphics Capture",
                 region,
                 cursor_overlay: false,
+                color_checked: Instant::now(),
+                color_due: false,
             })
         }
     }
@@ -541,6 +557,7 @@ impl Capturer {
                     src: *src,
                     dst: *dst,
                     hdr: hdr_stage,
+                    color,
                 });
             }
             let stage = create_stage(&device, &ctx, region.w as u32, region.h as u32)?;
@@ -554,6 +571,8 @@ impl Capturer {
                 region,
                 // Desktop Duplication frames never contain the pointer.
                 cursor_overlay: include_cursor,
+                color_checked: Instant::now(),
+                color_due: false,
             })
         }
     }
@@ -615,6 +634,7 @@ impl Capturer {
 
     /// Drain every source; the newest picture of each monitor ends up in the staging texture.
     pub fn poll(&mut self) -> Result<PollStats> {
+        self.recheck_colors()?;
         let mut stats = PollStats::default();
         for m in &mut self.mons {
             // HDR monitors copy into their FP16 staging texture at its origin instead.
@@ -658,6 +678,16 @@ impl Capturer {
                     &mut stats,
                 )?,
             };
+            // A lost duplication (HDR toggles and mode changes cause one) or frames in the
+            // other format mean the color state may have changed: re-read it before the
+            // duplication is re-created.
+            if let Backend::Dup {
+                dup, bad_format, ..
+            } = &m.backend
+                && (dup.is_none() || *bad_format > 0)
+            {
+                self.color_due = true;
+            }
             if got {
                 m.got_frame = true;
                 if let Some(h) = &mut m.hdr {
@@ -667,6 +697,70 @@ impl Capturer {
             }
         }
         Ok(stats)
+    }
+
+    /// Re-read each display's HDR state and SDR white level (once a second, sooner when
+    /// `color_due`) and follow changes: add or drop the FP16 stage, switch the WGC pool or
+    /// duplication format, or swap the converter for a new white level.
+    fn recheck_colors(&mut self) -> Result<()> {
+        let wait = if self.color_due {
+            COLOR_RECHECK_URGENT
+        } else {
+            COLOR_RECHECK
+        };
+        if self.color_checked.elapsed() < wait {
+            return Ok(());
+        }
+        self.color_checked = Instant::now();
+        self.color_due = false;
+        let colors = hdr::displays();
+        for m in &mut self.mons {
+            // A display missing from the query (it failed, or the display is mid-change)
+            // keeps its last known state rather than being taken for SDR.
+            let Some(c) = colors.iter().find(|c| {
+                !m.color.device.is_empty() && c.device.eq_ignore_ascii_case(&m.color.device)
+            }) else {
+                continue;
+            };
+            if c.advanced_color != m.color.advanced_color {
+                log::info!(
+                    "{} turned HDR {} during the recording",
+                    c.device,
+                    if c.advanced_color { "on" } else { "off" }
+                );
+                m.hdr = if c.advanced_color {
+                    Some(HdrStage::new(&self.device, m.src, c)?)
+                } else {
+                    None
+                };
+                match &mut m.backend {
+                    Backend::Wgc { pool, size, .. } => {
+                        if let Some(d) = &self.winrt_device {
+                            pool.Recreate(d, wgc_format(c.advanced_color), 3, *size)
+                                .context("Recreate(capture frame pool) after an HDR change")?;
+                        }
+                    }
+                    Backend::Dup {
+                        dup, bad_format, ..
+                    } => {
+                        // Re-created in the new format by the next poll.
+                        *dup = None;
+                        *bad_format = 0;
+                    }
+                }
+            } else if c.sdr_white_nits != m.color.sdr_white_nits
+                && let Some(h) = &mut m.hdr
+            {
+                log::info!(
+                    "{} SDR white changed to {} nits during the recording",
+                    c.device,
+                    c.sdr_white_nits
+                );
+                h.conv = hdr::ScrgbToSrgb::shared(c.sdr_white_nits);
+            }
+            m.color = c.clone();
+        }
+        Ok(())
     }
 
     /// Map the staging picture for reading (BGRA, top-down).
@@ -749,6 +843,13 @@ fn poll_wgc(
         let surface = frame.Surface().context("frame surface")?;
         let access: IDirect3DDxgiInterfaceAccess = surface.cast()?;
         let tex: ID3D11Texture2D = access.GetInterface().context("frame texture")?;
+        let mut desc = D3D11_TEXTURE2D_DESC::default();
+        tex.GetDesc(&mut desc);
+        if desc.Format != target.format {
+            // Queued before the pool switched format for an HDR change.
+            let _ = frame.Close();
+            return Ok(false);
+        }
         copy_region(
             ctx,
             target.tex,
