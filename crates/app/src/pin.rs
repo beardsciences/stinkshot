@@ -1,5 +1,6 @@
 //! Pinned capture (docs/design/Pin.dc.html): borderless topmost window showing an image
-//! 1:1 at its physical size. Drag moves; wheel zooms (10%..800%); Ctrl+wheel opacity
+//! 1:1 at its physical size. Drag moves (our own drag loop in physical px, see `PinDrag`);
+//! wheel zooms (10%..800%); Ctrl+wheel opacity
 //! (20%..100%); double-click opens in the editor (if from history); Ctrl+C copies; Esc or
 //! the close button closes; hover shows the mini toolbar (opacity, copy, close) and the
 //! accent outline.
@@ -15,7 +16,7 @@ use egui::{
     Align2, Color32, CornerRadius, Event, Key, PointerButton, Rect, Sense, Stroke, StrokeKind,
     pos2, vec2,
 };
-use stinkshot_core::{PxRect, Rgba};
+use stinkshot_core::{PxPoint, PxRect, Rgba};
 use stinkshot_history::ItemId;
 use stinkshot_platform::Hwnd;
 
@@ -91,6 +92,47 @@ pub fn zoom_anchor(
     )
 }
 
+/// Cursor travel (physical px, either axis) before a press on the pin becomes a drag. Below
+/// it the press stays a click, so double-click and the context menu keep working.
+pub const DRAG_THRESHOLD_PX: i32 = 4;
+/// A double click whose second press ends a drag this recently is not an edit request.
+const DRAG_CLICK_GUARD: Duration = Duration::from_millis(400);
+
+/// True once the cursor moved more than `threshold` px on either axis since the press.
+pub fn past_drag_threshold(press: PxPoint, now: PxPoint, threshold: i32) -> bool {
+    (now.x - press.x).abs() > threshold || (now.y - press.y).abs() > threshold
+}
+
+/// Window rect while dragging: the press-time origin moved by the cursor travel, at the
+/// pin's intended physical size (never the size Windows may have applied on a DPI change).
+pub fn dragged_rect(start: PxRect, press: PxPoint, now: PxPoint, size: (i32, i32)) -> PxRect {
+    PxRect::new(
+        start.x + (now.x - press.x),
+        start.y + (now.y - press.y),
+        size.0,
+        size.1,
+    )
+}
+
+/// The rect to re-assert when the real window drifted from the intended one: keep where
+/// the window is, restore its size. None when it already matches.
+pub fn size_fix(actual: PxRect, size: (i32, i32)) -> Option<PxRect> {
+    ((actual.w, actual.h) != size).then(|| PxRect::new(actual.x, actual.y, size.0, size.1))
+}
+
+/// Our own drag loop. `ViewportCommand::StartDrag` hands the move to the OS, which only
+/// started after egui's drag threshold (the window jumped), and across a DPI boundary
+/// Windows rescales the window mid-drag, breaking the 1:1 pixel size.
+#[derive(Clone, Copy, Debug)]
+struct PinDrag {
+    /// Global physical cursor position at the press.
+    press: PxPoint,
+    /// Window rect at the press.
+    start: PxRect,
+    /// Past the threshold: the window follows the cursor.
+    moving: bool,
+}
+
 const TOOL_BTN: f32 = 28.0;
 const TOOL_PAD: f32 = 3.0;
 const TOOL_GAP: f32 = 4.0;
@@ -103,7 +145,14 @@ pub struct Pin {
     zoom: f32,
     opacity: f32,
     area: uc::MonArea,
+    /// Where the window is created. The viewport builder always reports this rect: egui
+    /// turns any builder change into OuterPosition/InnerSize commands in points, which
+    /// winit converts with the window's current scale and which fight our physical moves.
+    initial: PxRect,
+    /// Intended physical rect (position and image size x zoom). Authoritative for the size.
     rect: PxRect,
+    drag: Option<PinDrag>,
+    last_drag_end: Option<Instant>,
     hwnd: Option<Hwnd>,
     texture: Option<egui::TextureHandle>,
     chip: Option<(String, Instant)>,
@@ -143,7 +192,10 @@ impl Pin {
             zoom,
             opacity: 1.0,
             area,
+            initial: rect,
             rect,
+            drag: None,
+            last_drag_end: None,
             hwnd: None,
             texture: None,
             chip: None,
@@ -207,6 +259,57 @@ impl Pin {
         }
     }
 
+    /// Drive the drag loop: start on a primary press on the background, follow the global
+    /// cursor in physical px while the button is held, end on release.
+    fn update_drag(&mut self, ctx: &egui::Context, press_bg: bool, dims: (u32, u32)) {
+        use stinkshot_platform::{input, window_util};
+        let Some(h) = self.hwnd else {
+            self.drag = None;
+            return;
+        };
+        if press_bg
+            && self.drag.is_none()
+            && let Some(press) = input::try_cursor_pos()
+        {
+            let size = window_size_px(dims, self.zoom);
+            let at = window_util::get_rect(h).unwrap_or(self.rect);
+            self.drag = Some(PinDrag {
+                press,
+                start: PxRect::new(at.x, at.y, size.0, size.1),
+                moving: false,
+            });
+        }
+        let Some(mut d) = self.drag else { return };
+        // egui sees the release through winit's mouse capture; the async state also catches
+        // a release that never reached the window.
+        let held = ctx.input(|i| i.pointer.primary_down()) && input::primary_button_down();
+        if !held {
+            if d.moving {
+                self.last_drag_end = Some(Instant::now());
+            }
+            self.drag = None;
+            return;
+        }
+        if let Some(now) = input::try_cursor_pos() {
+            if !d.moving && past_drag_threshold(d.press, now, DRAG_THRESHOLD_PX) {
+                d.moving = true;
+            }
+            if d.moving {
+                let r = dragged_rect(d.start, d.press, now, window_size_px(dims, self.zoom));
+                // Also re-assert when Windows rescaled the window on a DPI change.
+                let drifted = window_util::get_rect(h).is_some_and(|a| a != r);
+                if r != self.rect || drifted {
+                    self.rect = r;
+                    window_util::set_rect(h, r);
+                }
+            }
+        }
+        self.drag = Some(d);
+        // Keep polling the cursor while the button is held: there may be no mouse event
+        // between frames, and the pin must follow anyway.
+        ctx.request_repaint_after(Duration::from_millis(8));
+    }
+
     fn set_chip(&mut self, text: String) {
         self.chip = Some((text, Instant::now()));
     }
@@ -219,10 +322,11 @@ impl Surface for Pin {
 
     fn viewport_builder(&self, _shared: &Shared) -> egui::ViewportBuilder {
         let s = self.area.scale;
+        let r = self.initial;
         egui::ViewportBuilder::default()
             .with_title(self.title())
-            .with_inner_size(vec2(uc::pts(self.rect.w, s), uc::pts(self.rect.h, s)))
-            .with_position(pos2(uc::pts(self.rect.x, s), uc::pts(self.rect.y, s)))
+            .with_inner_size(vec2(uc::pts(r.w, s), uc::pts(r.h, s)))
+            .with_position(pos2(uc::pts(r.x, s), uc::pts(r.y, s)))
             .with_decorations(false)
             .with_transparent(true)
             .with_resizable(false)
@@ -270,24 +374,28 @@ impl Surface for Pin {
             }
         }
 
-        // Track the real window rect (the user drags it with the OS).
         let ppp = ctx
             .input(|i| i.viewport().native_pixels_per_point)
             .unwrap_or_else(|| ctx.pixels_per_point());
-        if let Some(outer) = ctx.input(|i| i.viewport().outer_rect) {
-            self.rect = PxRect::new(
-                (outer.min.x * ppp).round() as i32,
-                (outer.min.y * ppp).round() as i32,
-                (outer.width() * ppp).round() as i32,
-                (outer.height() * ppp).round() as i32,
-            );
-        }
         let dims = (self.image.width, self.image.height);
+        // Outside a drag, follow where the window really is (Windows may move it on a DPI or
+        // display change) but keep the intended 1:1 size: a move onto a monitor with another
+        // scale makes Windows (WM_DPICHANGED) rescale the window, so put the size back.
+        if self.drag.is_none()
+            && let Some(h) = self.hwnd
+            && let Some(actual) = stinkshot_platform::window_util::get_rect(h)
+        {
+            let size = window_size_px(dims, self.zoom);
+            self.rect = PxRect::new(actual.x, actual.y, size.0, size.1);
+            if let Some(fix) = size_fix(actual, size) {
+                stinkshot_platform::window_util::set_rect(h, fix);
+            }
+        }
 
         // Wheel: zoom, Ctrl+wheel: opacity.
         let hovering = ctx.input(|i| i.pointer.hover_pos());
         let (notches, ctrl) = uc::frame_wheel(ctx);
-        if notches != 0.0 && hovering.is_some() {
+        if notches != 0.0 && hovering.is_some() && self.drag.is_none() {
             if ctrl {
                 let o = opacity_step(self.opacity, notches);
                 if (o - self.opacity).abs() > f32::EPSILON {
@@ -326,7 +434,12 @@ impl Surface for Pin {
         let accent = uc::accent(shared);
         let opacity = self.opacity;
         let mut cycle = false;
+        let mut press_bg = false;
         let item = self.item;
+        let recent_drag = self.drag.is_some_and(|d| d.moving)
+            || self
+                .last_drag_end
+                .is_some_and(|t| t.elapsed() < DRAG_CLICK_GUARD);
         let zoom_pct = (self.zoom * 100.0).round() as i32;
         let chip = self
             .chip
@@ -358,10 +471,12 @@ impl Surface for Pin {
             }
 
             let bg = ui.interact(rect, ui.scope_id().with("pin_bg"), Sense::click_and_drag());
-            if bg.drag_started_by(PointerButton::Primary) {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            // Toolbar buttons were registered on top of the background last frame, so a press
+            // on one of them does not count as hovering the background.
+            if bg.hovered() && ui.input(|i| i.pointer.button_pressed(PointerButton::Primary)) {
+                press_bg = true;
             }
-            if bg.double_clicked() && item.is_some() {
+            if bg.double_clicked() && item.is_some() && !recent_drag {
                 edit = true;
             }
             bg.context_menu(|ui| {
@@ -485,6 +600,7 @@ impl Surface for Pin {
             }
         });
         let _ = zoom_pct;
+        self.update_drag(ctx, press_bg, dims);
 
         if cycle {
             self.opacity = cycle_opacity(self.opacity);
@@ -563,6 +679,58 @@ mod tests {
         assert_eq!(window_size_px((800, 600), 1.0), (800, 600));
         assert_eq!(window_size_px((800, 600), 0.5), (400, 300));
         assert_eq!(window_size_px((1, 1), 0.1), (1, 1));
+    }
+
+    #[test]
+    fn drag_threshold_is_per_axis_and_exclusive() {
+        let p = PxPoint { x: 100, y: 100 };
+        assert!(!past_drag_threshold(p, p, DRAG_THRESHOLD_PX));
+        assert!(!past_drag_threshold(
+            p,
+            PxPoint { x: 104, y: 96 },
+            DRAG_THRESHOLD_PX
+        ));
+        assert!(past_drag_threshold(
+            p,
+            PxPoint { x: 105, y: 100 },
+            DRAG_THRESHOLD_PX
+        ));
+        assert!(past_drag_threshold(
+            p,
+            PxPoint { x: 100, y: 95 },
+            DRAG_THRESHOLD_PX
+        ));
+    }
+
+    #[test]
+    fn drag_moves_by_cursor_travel_and_keeps_size() {
+        let start = PxRect::new(3500, 200, 600, 400);
+        let press = PxPoint { x: 3600, y: 300 };
+        // Across the 3840 boundary onto the 100% monitor: same offset, same physical size,
+        // whatever size Windows applied on the DPI change.
+        let now = PxPoint { x: 4100, y: 350 };
+        assert_eq!(
+            dragged_rect(start, press, now, (600, 400)),
+            PxRect::new(4000, 250, 600, 400)
+        );
+        // Moving back to the press point returns exactly to the start (no drift).
+        assert_eq!(dragged_rect(start, press, press, (600, 400)), start);
+        // Negative virtual coordinates (monitor left of the primary).
+        assert_eq!(
+            dragged_rect(start, press, PxPoint { x: -100, y: 0 }, (600, 400)),
+            PxRect::new(-200, -100, 600, 400)
+        );
+    }
+
+    #[test]
+    fn size_fix_restores_intended_size_only() {
+        // Windows rescaled a 600x400 pin by 1.5 when it moved onto the 150% monitor.
+        let actual = PxRect::new(100, 50, 900, 600);
+        assert_eq!(
+            size_fix(actual, (600, 400)),
+            Some(PxRect::new(100, 50, 600, 400))
+        );
+        assert_eq!(size_fix(PxRect::new(100, 50, 600, 400), (600, 400)), None);
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //! viewports don't expose HWNDs).
 
 use stinkshot_core::PxRect;
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DWM_SYSTEMBACKDROP_TYPE, DWMSBT_MAINWINDOW, DWMWA_SYSTEMBACKDROP_TYPE,
     DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
@@ -15,11 +15,12 @@ use windows::Win32::UI::Controls::MARGINS;
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     ASFW_ANY, AllowSetForegroundWindow, BringWindowToTop, EnumWindows, GWL_EXSTYLE,
-    GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId, HWND_NOTOPMOST, HWND_TOPMOST,
-    IsIconic, IsWindowVisible, SMTO_ABORTIFHUNG, SMTO_BLOCK, SW_HIDE, SW_RESTORE, SW_SHOWNA,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageTimeoutW,
-    SetForegroundWindow, SetWindowDisplayAffinity, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WM_GETTEXT, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
+    HWND_NOTOPMOST, HWND_TOPMOST, IsIconic, IsWindowVisible, SMTO_ABORTIFHUNG, SMTO_BLOCK, SW_HIDE,
+    SW_RESTORE, SW_SHOWNA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SendMessageTimeoutW, SetForegroundWindow, SetWindowDisplayAffinity, SetWindowLongPtrW,
+    SetWindowPos, ShowWindow, WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WM_GETTEXT, WS_EX_APPWINDOW,
+    WS_EX_TOOLWINDOW,
 };
 use windows::core::BOOL;
 
@@ -102,6 +103,14 @@ pub fn set_rect(hwnd: Hwnd, rect: PxRect) {
             log::debug!("set_rect size: {e}");
         }
     }
+}
+
+/// The window's current outer rect in physical px (GetWindowRect).
+pub fn get_rect(hwnd: Hwnd) -> Option<PxRect> {
+    let mut r = RECT::default();
+    // SAFETY: out pointer is a live local.
+    unsafe { GetWindowRect(h(hwnd), &mut r) }.ok()?;
+    Some(crate::monitors::rect_from_win(&r))
 }
 
 pub fn set_topmost(hwnd: Hwnd, topmost: bool) {

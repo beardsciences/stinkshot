@@ -7,14 +7,16 @@ use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_WHEEL, MOUSEINPUT, SendInput,
+    GetAsyncKeyState, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_WHEEL, MOUSEINPUT, SendInput,
+    VK_LBUTTON, VK_RBUTTON,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetCursorPos, GetMessageW, HHOOK, KBDLLHOOKSTRUCT, MSG,
-    MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostThreadMessageW, SetCursorPos, SetWindowsHookExW,
-    TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_QUIT, WM_RBUTTONDOWN,
-    WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER,
+    CallNextHookEx, DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, HHOOK,
+    KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostThreadMessageW,
+    SM_SWAPBUTTON, SetCursorPos, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx,
+    WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN,
+    WM_SYSKEYUP, WM_USER,
 };
 
 pub fn cursor_pos() -> PxPoint {
@@ -24,6 +26,29 @@ pub fn cursor_pos() -> PxPoint {
         return PxPoint::default();
     }
     PxPoint { x: p.x, y: p.y }
+}
+
+/// Cursor position, or None when Windows refuses (secure desktop, lock screen).
+pub fn try_cursor_pos() -> Option<PxPoint> {
+    let mut p = POINT::default();
+    // SAFETY: out pointer is a live local.
+    unsafe { GetCursorPos(&mut p) }.ok()?;
+    Some(PxPoint { x: p.x, y: p.y })
+}
+
+/// Whether the primary mouse button is physically held right now (honours swapped
+/// buttons). Independent of which window has the mouse, so a drag loop can notice a
+/// release that never reached its window.
+pub fn primary_button_down() -> bool {
+    // SAFETY: trivial queries.
+    unsafe {
+        let vk = if GetSystemMetrics(SM_SWAPBUTTON) != 0 {
+            VK_RBUTTON
+        } else {
+            VK_LBUTTON
+        };
+        (GetAsyncKeyState(vk.0 as i32) as u16 & 0x8000) != 0
+    }
 }
 
 /// Scroll the window under `at` by `notches` (negative = down, like WHEEL_DELTA units of
