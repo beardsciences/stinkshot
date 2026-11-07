@@ -50,6 +50,16 @@ const DISMISS: f32 = 28.0;
 const SLOT_H: f32 = PAD + THUMB_H + 12.0 + BTN_H + PAD;
 const SCREEN_MARGIN: f32 = 16.0;
 const STACK_GAP: f32 = 10.0;
+/// Entrance: the toast rises this far (logical px, = the stack gap so it never overlaps the
+/// toast below) into its slot while its content fades in.
+const SLIDE_PX: f32 = 10.0;
+const SLIDE_SECS: f32 = 0.18;
+
+/// Ease-out cubic progress 0..=1 of the entrance animation after `secs`.
+fn slide_progress(secs: f32) -> f32 {
+    let t = (secs / SLIDE_SECS).clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
+}
 
 /// Buttons a toast can show.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,6 +164,8 @@ pub struct Toast {
     remaining: Option<Duration>,
     last_tick: Instant,
     texture: Option<egui::TextureHandle>,
+    /// When the window was created; drives the slide-in. `None` once it has settled.
+    entering: Option<Instant>,
 }
 
 impl Toast {
@@ -170,6 +182,7 @@ impl Toast {
             remaining: None,
             last_tick: Instant::now(),
             texture: None,
+            entering: None,
         };
         t.rect = t.compute_rect();
         t
@@ -186,6 +199,12 @@ impl Toast {
             uc::px(SCREEN_MARGIN, s),
             uc::px(STACK_GAP, s),
         )
+    }
+
+    /// The toast's rect `t` of the way through its entrance (starts `SLIDE_PX` lower).
+    fn entrance_rect(&self, t: f32) -> PxRect {
+        let dy = uc::px(SLIDE_PX * (1.0 - t), self.area.scale);
+        PxRect::new(self.rect.x, self.rect.y + dy, self.rect.w, self.rect.h)
     }
 
     fn thumb_texture(&mut self, ctx: &egui::Context) -> Option<egui::TextureId> {
@@ -245,8 +264,9 @@ impl Surface for Toast {
         self.hwnd = Some(hwnd);
         // Rounded corners via DWM; the client area is opaque flyout color.
         stinkshot_platform::window_util::apply_mica(hwnd, shared.dark);
-        uc::apply_hud_style(hwnd, self.rect, true, true);
+        uc::apply_hud_style(hwnd, self.entrance_rect(0.0), true, true);
         self.last_tick = Instant::now();
+        self.entering = Some(Instant::now());
     }
 
     fn show(&mut self, ctx: &egui::Context, shared: &mut Shared) -> SurfaceStatus {
@@ -258,6 +278,21 @@ impl Surface for Toast {
         self.last_tick = now;
         let expired = remaining.is_zero();
         ctx.request_repaint_after(Duration::from_millis(100));
+
+        // Slide up into the slot and fade the content in; never longer than ~180 ms.
+        let mut fade = 1.0;
+        if let Some(t0) = self.entering {
+            let t = slide_progress(t0.elapsed().as_secs_f32());
+            if let Some(hwnd) = self.hwnd {
+                stinkshot_platform::window_util::set_rect(hwnd, self.entrance_rect(t));
+            }
+            if t >= 1.0 {
+                self.entering = None;
+            } else {
+                ctx.request_repaint();
+            }
+            fade = 0.35 + 0.65 * t;
+        }
 
         let p = uc::pal(shared);
         let accent = uc::accent(shared);
@@ -281,6 +316,7 @@ impl Surface for Toast {
         let mut command: Option<Command> = None;
 
         uc::root_ui(ctx, p.flyout, |ui, rect| {
+            ui.set_opacity(fade);
             ui.painter().rect_stroke(
                 rect,
                 CornerRadius::ZERO,
@@ -334,8 +370,11 @@ impl Surface for Toast {
             );
             let dr = ui.interact(dismiss_rect, ui.scope_id().with("dismiss"), Sense::click());
             if dr.hovered() {
-                ui.painter()
-                    .rect_filled(dismiss_rect, CornerRadius::same(6), p.control);
+                ui.painter().rect_filled(
+                    dismiss_rect,
+                    CornerRadius::same(6),
+                    theme::subtle_fill(shared.dark, 1),
+                );
             }
             theme::widgets::paint_icon(
                 ui.painter(),
@@ -365,12 +404,12 @@ impl Surface for Toast {
                 uc::font(12.0),
                 p.text_secondary,
             );
-            let title_g = painter.layout(title, uc::font(14.0), p.text, text_w);
+            let title_g = painter.layout(title, theme::semibold(14.0), p.text, text_w);
             // Single-line title with ellipsis.
             let title_g = if title_g.rows.len() > 1 {
                 let mut job = egui::text::LayoutJob::single_section(
                     title_g.text().to_string(),
-                    egui::TextFormat::simple(uc::font(14.0), p.text),
+                    egui::TextFormat::simple(theme::semibold(14.0), p.text),
                 );
                 job.wrap = egui::text::TextWrapping {
                     max_width: text_w,
@@ -537,6 +576,15 @@ mod tests {
         assert_eq!(lifetime(&err, 3), Duration::from_secs(8));
         assert_eq!(lifetime(&ok, 3), Duration::from_secs(3));
         assert_eq!(lifetime(&ok, 0), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn entrance_eases_out_and_settles() {
+        assert_eq!(slide_progress(0.0), 0.0);
+        assert_eq!(slide_progress(SLIDE_SECS), 1.0);
+        assert_eq!(slide_progress(10.0), 1.0);
+        // Ease-out: more than half way at the half-time mark.
+        assert!(slide_progress(SLIDE_SECS / 2.0) > 0.8);
     }
 
     #[test]

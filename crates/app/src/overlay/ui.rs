@@ -106,6 +106,7 @@ pub fn tool_bar(
 ) -> BarLayout {
     let mut color_btn = Rect::NOTHING;
     let mut width_btn = Rect::NOTHING;
+    let (dark, _) = theme::current(ctx);
     let resp = Area::new(Id::unique("stinkshot-ov-tools"))
         .order(Order::Foreground)
         .fixed_pos(pos)
@@ -136,33 +137,41 @@ pub fn tool_bar(
                     let (r, resp) = ui.allocate_exact_size(Vec2::splat(34.0), Sense::click());
                     let resp = resp.on_hover_text("Color (1-8)");
                     color_btn = r;
-                    let hovered = resp.hovered();
-                    if hovered {
-                        ui.painter()
-                            .rect_filled(r, 6.0, pal.text.gamma_multiply(0.08));
-                    }
+                    ui.painter().rect_filled(
+                        r,
+                        6.0,
+                        theme::subtle_fill(dark, u8::from(resp.hovered())),
+                    );
                     let c = r.center();
+                    // Design: 18 px swatch, 2 px gap, 1.5 px ring in the ink colour.
                     ui.painter().circle_filled(
                         c,
                         9.0,
                         color32([info.color[0], info.color[1], info.color[2], 255]),
                     );
                     ui.painter()
-                        .circle_stroke(c, 10.8, egui::Stroke::new(1.5, pal.text));
+                        .circle_stroke(c, 9.0, egui::Stroke::new(1.0, pal.stroke));
+                    ui.painter()
+                        .circle_stroke(c, 11.75, egui::Stroke::new(1.5, pal.text));
                     if resp.clicked() {
                         out.push(UiAction::TogglePopup(Popup::Color));
                     }
 
-                    // Stroke width.
-                    let label = RichText::new(format!("{} px", info.width.round() as i32))
-                        .size(12.0)
-                        .color(pal.text);
-                    let wb = ui.add(
-                        egui::Button::new(label)
-                            .fill(Color32::TRANSPARENT)
-                            .stroke(egui::Stroke::NONE)
-                            .corner_radius(6)
-                            .min_size(Vec2::new(46.0, 34.0)),
+                    // Stroke width: painted like the icon buttons so hover/press match.
+                    let (wr, wb) = ui.allocate_exact_size(Vec2::new(46.0, 34.0), Sense::click());
+                    let level = if wb.is_pointer_button_down_on() {
+                        2
+                    } else {
+                        u8::from(wb.hovered())
+                    };
+                    ui.painter()
+                        .rect_filled(wr, 6.0, theme::subtle_fill(dark, level));
+                    ui.painter().text(
+                        wr.center(),
+                        Align2::CENTER_CENTER,
+                        format!("{} px", info.width.round() as i32),
+                        egui::FontId::proportional(12.0),
+                        pal.text,
                     );
                     let wb = wb.on_hover_text("Stroke Width ([ and ])");
                     width_btn = wb.rect;
@@ -275,8 +284,9 @@ pub fn color_popup(
                     let (r, resp) = ui.allocate_exact_size(Vec2::splat(34.0), Sense::click());
                     let resp = resp.on_hover_text(format!("Color {}", i + 1));
                     if resp.hovered() {
+                        let (dark, _) = theme::current(ui.ctx());
                         ui.painter()
-                            .rect_filled(r, 6.0, pal.text.gamma_multiply(0.08));
+                            .rect_filled(r, 6.0, theme::subtle_fill(dark, 1));
                     }
                     ui.painter()
                         .circle_filled(r.center(), 9.0, color32([c[0], c[1], c[2], 255]));
@@ -290,7 +300,7 @@ pub fn color_popup(
                         ui.painter().circle_stroke(
                             r.center(),
                             9.0,
-                            egui::Stroke::new(1.0, Color32::from_white_alpha(40)),
+                            egui::Stroke::new(1.0, pal.stroke),
                         );
                     }
                     if resp.clicked() {
@@ -326,17 +336,22 @@ pub fn width_popup(
                     let (r, resp) = ui.allocate_exact_size(Vec2::splat(34.0), Sense::click());
                     let resp = resp.on_hover_text(format!("{} px", w as i32));
                     let sel = (w - current).abs() < 0.5;
+                    let (dark, _) = theme::current(ui.ctx());
                     if sel {
                         ui.painter()
-                            .rect_filled(r, 6.0, accent.gamma_multiply(0.18));
+                            .rect_filled(r, 6.0, theme::accent_soft(accent, 56));
                     } else if resp.hovered() {
                         ui.painter()
-                            .rect_filled(r, 6.0, pal.text.gamma_multiply(0.08));
+                            .rect_filled(r, 6.0, theme::subtle_fill(dark, 1));
                     }
                     ui.painter().circle_filled(
                         r.center(),
                         (w / 2.0).clamp(1.0, 9.0),
-                        if sel { accent } else { pal.text },
+                        if sel {
+                            theme::accent_fg(accent, dark)
+                        } else {
+                            pal.text
+                        },
                     );
                     if resp.clicked() {
                         out.push(UiAction::Width(w));
@@ -380,6 +395,7 @@ pub fn size_chips(
         .fixed_pos(pos)
         .show(ctx, |ui| {
             ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
+            let accent_fg = theme::accent_fg(accent, theme::current(ctx).0);
             ui.horizontal(|ui| {
                 let chip = |pal: &Palette| {
                     Frame::NONE
@@ -392,8 +408,7 @@ pub fn size_chips(
                     ui.label(
                         RichText::new(format!("{} \u{d7} {}", st.size.0, st.size.1))
                             .size(12.0)
-                            .color(pal.text)
-                            .monospace(),
+                            .color(pal.text),
                     );
                 });
                 if st.editable {
@@ -428,7 +443,11 @@ pub fn size_chips(
                                     );
                                 }
                                 let active = st.ratio == *ratio;
-                                let color = if active { accent } else { pal.text_secondary };
+                                let color = if active {
+                                    accent_fg
+                                } else {
+                                    pal.text_secondary
+                                };
                                 let r = ui.add(
                                     egui::Label::new(RichText::new(*label).size(12.0).color(color))
                                         .sense(Sense::click()),
@@ -452,7 +471,7 @@ pub fn size_chips(
                 }
                 if let Some(p) = st.purpose {
                     chip(pal).show(ui, |ui| {
-                        ui.label(RichText::new(p).size(12.0).color(accent));
+                        ui.label(RichText::new(p).size(12.0).color(accent_fg));
                     });
                 }
             });
@@ -482,13 +501,22 @@ pub fn hint_bar(
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(14.0, 0.0);
                     ui.horizontal(|ui| {
+                        let accent_fg = theme::accent_fg(accent, theme::current(ui.ctx()).0);
                         if let Some(l) = leading {
-                            ui.label(RichText::new(l).size(12.0).strong().color(accent));
+                            ui.label(
+                                RichText::new(l)
+                                    .font(theme::semibold(12.0))
+                                    .color(accent_fg),
+                            );
                         }
                         for (k, v) in items {
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 4.0;
-                                ui.label(RichText::new(*k).size(12.0).strong().color(pal.text));
+                                ui.label(
+                                    RichText::new(*k)
+                                        .font(theme::semibold(12.0))
+                                        .color(pal.text),
+                                );
                                 ui.label(RichText::new(*v).size(12.0).color(pal.text_secondary));
                             });
                         }
@@ -525,8 +553,7 @@ pub fn loupe_plate(
                             ui.label(
                                 RichText::new(format!("X {} \u{b7} Y {}", xy.0, xy.1))
                                     .size(12.0)
-                                    .color(pal.text)
-                                    .monospace(),
+                                    .color(pal.text),
                             );
                             ui.label(
                                 RichText::new(format!("@ {scale_pct}%"))
@@ -542,7 +569,7 @@ pub fn loupe_plate(
                                 2.0,
                                 Color32::from_rgb(rgb[0], rgb[1], rgb[2]),
                             );
-                            ui.label(RichText::new(hex).size(12.0).color(pal.text).monospace());
+                            ui.label(RichText::new(hex).size(12.0).color(pal.text));
                             ui.label(
                                 RichText::new("C to copy")
                                     .size(12.0)
