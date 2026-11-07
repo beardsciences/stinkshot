@@ -45,7 +45,8 @@ pub const LIGHT: Palette = Palette {
     card: Color32::from_rgb(0xff, 0xff, 0xff),
     flyout: Color32::from_rgb(0xf9, 0xf9, 0xf9),
     control: Color32::from_rgb(0xfb, 0xfb, 0xfb),
-    stroke: Color32::from_rgba_premultiplied(0x0f, 0x0f, 0x0f, 0x0f),
+    // Black hairline (Windows 11 card stroke, ~9%). Premultiplied black is all-zero RGB.
+    stroke: Color32::from_rgba_premultiplied(0, 0, 0, 0x17),
     text: Color32::from_rgb(0x1a, 0x1a, 0x1a),
     text_secondary: Color32::from_rgb(0x5c, 0x5c, 0x5c),
     text_tertiary: Color32::from_rgb(0x6e, 0x6e, 0x6e),
@@ -53,6 +54,78 @@ pub const LIGHT: Palette = Palette {
     danger: Color32::from_rgb(0xc4, 0x2b, 0x1c),
     on_accent: Color32::from_rgb(0x0d, 0x1f, 0x08),
 };
+
+/// Text on a `danger` fill: dark ink on the light red of the dark theme, white on the deep
+/// red of the light theme (both >= 4.5:1).
+pub fn on_danger(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(0x1f, 0x06, 0x05)
+    } else {
+        Color32::WHITE
+    }
+}
+
+/// 1px border of a neutral control (buttons, combo boxes, text fields). A notch stronger
+/// than the card hairline so controls read as controls in both themes.
+pub fn control_stroke(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_white_alpha(22)
+    } else {
+        Color32::from_black_alpha(30)
+    }
+}
+
+/// Subtle wash for hovered (`level` 1), pressed (2) or selected (3) transparent items such as
+/// icon buttons and nav rows; white on dark, black on light.
+pub fn subtle_fill(dark: bool, level: u8) -> Color32 {
+    let a = match level {
+        0 => 0,
+        1 => 15,
+        2 => 26,
+        _ => 20,
+    };
+    if dark {
+        Color32::from_white_alpha(a)
+    } else {
+        Color32::from_black_alpha(a.saturating_sub(4))
+    }
+}
+
+/// WCAG relative luminance of an opaque sRGB colour.
+pub fn luminance(c: Color32) -> f32 {
+    let lin = |v: u8| {
+        let s = v as f32 / 255.0;
+        if s <= 0.040_45 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+}
+
+/// WCAG contrast ratio between two opaque colours (1..=21).
+pub fn contrast(a: Color32, b: Color32) -> f32 {
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// The accent adjusted for use as text or a thin glyph on the theme's surfaces: unchanged
+/// when it already reaches 4.5:1, otherwise darkened (light theme) or lightened (dark theme)
+/// just enough. Keeps light green / yellow accents legible on the light theme.
+pub fn accent_fg(accent: Color32, dark: bool) -> Color32 {
+    let p = palette(dark);
+    // Check against the lightest (light theme) / lightest-dark (dark theme) surface it sits on.
+    let bg = if dark { p.control } else { p.bg };
+    let target = if dark { Color32::WHITE } else { Color32::BLACK };
+    let mut c = accent;
+    let mut t = 0.0;
+    while contrast(c, bg) < 4.5 && t < 1.0 {
+        t += 0.05;
+        c = accent.lerp_to_gamma(target, t);
+    }
+    c
+}
 
 pub const DEFAULT_ACCENT: Color32 = Color32::from_rgb(0x7f, 0xd3, 0x6a);
 
@@ -136,9 +209,20 @@ pub fn install(
             "SegoeUIVariable".into(),
             std::sync::Arc::new(FontData::from_owned(fonts.regular_bytes.as_ref().clone())),
         );
+        // The design's headings are weight 600: prefer the real Segoe UI Semibold face and
+        // fall back to the bold face core loads for annotation text.
+        let semibold_bytes = std::env::var_os("WINDIR")
+            .map(|w| {
+                std::path::PathBuf::from(w)
+                    .join("Fonts")
+                    .join("seguisb.ttf")
+            })
+            .and_then(|p| std::fs::read(p).ok())
+            .filter(|b| !b.is_empty())
+            .unwrap_or_else(|| fonts.bold_bytes.as_ref().clone());
         defs.font_data.insert(
             "SegoeUISemibold".into(),
-            std::sync::Arc::new(FontData::from_owned(fonts.bold_bytes.as_ref().clone())),
+            std::sync::Arc::new(FontData::from_owned(semibold_bytes)),
         );
         let proportional = defs.families.entry(FontFamily::Proportional).or_default();
         proportional.insert(0, "SegoeUIVariable".into());
@@ -198,19 +282,27 @@ pub fn install(
         spread: 0,
         color: Color32::from_black_alpha(90),
     };
-    visuals.hyperlink_color = accent;
+    visuals.hyperlink_color = accent_fg(accent, dark);
     visuals.error_fg_color = p.danger;
-    visuals.warn_fg_color = Color32::from_rgb(0xff, 0xb4, 0x54);
+    visuals.warn_fg_color = if dark {
+        Color32::from_rgb(0xff, 0xb4, 0x54)
+    } else {
+        Color32::from_rgb(0x9d, 0x5d, 0x00)
+    };
     visuals.selection.bg_fill = accent_soft(accent, 90);
-    visuals.selection.stroke = Stroke::new(1.0, accent);
+    visuals.selection.stroke = Stroke::new(1.0, accent_fg(accent, dark));
     visuals.slider_trailing_fill = true;
+    visuals.handle_shape = egui::style::HandleShape::Circle;
+    visuals.text_cursor.stroke = Stroke::new(1.5, p.text);
 
+    // Controls carry a visible 1px border in both themes (the card hairline alone vanishes
+    // on the light theme's white cards).
+    let cs = control_stroke(dark);
     visuals.widgets.noninteractive = widget_visuals(p.card, p.stroke, p.text_secondary, 6);
-    visuals.widgets.inactive = widget_visuals(p.control, p.stroke, p.text, 6);
-    visuals.widgets.hovered =
-        widget_visuals(hover_tint(p.control, dark, 0.07), p.stroke, p.text, 6);
-    visuals.widgets.active = widget_visuals(hover_tint(p.control, dark, 0.12), p.stroke, p.text, 6);
-    visuals.widgets.open = widget_visuals(hover_tint(p.control, dark, 0.09), p.stroke, p.text, 6);
+    visuals.widgets.inactive = widget_visuals(p.control, cs, p.text, 6);
+    visuals.widgets.hovered = widget_visuals(hover_tint(p.control, dark, 0.07), cs, p.text, 6);
+    visuals.widgets.active = widget_visuals(hover_tint(p.control, dark, 0.12), cs, p.text, 6);
+    visuals.widgets.open = widget_visuals(hover_tint(p.control, dark, 0.09), cs, p.text, 6);
 
     let mut style = egui::Style {
         visuals,
@@ -222,6 +314,9 @@ pub fn install(
     style.spacing.window_margin = egui::Margin::same(12);
     style.spacing.menu_margin = egui::Margin::same(4);
     style.spacing.scroll.bar_width = 6.0;
+    style.spacing.slider_rail_height = 4.0;
+    // Hover and press fades: quick enough to never feel sluggish.
+    style.animation_time = 0.1;
     style.text_styles = [
         (TextStyle::Heading, semibold(28.0)),
         (title_style(), semibold(14.0)),
@@ -250,7 +345,28 @@ pub fn install(
 pub mod widgets {
     use egui::{Color32, CornerRadius, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, vec2};
 
-    use super::{accent_soft, current, hover_tint, palette, semibold};
+    use super::{accent_fg, accent_soft, control_stroke, current, hover_tint, palette, semibold};
+
+    /// 0..1 hover amount that eases in and out over ~100 ms (0 while disabled).
+    pub(crate) fn hover_fade(ui: &Ui, resp: &Response) -> f32 {
+        ui.ctx().animate_bool_with_time(
+            resp.id.with("stinkshot.hover"),
+            resp.hovered() && ui.is_enabled(),
+            0.1,
+        )
+    }
+
+    /// Windows 11 keyboard focus ring: 2px, offset 1px outside the control's own corners.
+    pub(crate) fn focus_ring(ui: &Ui, rect: Rect, radius: u8) {
+        let (dark, _) = current(ui.ctx());
+        let p = palette(dark);
+        ui.painter().rect_stroke(
+            rect.expand(1.0),
+            CornerRadius::same(radius.saturating_add(1)),
+            Stroke::new(2.0, p.text),
+            StrokeKind::Outside,
+        );
+    }
 
     struct ButtonLook {
         fill: Color32,
@@ -274,27 +390,20 @@ pub mod widgets {
         let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
         if ui.is_rect_visible(rect) {
             let enabled = ui.is_enabled();
+            let hover_t = hover_fade(ui, &resp);
             let fill = if !enabled {
                 look.fill.gamma_multiply(0.5)
             } else if resp.is_pointer_button_down_on() {
                 look.fill_active
-            } else if resp.hovered() {
-                look.fill_hover
             } else {
-                look.fill
+                look.fill.lerp_to_gamma(look.fill_hover, hover_t)
             };
             let radius = CornerRadius::same(6);
             ui.painter().rect_filled(rect, radius, fill);
             ui.painter()
                 .rect_stroke(rect, radius, look.stroke, StrokeKind::Inside);
             if resp.has_focus() {
-                let (_, accent) = current(ui.ctx());
-                ui.painter().rect_stroke(
-                    rect.expand(1.0),
-                    CornerRadius::same(7),
-                    Stroke::new(2.0, accent),
-                    StrokeKind::Outside,
-                );
+                focus_ring(ui, rect, 6);
             }
             let pos = Pos2::new(
                 rect.center().x - galley.size().x / 2.0,
@@ -343,14 +452,7 @@ pub mod widgets {
                 fill_hover: hover_tint(p.control, dark, 0.07),
                 fill_active: hover_tint(p.control, dark, 0.12),
                 text: p.text,
-                stroke: Stroke::new(
-                    1.0,
-                    if dark {
-                        Color32::from_white_alpha(20)
-                    } else {
-                        Color32::from_black_alpha(26)
-                    },
-                ),
+                stroke: Stroke::new(1.0, control_stroke(dark)),
                 bold: false,
             },
         )
@@ -363,22 +465,14 @@ pub mod widgets {
         let (rect, resp) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::click());
         if ui.is_rect_visible(rect) {
             let enabled = ui.is_enabled();
+            let hover_t = hover_fade(ui, &resp);
+            let pressed = enabled && resp.is_pointer_button_down_on();
             let bg = if selected {
-                accent_soft(accent, if resp.hovered() { 80 } else { 60 })
-            } else if resp.is_pointer_button_down_on() {
-                if dark {
-                    Color32::from_white_alpha(32)
-                } else {
-                    Color32::from_black_alpha(36)
-                }
-            } else if resp.hovered() {
-                if dark {
-                    Color32::from_white_alpha(20)
-                } else {
-                    Color32::from_black_alpha(20)
-                }
+                accent_soft(accent, 56 + (24.0 * hover_t) as u8)
+            } else if pressed {
+                super::subtle_fill(dark, 2)
             } else {
-                Color32::TRANSPARENT
+                super::subtle_fill(dark, 1).gamma_multiply(hover_t)
             };
             ui.painter().rect_filled(rect, CornerRadius::same(6), bg);
             if selected {
@@ -390,28 +484,26 @@ pub mod widgets {
                 );
             }
             if resp.has_focus() {
-                ui.painter().rect_stroke(
-                    rect,
-                    CornerRadius::same(6),
-                    Stroke::new(2.0, accent),
-                    StrokeKind::Inside,
-                );
+                focus_ring(ui, rect, 6);
             }
             let color = if !enabled {
-                p.text_tertiary.gamma_multiply(0.6)
+                // Disabled glyphs stay recognisable but clearly inert.
+                p.text_tertiary.gamma_multiply(0.55)
             } else if selected {
-                accent
+                accent_fg(accent, dark)
             } else {
                 p.text
             };
+            // Pressed glyphs shrink a hair, like Fluent's pressed state.
+            let side = if pressed { 17.0 } else { 18.0 };
             paint_icon(
                 ui.painter(),
-                Rect::from_center_size(rect.center(), vec2(18.0, 18.0)),
+                Rect::from_center_size(rect.center(), vec2(side, side)),
                 icon,
                 color,
             );
         }
-        if ui.is_enabled() {
+        if resp.hovered() && ui.is_enabled() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
         resp.on_hover_text(tooltip)
@@ -442,9 +534,24 @@ pub mod widgets {
                 switch,
             );
             let pill = CornerRadius::same(10);
-            let off_color = Color32::from_rgb(0xa0, 0xa0, 0xa0);
+            // Off: Windows 11 draws the outline and thumb in the secondary text colour, which
+            // reads on both the dark and the white cards (the old fixed greys vanished on
+            // white). A faint wash on hover.
+            let off_color = p.text_secondary;
+            let hover_t = hover_fade(ui, &resp);
+            if t < 1.0 && hover_t > 0.0 {
+                ui.painter().rect_filled(
+                    sw,
+                    pill,
+                    super::subtle_fill(dark, 1).gamma_multiply(hover_t * (1.0 - t)),
+                );
+            }
             if t > 0.0 {
-                ui.painter().rect_filled(sw, pill, accent.gamma_multiply(t));
+                let on = accent.lerp_to_gamma(
+                    if dark { Color32::WHITE } else { Color32::BLACK },
+                    0.08 * hover_t,
+                );
+                ui.painter().rect_filled(sw, pill, on.gamma_multiply(t));
             }
             if t < 1.0 {
                 ui.painter().rect_stroke(
@@ -457,17 +564,12 @@ pub mod widgets {
             let x0 = sw.left() + 10.0;
             let x1 = sw.right() - 10.0;
             let thumb_x = x0 + (x1 - x0) * t;
-            let thumb_r = if resp.hovered() { 7.0 } else { 6.0 };
-            let thumb_color = Color32::from_rgb(0xd0, 0xd0, 0xd0).lerp_to_gamma(p.on_accent, t);
+            let thumb_r = 6.0 + hover_t;
+            let thumb_color = off_color.lerp_to_gamma(p.on_accent, t);
             ui.painter()
                 .circle_filled(Pos2::new(thumb_x, sw.center().y), thumb_r, thumb_color);
             if resp.has_focus() {
-                ui.painter().rect_stroke(
-                    sw.expand(2.0),
-                    CornerRadius::same(12),
-                    Stroke::new(2.0, accent),
-                    StrokeKind::Outside,
-                );
+                focus_ring(ui, sw.expand(1.0), 11);
             }
             ui.painter().galley(
                 Pos2::new(
@@ -508,6 +610,24 @@ pub mod widgets {
                     });
                 });
             });
+    }
+
+    /// ComboBox icon painter: a Fluent chevron instead of egui's filled triangle. Use as
+    /// `ComboBox::icon(widgets::combo_chevron)`.
+    pub fn combo_chevron(ui: &Ui, rect: Rect, visuals: &egui::style::WidgetVisuals, _open: bool) {
+        let (dark, _) = current(ui.ctx());
+        let side = rect.height().min(14.0);
+        let color = if ui.is_enabled() {
+            palette(dark).text_secondary
+        } else {
+            visuals.fg_stroke.color
+        };
+        paint_icon(
+            ui.painter(),
+            Rect::from_center_size(rect.center(), vec2(side, side)),
+            super::Icon::ChevronDown,
+            color,
+        );
     }
 
     /// Paint an icon centered in `rect` with stroke color.
@@ -558,6 +678,7 @@ pub enum Icon {
     Trash,
     History,
     Shield,
+    ChevronDown,
 }
 
 /// Icon vector data (24x24 design grid, stroke 1.8) and the painter that draws it.
@@ -639,6 +760,7 @@ mod icons {
                 Path("M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"),
                 Path("M8.5 12l2.5 2.5 4.5-5"),
             ],
+            Icon::ChevronDown => &[Path("M6 9l6 6 6-6")],
         }
     }
 
@@ -1084,6 +1206,7 @@ mod icons {
                 Trash,
                 History,
                 Shield,
+                ChevronDown,
             ] {
                 assert!(!prims(icon).is_empty(), "{icon:?}");
                 for p in prims(icon) {
@@ -1097,5 +1220,43 @@ mod icons {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contrast_matches_wcag_extremes() {
+        assert!((contrast(Color32::WHITE, Color32::BLACK) - 21.0).abs() < 0.01);
+        assert!((contrast(Color32::WHITE, Color32::WHITE) - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn accent_fg_is_legible_on_both_themes() {
+        for accent in [
+            DEFAULT_ACCENT,
+            Color32::from_rgb(0xff, 0xb4, 0x54),
+            Color32::from_rgb(0x4c, 0xc2, 0xff),
+            Color32::from_rgb(0xc4, 0x9c, 0xff),
+        ] {
+            assert!(contrast(accent_fg(accent, false), LIGHT.bg) >= 4.5);
+            assert!(contrast(accent_fg(accent, true), DARK.control) >= 4.5);
+        }
+        // Already legible accents are left alone.
+        assert_eq!(accent_fg(DEFAULT_ACCENT, true), DEFAULT_ACCENT);
+    }
+
+    #[test]
+    fn secondary_text_meets_aa_on_every_surface() {
+        for p in [&DARK, &LIGHT] {
+            for bg in [p.bg, p.layer, p.card, p.flyout, p.control] {
+                assert!(contrast(p.text_secondary, bg) >= 4.5, "{bg:?}");
+                assert!(contrast(p.text_tertiary, bg) >= 4.5, "{bg:?}");
+            }
+        }
+        assert!(contrast(on_danger(true), DARK.danger) >= 4.5);
+        assert!(contrast(on_danger(false), LIGHT.danger) >= 4.5);
     }
 }

@@ -403,11 +403,19 @@ pub fn paint_loupe(
                 top_left + Vec2::new(i as f32 * LOUPE_CELL, j as f32 * LOUPE_CELL),
                 Vec2::splat(LOUPE_CELL),
             );
-            // Square cells; the rounded frame is only painted behind, so corners overdraw
-            // slightly, which reads fine at this size.
-            painter.rect_filled(cell, 0.0, Color32::from_rgb(c[0], c[1], c[2]));
+            // The four corner cells take the frame's 8 pt rounding on their outer corner so
+            // square pixels never poke out past the rounded white bezel.
+            let last = LOUPE_CELLS - 1;
+            let round = |on: bool| if on { 8 } else { 0 };
+            let radius = egui::CornerRadius {
+                nw: round(i == 0 && j == 0),
+                ne: round(i == last && j == 0),
+                sw: round(i == 0 && j == last),
+                se: round(i == last && j == last),
+            };
+            painter.rect_filled(cell, radius, Color32::from_rgb(c[0], c[1], c[2]));
             if i == half || j == half {
-                painter.rect_filled(cell, 0.0, accent.gamma_multiply(0.35));
+                painter.rect_filled(cell, radius, accent.gamma_multiply(0.35));
             }
         }
     }

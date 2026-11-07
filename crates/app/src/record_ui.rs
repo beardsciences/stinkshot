@@ -233,7 +233,7 @@ impl Surface for Countdown {
                 center,
                 Align2::CENTER_CENTER,
                 n.to_string(),
-                uc::font(84.0),
+                theme::semibold(84.0),
                 Color32::WHITE,
             );
             painter.text(
@@ -949,7 +949,7 @@ impl Surface for TrimWindow {
                 inner.left_top() + vec2(0.0, 2.0),
                 Align2::LEFT_TOP,
                 "Trim Recording",
-                uc::font(14.0),
+                theme::semibold(14.0),
                 p.text,
             );
             painter.text(
@@ -1002,7 +1002,9 @@ impl Surface for TrimWindow {
                     Align2::CENTER_CENTER,
                     "Loading Preview",
                     uc::font(12.0),
-                    p.text_tertiary,
+                    // The preview well is always near-black, so use the dark theme's grey
+                    // (the light theme's grey would fall below 4.5:1 here).
+                    theme::DARK.text_tertiary,
                 );
             }
             painter.rect_stroke(

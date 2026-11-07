@@ -943,20 +943,7 @@ impl Surface for HistoryWindow {
                 },
                 p.layer,
             );
-            ui.painter().line_segment(
-                [
-                    main.left_top() + vec2(8.0, 0.5),
-                    main.right_top() + vec2(0.0, 0.5),
-                ],
-                Stroke::new(1.0, p.stroke),
-            );
-            ui.painter().line_segment(
-                [
-                    main.left_top() + vec2(0.5, 8.0),
-                    main.left_bottom() + vec2(0.5, 0.0),
-                ],
-                Stroke::new(1.0, p.stroke),
-            );
+            uc::layer_edges(ui, main, 8.0, p.stroke);
 
             // ---------------- Sidebar ----------------
             let sel_fill = if shared.dark {
@@ -1235,8 +1222,10 @@ impl Surface for HistoryWindow {
                     .max_rect(date_rect)
                     .layout(egui::Layout::left_to_right(egui::Align::Center)),
                 |ui| {
+                    ui.spacing_mut().interact_size.y = 36.0;
                     let mut d = date;
                     egui::ComboBox::from_id_salt("hist_date")
+                        .icon(widgets::combo_chevron)
                         .selected_text(d.label())
                         .width(date_w - 28.0)
                         .show_ui(ui, |ui| {
@@ -1355,31 +1344,40 @@ impl Surface for HistoryWindow {
                             .to_string(),
                     )
                 };
+                // Icon on a soft disc so the empty state has a focal point.
+                ui.painter().circle_filled(
+                    pos2(c.center().x, c.top() + 20.0),
+                    34.0,
+                    theme::subtle_fill(shared.dark, 1),
+                );
                 widgets::paint_icon(
                     ui.painter(),
-                    Rect::from_center_size(pos2(c.center().x, c.top() + 20.0), vec2(40.0, 40.0)),
+                    Rect::from_center_size(pos2(c.center().x, c.top() + 20.0), vec2(36.0, 36.0)),
                     icon,
-                    p.text_tertiary,
-                );
-                ui.painter().text(
-                    pos2(c.center().x, c.top() + 62.0),
-                    Align2::CENTER_TOP,
-                    title,
-                    uc::font(18.0),
-                    p.text,
-                );
-                let g = ui
-                    .painter()
-                    .layout(body, uc::font(13.0), p.text_secondary, c.width());
-                let gh = g.size().y;
-                let gw = g.size().x;
-                ui.painter().galley(
-                    pos2(c.center().x - gw / 2.0, c.top() + 92.0),
-                    g,
                     p.text_secondary,
                 );
+                ui.painter().text(
+                    pos2(c.center().x, c.top() + 70.0),
+                    Align2::CENTER_TOP,
+                    title,
+                    theme::semibold(20.0),
+                    p.text,
+                );
+                // Centre every wrapped line, not just the block.
+                let mut job = egui::text::LayoutJob::simple(
+                    body,
+                    uc::font(13.0),
+                    p.text_secondary,
+                    c.width().min(400.0),
+                );
+                job.halign = egui::Align::Center;
+                job.round_output_to_gui = true;
+                let g = ui.painter().layout_job(job);
+                let gh = g.size().y;
+                ui.painter()
+                    .galley(pos2(c.center().x, c.top() + 102.0), g, p.text_secondary);
                 let b = Rect::from_center_size(
-                    pos2(c.center().x, c.top() + 92.0 + gh + 34.0),
+                    pos2(c.center().x, c.top() + 102.0 + gh + 36.0),
                     vec2(180.0, 34.0),
                 );
                 if total_empty {
@@ -1508,13 +1506,15 @@ impl Surface for HistoryWindow {
                                                 }),
                                             )
                                         };
-                                        if sresp.hovered() {
-                                            ui.painter().circle_filled(
-                                                star_r.center(),
-                                                15.0,
-                                                Color32::from_black_alpha(110),
-                                            );
-                                        }
+                                        ui.painter().circle_filled(
+                                            star_r.center(),
+                                            15.0,
+                                            Color32::from_black_alpha(if sresp.hovered() {
+                                                130
+                                            } else {
+                                                80
+                                            }),
+                                        );
                                         widgets::paint_icon(
                                             ui.painter(),
                                             Rect::from_center_size(
@@ -1712,7 +1712,7 @@ impl Surface for HistoryWindow {
                             ui.set_width(360.0);
                             ui.label(
                                 RichText::new("Delete This Capture?")
-                                    .size(15.0)
+                                    .font(theme::semibold(15.0))
                                     .color(p.text),
                             );
                             ui.add_space(4.0);
@@ -1853,7 +1853,7 @@ fn paint_card(
                             vec2(thumb.width() * w, 8.0),
                         ),
                         CornerRadius::same(3),
-                        Color32::from_white_alpha(a),
+                        p.text.gamma_multiply(a as f32 / 255.0),
                     );
                 };
                 bar(22.0, 0.6, 22);
@@ -1924,22 +1924,16 @@ fn paint_card(
             StrokeKind::Inside,
         );
     } else {
+        // Rest: the card hairline. Hover: a stronger edge in the theme's ink colour.
         let col = if hovered {
-            Color32::from_white_alpha(if p.text == Color32::WHITE { 40 } else { 0 })
+            p.text.gamma_multiply(0.22)
         } else {
             p.stroke
         };
         painter.rect_stroke(
             r,
             CornerRadius::same(8),
-            Stroke::new(
-                1.0,
-                if hovered && col.a() == 0 {
-                    Color32::from_black_alpha(40)
-                } else {
-                    col
-                },
-            ),
+            Stroke::new(1.0, col),
             StrokeKind::Inside,
         );
     }

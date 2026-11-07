@@ -444,20 +444,7 @@ impl Surface for SettingsWindow {
                 },
                 p.layer,
             );
-            ui.painter().line_segment(
-                [
-                    content.left_top() + vec2(8.0, 0.5),
-                    content.right_top() + vec2(0.0, 0.5),
-                ],
-                Stroke::new(1.0, p.stroke),
-            );
-            ui.painter().line_segment(
-                [
-                    content.left_top() + vec2(0.5, 8.0),
-                    content.left_bottom() + vec2(0.5, 0.0),
-                ],
-                Stroke::new(1.0, p.stroke),
-            );
+            uc::layer_edges(ui, content, 8.0, p.stroke);
 
             // Navigation.
             let mut y = nav.top() + 8.0;
@@ -534,7 +521,7 @@ impl Surface for SettingsWindow {
                                     .map(|(_, n)| *n)
                                     .unwrap_or(""),
                             )
-                            .size(28.0)
+                            .font(theme::semibold(28.0))
                             .color(p.text),
                         );
                         ui.add_space(6.0);
@@ -611,6 +598,7 @@ fn combo_row<T: Copy + PartialEq>(
             .map(|(_, l)| *l)
             .unwrap_or("Custom");
         egui::ComboBox::from_id_salt(id)
+            .icon(widgets::combo_chevron)
             .selected_text(cur)
             .width(150.0)
             .show_ui(ui, |ui| {
@@ -630,13 +618,22 @@ fn slider_row<N: egui::emath::Numeric>(
     suffix: &str,
 ) {
     widgets::setting_row(ui, title, desc, |ui| {
+        // egui sizes the round thumb from the row height; 24 pt gives a ~19 pt Fluent-sized
+        // thumb instead of a 26 pt disc.
+        ui.spacing_mut().interact_size.y = 24.0;
+        // Value box the same height so the two share a centre line.
+        ui.spacing_mut().button_padding.y = 3.0;
         ui.add(egui::Slider::new(v, range).suffix(suffix.to_string()));
     });
 }
 
 fn group_title(ui: &mut Ui, p: &theme::Palette, text: &str) {
-    ui.add_space(12.0);
-    ui.label(RichText::new(text).size(14.0).color(p.text));
+    ui.add_space(14.0);
+    ui.label(
+        RichText::new(text)
+            .font(theme::semibold(14.0))
+            .color(p.text),
+    );
     ui.add_space(2.0);
 }
 
@@ -737,7 +734,7 @@ fn info_card(
         r.min + vec2(18.0 + 28.0 + 14.0, 16.0),
         Align2::LEFT_TOP,
         title,
-        uc::font(15.0),
+        theme::semibold(15.0),
         p.text,
     );
     ui.painter().galley(
@@ -772,6 +769,7 @@ impl SettingsWindow {
                     _ => "Use System Setting",
                 };
                 egui::ComboBox::from_id_salt("theme")
+                    .icon(widgets::combo_chevron)
                     .selected_text(label)
                     .width(170.0)
                     .show_ui(ui, |ui| {
@@ -1298,6 +1296,7 @@ impl SettingsWindow {
                         .map(|(_, l)| l.as_str())
                         .unwrap_or("Default Device");
                     egui::ComboBox::from_id_salt(id)
+                        .icon(widgets::combo_chevron)
                         .selected_text(cur.to_string())
                         .width(240.0)
                         .show_ui(ui, |ui| {
@@ -1613,14 +1612,14 @@ impl SettingsWindow {
             r.min + vec2(18.0 + 28.0, 18.0 + 28.0),
             Align2::CENTER_CENTER,
             "S",
-            uc::font(30.0),
+            theme::semibold(30.0),
             p.on_accent,
         );
         ui.painter().text(
             r.min + vec2(92.0, 24.0),
             Align2::LEFT_TOP,
             "StinkShot",
-            uc::font(20.0),
+            theme::semibold(20.0),
             p.text,
         );
         ui.painter().text(

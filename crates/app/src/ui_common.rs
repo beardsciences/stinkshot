@@ -430,34 +430,51 @@ pub fn rect_button(
         Sense::hover()
     };
     let resp = ui.interact(rect, ui.scope_id().with(id), sense);
-    let hovered = enabled && resp.hovered();
+    let dark = p.text == theme::DARK.text;
+    let hover_t = ui.ctx().animate_bool_with_time(
+        resp.id.with("stinkshot.hover"),
+        enabled && resp.hovered(),
+        0.1,
+    );
     let pressed = enabled && resp.is_pointer_button_down_on();
     let (mut fill, text_col, stroke) = match kind {
         BtnKind::Neutral => (
             p.control,
             if enabled { p.text } else { p.text_tertiary },
-            Stroke::new(1.0, p.stroke),
+            Stroke::new(1.0, theme::control_stroke(dark)),
         ),
         BtnKind::Accent => (accent, p.on_accent, Stroke::NONE),
-        BtnKind::Danger => (p.danger, Color32::from_rgb(0x1f, 0x06, 0x05), Stroke::NONE),
+        BtnKind::Danger => (p.danger, theme::on_danger(dark), Stroke::NONE),
+    };
+    // Hover lightens on dark and darkens on light (lightening #fbfbfb was invisible).
+    let toward = if dark || kind != BtnKind::Neutral {
+        Color32::WHITE
+    } else {
+        Color32::BLACK
     };
     if !enabled {
         fill = fill.gamma_multiply(0.6);
     } else if pressed {
         fill = fill.lerp_to_gamma(Color32::BLACK, 0.12);
-    } else if hovered {
-        fill = fill.lerp_to_gamma(Color32::WHITE, 0.08);
+    } else {
+        fill = fill.lerp_to_gamma(toward, (if dark { 0.08 } else { 0.04 }) * hover_t);
     }
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius::same(6), fill);
     if stroke != Stroke::NONE {
         painter.rect_stroke(rect, CornerRadius::same(6), stroke, StrokeKind::Inside);
     }
+    // Filled (accent / danger) buttons are semibold like the design's primary buttons.
+    let text_font = if kind == BtnKind::Neutral {
+        font(13.0)
+    } else {
+        theme::semibold(13.0)
+    };
     painter.text(
         rect.center(),
         Align2::CENTER_CENTER,
         text,
-        font(13.0),
+        text_font,
         text_col,
     );
     if enabled {
@@ -481,6 +498,35 @@ pub fn root_ui(ctx: &egui::Context, fill: Color32, add: impl FnOnce(&mut Ui, Rec
         ui.painter().rect_filled(rect, CornerRadius::ZERO, fill);
     }
     add(&mut ui, rect);
+}
+
+/// The content layer's top and left hairlines (with the rounded top-left corner of
+/// `radius`), snapped to physical pixel centres and one physical pixel wide so they stay
+/// crisp at 125 / 150 / 200 % instead of smearing across two pixel rows.
+pub fn layer_edges(ui: &Ui, layer: Rect, radius: f32, color: Color32) {
+    let painter = ui.painter();
+    let w = 1.0 / painter.pixels_per_point();
+    let y = painter.round_to_pixel_center(layer.top());
+    let x = painter.round_to_pixel_center(layer.left());
+    painter.hline(
+        (layer.left() + radius)..=layer.right(),
+        y,
+        Stroke::new(w, color),
+    );
+    painter.vline(
+        x,
+        (layer.top() + radius)..=layer.bottom(),
+        Stroke::new(w, color),
+    );
+    // Quarter arc joining the two edges along the layer's rounded corner.
+    let c = egui::pos2(x + radius, y + radius);
+    let pts: Vec<egui::Pos2> = (0..=8)
+        .map(|i| {
+            let a = std::f32::consts::PI + std::f32::consts::FRAC_PI_2 * i as f32 / 8.0;
+            egui::pos2(c.x + radius * a.cos(), c.y + radius * a.sin())
+        })
+        .collect();
+    painter.add(egui::Shape::line(pts, Stroke::new(w, color)));
 }
 
 /// Paint a 1px hairline card border + fill (used for cards inside windows).
