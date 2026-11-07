@@ -19,6 +19,8 @@ mod util;
 pub mod window_util;
 pub mod windows_enum;
 
+pub use util::keep_mta_alive;
+
 /// Raw HWND value.
 pub type Hwnd = isize;
 

@@ -24,10 +24,29 @@ thread_local! {
     static GUARD: RefCell<Option<ComGuard>> = const { RefCell::new(None) };
 }
 
+/// Keep the process MTA alive for the whole process lifetime (idempotent).
+///
+/// windows-rs caches WinRT activation factories process-wide. Worker threads join the MTA
+/// and leave it when they exit; when the last one leaves, COM tears the MTA down and may
+/// unload WinRT DLLs (Windows.Media.Ocr, Graphics.Capture) while those cached factories still
+/// point into them. The next call through the cache is an access violation (seen as a crash
+/// in `OcrEngine::MaxImageDimension`). Holding one MTA usage reference prevents the teardown.
+pub fn keep_mta_alive() {
+    static KEEP: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    KEEP.get_or_init(|| {
+        // SAFETY: plain COM call; the cookie is intentionally never released.
+        match unsafe { windows::Win32::System::Com::CoIncrementMTAUsage() } {
+            Ok(_cookie) => {}
+            Err(e) => log::error!("CoIncrementMTAUsage failed: {e}"),
+        }
+    });
+}
+
 /// Make sure the calling thread has a COM apartment. Fresh worker threads become MTA. A
 /// thread that is already STA (the UI thread) keeps its apartment (RPC_E_CHANGED_MODE is
 /// ignored), which is fine for the free-threaded WinRT and UIA objects used here.
 pub(crate) fn ensure_com() {
+    keep_mta_alive();
     if TRIED.with(|t| t.replace(true)) {
         return;
     }

@@ -10,6 +10,8 @@ pub struct ComGuard(bool);
 
 impl ComGuard {
     pub fn new() -> Self {
+        // Cached WinRT factories (Graphics.Capture) must not outlive the MTA.
+        stinkshot_platform::keep_mta_alive();
         let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
         ComGuard(hr.is_ok())
     }

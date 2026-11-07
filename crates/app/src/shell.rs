@@ -79,6 +79,8 @@ pub fn run() -> anyhow::Result<()> {
         sysutil::attach_parent_console();
     }
     stinkshot_platform::dpi::init();
+    // Before any worker touches WinRT: cached factories must never outlive the MTA.
+    stinkshot_platform::keep_mta_alive();
     logger::init();
 
     let (initial, forward_args) = match cli::parse() {
