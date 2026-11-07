@@ -195,7 +195,7 @@ pub fn item_title(m: &ItemMeta) -> String {
 fn empty_hint(region_hotkey_display: &str) -> String {
     let tail = "Everything you capture is saved here, with searchable text.";
     if region_hotkey_display.is_empty() || region_hotkey_display == "Not Set" {
-        format!("Use the button below or the StinkShot tray icon to capture a region. {tail}")
+        format!("Use the button below or the Stinkshot tray icon to capture a region. {tail}")
     } else {
         format!("Press {region_hotkey_display} to capture a region. {tail}")
     }
@@ -535,7 +535,7 @@ fn history_load_error(e: &anyhow::Error) -> String {
     let why = crate::errors::report(
         "history query",
         e,
-        "Restart StinkShot; if it keeps happening, choose another history folder in Settings.",
+        "Restart Stinkshot; if it keeps happening, choose another history folder in Settings.",
     );
     format!("Could not read the history index. {why}")
 }
@@ -758,7 +758,7 @@ impl HistoryWindow {
 
 impl Surface for HistoryWindow {
     fn title(&self) -> String {
-        "StinkShot History".into()
+        "Stinkshot History".into()
     }
 
     fn viewport_builder(&self, _shared: &Shared) -> egui::ViewportBuilder {

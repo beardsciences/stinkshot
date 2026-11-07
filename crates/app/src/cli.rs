@@ -49,7 +49,7 @@ pub enum HeadlessJob {
     name = "stinkshot",
     version,
     about = "Local-first screenshot and screen recording for Windows",
-    long_about = "Local-first screenshot and screen recording for Windows.\n\nWith no arguments StinkShot starts in the tray. Subcommands trigger an action in the running instance (starting it if needed); `full --out`, `window --out` and `ocr --file` run headless and exit."
+    long_about = "Local-first screenshot and screen recording for Windows.\n\nWith no arguments Stinkshot starts in the tray. Subcommands trigger an action in the running instance (starting it if needed); `full --out`, `window --out` and `ocr --file` run headless and exit."
 )]
 struct Cli {
     /// Start in the tray only (used by start-with-Windows).

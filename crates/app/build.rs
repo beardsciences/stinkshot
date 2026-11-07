@@ -53,8 +53,8 @@ BEGIN
   BEGIN
     BLOCK "040904B0"
     BEGIN
-      VALUE "ProductName", "StinkShot"
-      VALUE "FileDescription", "StinkShot: local-first screenshot and screen recording"
+      VALUE "ProductName", "Stinkshot"
+      VALUE "FileDescription", "Stinkshot: local-first screenshot and screen recording"
       VALUE "FileVersion", "{version}"
       VALUE "ProductVersion", "{version}"
       VALUE "OriginalFilename", "stinkshot.exe"

@@ -34,7 +34,7 @@ Files: `crates/app/src/{main,shell,cli,tray,hotkeys,update,theme,state}.rs`, new
 - **build.rs**: generates the .ico (BMP frames), embeds manifest (PerMonitorV2, Common
   Controls 6, asInvoker, long paths, UTF-8) + version info via embed-resource (needs the
   Windows SDK `rc.exe`).
-- Logger at `%APPDATA%\StinkShot\stinkshot.log`, rotated at 5 MB, panic hook.
+- Logger at `%APPDATA%\Stinkshot\stinkshot.log`, rotated at 5 MB, panic hook.
 
 ## Design decisions / deviations
 
@@ -112,3 +112,34 @@ Files: `crates/app/src/{main,shell,cli,tray,hotkeys,update,theme,state}.rs`, new
 11. Theme: switch dark/light/system and accent; autostart toggle writes HKCU Run entry.
 12. Update check (opt-in): only then any network traffic; newer tag adds tray item.
 13. Quit from tray removes the icon and restores the PrintScreen setting.
+
+## Name spelling: Stinkshot (Nov 6 2026)
+
+User request: the product is "Stinkshot", not "StinkShot", everywhere it can be. Every
+user-visible string now reads Stinkshot: History / Settings / Trim window titles, tray tooltip
+and header, toasts, first-run text, About, error bodies and the fatal start-up box, the Save As
+stem fallback, the default filename pattern (`Stinkshot_{yyyy}-...`), the naming fallback stem,
+the update check's User-Agent, VERSIONINFO ProductName / FileDescription (what Task Manager and
+Settings > Apps > Startup show), README and docs.
+
+New installs get `%APPDATA%\Stinkshot` and `Pictures\Stinkshot`. Windows paths are
+case-insensitive, so an existing `StinkShot` folder is the same folder. Checked: no code compares
+these paths with Rust `Path` equality or prefixes; the history index's `path` column is
+`COLLATE NOCASE` and `rescan` keys on lowercase paths, so old rows (spelled `StinkShot`) and new
+ones mix without duplicates. A config that still holds the untouched old default pattern
+(`StinkShot_{yyyy}-{MM}-{dd}_{HH}-{mm}-{ss}`) is respelled on load; a pattern the user edited
+is kept as written.
+
+Kept as `StinkShot` on purpose (internal identifiers, renaming would break existing installs or
+running instances, and none of them is shown to users):
+
+- Window titles used only to find HWNDs: `StinkShot.Root`, `StinkShot.Overlay`,
+  `StinkShot.Pin.<id>`, `StinkShot.Toast.<id>`, `StinkShot.Countdown`, `StinkShot.RecordFrame`,
+  `StinkShot.RecordHud`, `StinkShot.ScrollHud`. All are tool windows (`set_tool_window` /
+  `apply_hud_style`, `with_taskbar(false)`): not in Alt+Tab or the taskbar.
+- `StinkShot.IPC` / `StinkShot.IPC.Window` (message-only window), mutex `Local\StinkShot.Instance`:
+  an old and a new build must still find each other.
+- Registry: Run value `StinkShot` (renaming would orphan existing autostart entries; Startup
+  lists show the exe's FileDescription, not the value name), `HKCU\Software\StinkShot`.
+- `StinkShot.App` manifest assembly identity, the `StinkShot.Semibold` egui font family name.
+- Crate names, `stinkshot.exe`, `STINKSHOT_PROFILE`.

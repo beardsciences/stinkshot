@@ -1,6 +1,6 @@
 [package]
 name = "stinkshot-core"
-description = "Platform-independent StinkShot model: geometry, images, config, annotations, rendering"
+description = "Platform-independent Stinkshot model: geometry, images, config, annotations, rendering"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

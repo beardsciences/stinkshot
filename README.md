@@ -1,4 +1,4 @@
-# StinkShot
+# Stinkshot
 
 A local-first screenshot and screen-recording tool for Windows 11. It freezes the screen, lets you
 select and annotate in place, and saves every capture to a plain folder you can use without the app.
@@ -28,7 +28,7 @@ select and annotate in place, and saves every capture to a plain folder you can 
 
 Everything stays on your machine. There are no upload targets and no telemetry.
 
-The only network call StinkShot can make is an update check against the releases API of the
+The only network call Stinkshot can make is an update check against the releases API of the
 project's Forgejo instance. It is off until you turn it on in Settings, Privacy, and you can run it
 manually with "Check now". Nothing about you or your captures is sent.
 
@@ -51,7 +51,7 @@ Taking over PrintScreen from Windows is a setting and is restored when you turn 
 
 ## CLI
 
-With no arguments StinkShot starts in the tray. Subcommands act on the running instance and start
+With no arguments Stinkshot starts in the tray. Subcommands act on the running instance and start
 it if needed.
 
 ```
@@ -72,8 +72,8 @@ file extension (png, jpg, webp). The others are handy for scripts, AutoHotkey an
 
 ## Files and config
 
-- Config: `%APPDATA%\StinkShot\config.toml` (the settings window writes the same file).
-- Log: `%APPDATA%\StinkShot\stinkshot.log`.
+- Config: `%APPDATA%\Stinkshot\config.toml` (the settings window writes the same file).
+- Log: `%APPDATA%\Stinkshot\stinkshot.log`.
 - Captures: the history folder set in Settings. Annotation data lives beside each image in a
   `.stinkshot` subfolder, together with the search index and thumbnails.
 
@@ -83,7 +83,7 @@ Everything stays on your PC; the only network call is the optional update check,
 default.
 
 Redaction (Blur, Pixelate and Redact boxes) destroys the pixels in the exported image. However,
-with Keep Editable Originals on (the default), StinkShot also keeps the full, unannotated original
+with Keep Editable Originals on (the default), Stinkshot also keeps the full, unannotated original
 of every annotated capture in `<history folder>\.stinkshot\edit\<file name>.base.png` so you can
 re-edit it later. That original still contains whatever you redacted. If you share or sync your
 history folder, or copy the `.stinkshot` folder, you share those originals too. To prevent this,

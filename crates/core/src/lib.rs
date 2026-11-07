@@ -1,4 +1,4 @@
-//! Platform-independent core of StinkShot.
+//! Platform-independent core of Stinkshot.
 //!
 //! Everything here is pure Rust and unit-testable without Windows APIs.
 //! Pixel convention everywhere: physical pixels, `Rgba` is straight (non-premultiplied)

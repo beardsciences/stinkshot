@@ -861,6 +861,9 @@ mod tests {
         assert!(!m.starred);
         assert_eq!(h.find_by_path(&p).unwrap().unwrap().id, id);
         assert!(h.find_by_path(&t.0.join("nope.png")).unwrap().is_none());
+        // `path` is COLLATE NOCASE: the default folder's spelling changed once.
+        let upper = PathBuf::from(p.to_string_lossy().to_uppercase());
+        assert_eq!(h.find_by_path(&upper).unwrap().unwrap().id, id);
         assert!(h.get(9999).unwrap().is_none());
         let id2 = h.add(new_item(p, "chrome", "other")).unwrap();
         assert_eq!(id, id2);

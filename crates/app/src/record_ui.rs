@@ -891,7 +891,7 @@ impl TrimWindow {
 
 impl Surface for TrimWindow {
     fn title(&self) -> String {
-        "StinkShot Trim".into()
+        "Stinkshot Trim".into()
     }
 
     fn viewport_builder(&self, _shared: &Shared) -> egui::ViewportBuilder {

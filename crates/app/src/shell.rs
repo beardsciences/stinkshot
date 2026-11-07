@@ -132,7 +132,7 @@ pub fn run() -> anyhow::Result<()> {
         Err(e) => {
             log::error!("fatal: {e:#}");
             let why = errors::explain(&e, "Try starting it again.");
-            sysutil::fatal_box("StinkShot", &format!("StinkShot could not start. {why}"));
+            sysutil::fatal_box("Stinkshot", &format!("Stinkshot could not start. {why}"));
             Err(e)
         }
     }
@@ -148,14 +148,14 @@ struct Boot {
     guard: InstanceGuard,
 }
 
-/// Body of the "StinkShot Is Running" toast shown when the user starts the app by hand.
+/// Body of the "Stinkshot Is Running" toast shown when the user starts the app by hand.
 fn welcome_body(region_hotkey: &str) -> String {
     let key = crate::hotkeys::display(region_hotkey);
     if key.is_empty() {
-        "Capture from the StinkShot tray icon. Start StinkShot again to open History.".into()
+        "Capture from the Stinkshot tray icon. Start Stinkshot again to open History.".into()
     } else {
         format!(
-            "Press {key} to capture a region, or use the tray icon. Start StinkShot again to open History."
+            "Press {key} to capture a region, or use the tray icon. Start Stinkshot again to open History."
         )
     }
 }
@@ -199,7 +199,7 @@ fn run_app(initial: Option<Command>, welcome: bool, guard: InstanceGuard) -> any
         ..Default::default()
     };
     eframe::run_native(
-        "StinkShot",
+        "Stinkshot",
         options,
         Box::new(move |cc| {
             Ok(Box::new(
@@ -572,7 +572,7 @@ impl Shell {
         if shell.tray.is_none() {
             shell.pending.push_back(Command::Notify {
                 title: "Tray Icon Unavailable".into(),
-                body: "StinkShot is running but could not create its tray icon. Use the hotkeys or the command line.".into(),
+                body: "Stinkshot is running but could not create its tray icon. Use the hotkeys or the command line.".into(),
                 error: true,
             });
         }
@@ -583,7 +583,7 @@ impl Shell {
             shell.pending.push_back(cmd);
         } else if welcome {
             let body = welcome_body(&shell.shared.config.hotkeys.region);
-            shell.notify("StinkShot Is Running", body, false);
+            shell.notify("Stinkshot Is Running", body, false);
         }
         shell.maybe_check_updates(false);
         shell.ctx.request_repaint();
@@ -843,7 +843,7 @@ impl Shell {
                 let body = report(
                     "freeze_all",
                     &e,
-                    "Windows did not hand over the screen image. Try again; if it keeps failing, restart StinkShot.",
+                    "Windows did not hand over the screen image. Try again; if it keeps failing, restart Stinkshot.",
                 );
                 self.notify("Could Not Capture the Screen", body, true);
                 None
@@ -1026,7 +1026,7 @@ impl Shell {
 
     fn open_history(&mut self) {
         if self.history_win.is_some() {
-            Self::focus_window("StinkShot History");
+            Self::focus_window("Stinkshot History");
             return;
         }
         self.history_win = Some(Slot::new(HistoryWindow::new(&self.shared)));
@@ -1039,7 +1039,7 @@ impl Shell {
                 s.s.show_section(sec);
                 self.touch();
             }
-            Self::focus_window("StinkShot Settings");
+            Self::focus_window("Stinkshot Settings");
             return;
         }
         let mut w = SettingsWindow::new(&self.shared);
@@ -1617,7 +1617,7 @@ impl Shell {
                 let body = report_str(
                     "recorder start",
                     &e,
-                    "Windows could not start the screen recorder. Try a smaller area or restart StinkShot.",
+                    "Windows could not start the screen recorder. Try a smaller area or restart Stinkshot.",
                 );
                 if !cancel {
                     self.notify("Could Not Start Recording", body, true);
@@ -1787,7 +1787,7 @@ impl Shell {
                         .unwrap_or(true);
                     if first || forced {
                         self.notify(
-                            &format!("StinkShot {} Is Available", r.tag),
+                            &format!("Stinkshot {} Is Available", r.tag),
                             "Open the tray menu to see the release page.",
                             false,
                         );
@@ -1798,7 +1798,7 @@ impl Shell {
                     self.update_release = Some(r);
                 } else if forced {
                     self.notify(
-                        "StinkShot Is Up to Date",
+                        "Stinkshot Is Up to Date",
                         format!(
                             "Version {} is the latest release.",
                             env!("CARGO_PKG_VERSION")
@@ -1834,7 +1834,7 @@ impl Shell {
                 "saving config",
                 &e,
                 "The settings file could not be written.",
-                "Your changes apply until StinkShot restarts.",
+                "Your changes apply until Stinkshot restarts.",
             );
             self.notify("Could Not Save Settings", body, true);
         }
@@ -1872,7 +1872,7 @@ impl Shell {
                     let body = report_with(
                         &format!("open history folder {}", dir.display()),
                         &e,
-                        "StinkShot could not use that folder.",
+                        "Stinkshot could not use that folder.",
                         "History stays in the previous folder.",
                     );
                     self.notify("Could Not Open That History Folder", body, true);
@@ -2067,7 +2067,7 @@ impl eframe::App for Shell {
     fn on_exit(&mut self) {
         self.hotkeys.shutdown();
         self.tray = None;
-        log::info!("StinkShot exited");
+        log::info!("Stinkshot exited");
     }
 }
 

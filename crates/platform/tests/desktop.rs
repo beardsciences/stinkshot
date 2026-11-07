@@ -297,7 +297,7 @@ fn ocr_reads_rendered_text() {
     let ocr = WindowsOcr::new().expect("OCR engine (install an OCR language pack)");
     assert_eq!(ocr.name(), "Windows OCR");
     for height in [18, 40] {
-        let img = render_text("StinkShot captures screenshots quickly", height);
+        let img = render_text("Stinkshot captures screenshots quickly", height);
         let t = Instant::now();
         let r = ocr.recognize(&img).expect("recognize");
         println!("OCR h={height} in {:?}: {:?}", t.elapsed(), r.text);
@@ -365,7 +365,7 @@ fn ocr_reads_rendered_text() {
 #[test]
 #[ignore = "touches the real clipboard"]
 fn clipboard_roundtrips() {
-    let s = "StinkShot clipboard test \u{00e9}\u{4e2d} 123";
+    let s = "Stinkshot clipboard test \u{00e9}\u{4e2d} 123";
     clipboard::set_text(s).expect("set_text");
     assert_eq!(clipboard::get_text().as_deref(), Some(s));
 
@@ -563,7 +563,7 @@ fn printscreen_takeover_restores() {
 #[ignore = "needs a desktop session"]
 fn window_util_on_own_window() {
     dpi::init();
-    let title = "StinkShot platform test window";
+    let title = "Stinkshot platform test window";
     let t = wide(title);
     // SAFETY: plain window creation/destruction on this thread with a built-in class.
     let hwnd = unsafe {

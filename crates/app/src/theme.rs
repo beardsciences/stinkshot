@@ -1,4 +1,4 @@
-//! Design tokens from docs/design (StinkShot UI mockups). Every surface
+//! Design tokens from docs/design (Stinkshot UI mockups). Every surface
 //! uses these, never ad-hoc colors. Dark is primary; light values mirror Windows 11.
 //!
 //! Font: Segoe UI Variable (from `Shared.fonts.regular_bytes`), registered with egui by

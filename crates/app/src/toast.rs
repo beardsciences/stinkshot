@@ -489,7 +489,7 @@ impl Surface for Toast {
             painter.text(
                 pos2(text_x + 20.0, top + 8.0),
                 Align2::LEFT_CENTER,
-                "StinkShot",
+                "Stinkshot",
                 uc::font(12.0),
                 p.text_secondary,
             );

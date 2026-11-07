@@ -95,7 +95,7 @@ On the SDR monitor every path returns the exact source colors, before and after.
   the DXGI path ran. `capture_window`'s WGC path still uses a BGRA8 pool (also unverifiable
   here; PrintWindow, which ran, is correct).
 - Real HDR content (video, games) above SDR white: covered by unit tests only.
-- Changing the SDR content brightness slider while StinkShot runs (not touched: it is a system
+- Changing the SDR content brightness slider while Stinkshot runs (not touched: it is a system
   setting). The code re-reads it at most once per second.
 - Auto color management on an SDR display (advanced color on, SDR white reported as 80 nits):
   takes the FP16 path with scale 1.0, which should be exact, but no such display here.

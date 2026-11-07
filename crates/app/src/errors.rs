@@ -40,7 +40,7 @@ impl Cause {
             }
             Cause::ClipboardBusy => "Another app is using the clipboard. Try again in a moment.",
             Cause::Offline => {
-                "StinkShot could not reach the server. Check your internet connection and try again later."
+                "Stinkshot could not reach the server. Check your internet connection and try again later."
             }
             Cause::Unknown => return None,
         })
@@ -199,7 +199,7 @@ pub fn report_str(what: &str, e: &str, fallback: &str) -> String {
     explain_str(e, fallback)
 }
 
-/// `report` with a closing sentence (what StinkShot did about it) placed before the log hint.
+/// `report` with a closing sentence (what Stinkshot did about it) placed before the log hint.
 pub fn report_with(what: &str, e: &anyhow::Error, fallback: &str, tail: &str) -> String {
     log::warn!("{what}: {e:#}");
     compose(classify(e), fallback, tail)

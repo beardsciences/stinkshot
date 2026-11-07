@@ -1,6 +1,6 @@
 [package]
 name = "stinkshot"
-description = "StinkShot: local-first screenshot and screen recording for Windows"
+description = "Stinkshot: local-first screenshot and screen recording for Windows"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

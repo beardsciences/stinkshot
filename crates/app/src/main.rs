@@ -1,4 +1,4 @@
-//! StinkShot entry point. Startup order:
+//! Stinkshot entry point. Startup order:
 //! 1. `platform::dpi::init()`.
 //! 2. Parse CLI (`cli::parse`). Headless jobs (`stinkshot full -o x.png`) run and exit
 //!    without UI.

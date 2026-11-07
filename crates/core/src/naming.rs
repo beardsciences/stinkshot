@@ -15,7 +15,7 @@ pub struct NameParts<'a> {
 /// Longest file stem (without extension or uniqueness suffix) we will produce.
 const MAX_STEM_CHARS: usize = 150;
 const MAX_TITLE_CHARS: usize = 40;
-const FALLBACK_STEM: &str = "StinkShot";
+const FALLBACK_STEM: &str = "Stinkshot";
 
 pub fn expand_pattern(pattern: &str, parts: &NameParts) -> String {
     use chrono::Timelike;
@@ -160,7 +160,7 @@ mod tests {
         let cfg = crate::config::Capture::default();
         assert_eq!(
             expand_pattern(&cfg.filename_pattern, &parts("", "")),
-            "StinkShot_2026-11-06_09-05-07"
+            "Stinkshot_2026-11-06_09-05-07"
         );
     }
 
@@ -207,8 +207,8 @@ mod tests {
 
     #[test]
     fn empty_and_reserved_names_are_fixed() {
-        assert_eq!(expand_pattern("", &parts("", "")), "StinkShot");
-        assert_eq!(expand_pattern("{title}", &parts("", "")), "StinkShot");
+        assert_eq!(expand_pattern("", &parts("", "")), "Stinkshot");
+        assert_eq!(expand_pattern("{title}", &parts("", "")), "Stinkshot");
         assert_eq!(expand_pattern("con", &parts("", "")), "con_");
         assert_eq!(expand_pattern("COM1", &parts("", "")), "COM1_");
         assert_eq!(expand_pattern("COM0", &parts("", "")), "COM0");

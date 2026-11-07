@@ -1,4 +1,4 @@
-//! File logger at `%APPDATA%\StinkShot\stinkshot.log` (`logger::path`, profile-aware), rotated to `stinkshot.log.1` at 5 MB.
+//! File logger at `%APPDATA%\Stinkshot\stinkshot.log` (`logger::path`, profile-aware), rotated to `stinkshot.log.1` at 5 MB.
 //! In debug builds with a console, warnings and errors are mirrored to stderr.
 
 use std::fs::{File, OpenOptions};
@@ -121,7 +121,7 @@ pub fn init() {
         default_hook(info);
     }));
     log::info!(
-        "StinkShot {} starting (pid {})",
+        "Stinkshot {} starting (pid {})",
         env!("CARGO_PKG_VERSION"),
         std::process::id()
     );

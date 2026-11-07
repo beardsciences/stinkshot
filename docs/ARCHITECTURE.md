@@ -1,4 +1,4 @@
-# StinkShot architecture
+# Stinkshot architecture
 
 Read `docs/BRIEF.md` first (what and why). Visual spec: `docs/design/*.dc.html` (HTML mockups
 of every surface; colors/sizes there are the source of truth, mirrored in
@@ -41,7 +41,7 @@ The public items in each crate's stub files are the contract. They compile today
   IO calls in non-test code. UI shows failures through `Command::Notify { error: true }`.
   Bodies are plain sentences (what happened, what to do) from `app/src/errors.rs`; the raw
   chain goes to the log only.
-- Logging: `log` macros; the app installs a file logger at `%APPDATA%\StinkShot\stinkshot.log`
+- Logging: `log` macros; the app installs a file logger at `%APPDATA%\Stinkshot\stinkshot.log`
   (rotated at 5 MB).
 - Threads: UI thread never does > ~8 ms of work. Capture flattening, OCR, encoding, history
   scans, thumbnails run on workers, posting results back through channels plus

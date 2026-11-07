@@ -52,7 +52,7 @@ impl Action {
             Action::Region => "Freeze the screen and drag a region.",
             Action::Window => "Capture the active window with rounded corners and alpha.",
             Action::Fullscreen => "Capture the monitor under the cursor.",
-            Action::Scrolling => "Select a region, StinkShot scrolls and stitches it.",
+            Action::Scrolling => "Select a region, Stinkshot scrolls and stitches it.",
             Action::Ocr => "Select a region and copy the recognized text.",
             Action::RepeatLast => "Capture the previous region again without selecting.",
             Action::RecordMp4 => "Select a region and record with hardware encoding.",

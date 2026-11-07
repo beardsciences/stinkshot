@@ -97,7 +97,7 @@ User report: with windows in the foreground, the overlay still highlighted eleme
 behind them. Causes found:
 
 1. The hover target came from `window_at(req.windows)`, and `visible_windows()` leaves out
-   untitled windows (context menus, popups, Electron/tool surfaces) and all of StinkShot's own
+   untitled windows (context menus, popups, Electron/tool surfaces) and all of Stinkshot's own
    windows. Hovering an open menu or the History/Settings window picked the window behind it.
 2. UIA element rects were clipped to their window only, so an element of a partly covered
    window was outlined right across the window on top of it (and children of scrolled lists

@@ -1,4 +1,4 @@
-# StinkShot brief
+# Stinkshot brief
 
 A modern, local-first screenshot and screen-recording tool for Windows. Replaces Greenshot
 (feels legacy: dated look, clunky editor, too many clicks, bad mixed-DPI behavior) and
@@ -11,7 +11,7 @@ Decided Nov 6 2026 through a Q&A session. Everything below is in scope for the f
 - Windows only (Windows 11 primary). Uses Windows APIs directly.
 - Rust + native Win32 via `windows-rs`. Direct2D / DirectComposition (or wgpu) for the overlay.
 - Toolchain: rustc 1.95 stable-x86_64-pc-windows-msvc, MSVC 14.44 BuildTools.
-- Portable single exe. Config in `%APPDATA%\StinkShot\config.toml`; the settings UI writes the
+- Portable single exe. Config in `%APPDATA%\Stinkshot\config.toml`; the settings UI writes the
   same file. Optional start-with-Windows toggle.
 - Look: clean native Fluent / Windows 11 (Mica, rounded, dark and light). The humor lives only
   in the name and maybe the icon.
@@ -64,7 +64,7 @@ Decided Nov 6 2026 through a Q&A session. Everything below is in scope for the f
 
 ## Scrolling capture
 
-- Auto-scroll + stitch: select region, StinkShot sends scroll input and stitches frames by
+- Auto-scroll + stitch: select region, Stinkshot sends scroll input and stitches frames by
   image matching. Handle sticky headers/footers as well as practical.
 
 ## OCR
@@ -101,5 +101,5 @@ Decided Nov 6 2026 through a Q&A session. Everything below is in scope for the f
 
 ## Defaults chosen without asking (change freely)
 
-- Save format PNG; JPEG/WebP selectable. Filename pattern `StinkShot_{yyyy-MM-dd_HH-mm-ss}`.
+- Save format PNG; JPEG/WebP selectable. Filename pattern `Stinkshot_{yyyy-MM-dd_HH-mm-ss}`.
 - Project lives at `C:\dev\stinkshot`.

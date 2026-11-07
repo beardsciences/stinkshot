@@ -207,7 +207,7 @@ fn main() -> anyhow::Result<()> {
     let t = std::time::Instant::now();
     let img = capture::capture_rect(rect, false)?;
     println!(
-        "capture_rect (StinkShot)  avg {:?}  {:?}",
+        "capture_rect (Stinkshot)  avg {:?}  {:?}",
         avg(&img),
         t.elapsed()
     );
@@ -236,7 +236,7 @@ fn main() -> anyhow::Result<()> {
         );
         std::thread::sleep(std::time::Duration::from_millis(300));
     }
-    // A process can hold one duplication per output; free StinkShot's before probing.
+    // A process can hold one duplication per output; free Stinkshot's before probing.
     capture::release_cached_capture();
 
     match dup_sample(rect, &[DXGI_FORMAT_B8G8R8A8_UNORM]) {

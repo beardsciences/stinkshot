@@ -196,7 +196,7 @@ fn job_inner(
             e2.notify(
                 "Something Went Wrong",
                 format!(
-                    "StinkShot hit an internal error and stopped that task. Try again. {}",
+                    "Stinkshot hit an internal error and stopped that task. Try again. {}",
                     errors::LOG_HINT
                 ),
                 true,
@@ -385,7 +385,7 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
                 .as_ref()
                 .and_then(|p| p.file_stem())
                 .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "StinkShot".to_string());
+                .unwrap_or_else(|| "Stinkshot".to_string());
             let start_dir = LAST_SAVE_DIR
                 .lock()
                 .ok()
@@ -1048,7 +1048,7 @@ pub fn delete_item(env: &Env, id: ItemId) {
             let body = report(
                 "history delete",
                 &e,
-                "The file is in the Recycle Bin, but History could not forget it. Restart StinkShot to refresh History.",
+                "The file is in the Recycle Bin, but History could not forget it. Restart Stinkshot to refresh History.",
             );
             env.notify("Could Not Delete", body, true);
         }
@@ -1083,7 +1083,7 @@ fn with_item_job(
             let body = report(
                 name,
                 &e,
-                "The history index could not be read. Restart StinkShot and try again.",
+                "The history index could not be read. Restart Stinkshot and try again.",
             );
             env.notify("Could Not Read History", body, true)
         }

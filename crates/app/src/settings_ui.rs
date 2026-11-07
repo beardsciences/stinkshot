@@ -331,7 +331,7 @@ impl SettingsWindow {
 
 impl Surface for SettingsWindow {
     fn title(&self) -> String {
-        "StinkShot Settings".into()
+        "Stinkshot Settings".into()
     }
 
     fn viewport_builder(&self, _shared: &Shared) -> egui::ViewportBuilder {
@@ -725,7 +725,7 @@ impl SettingsWindow {
         toggle_row(
             ui,
             "Start with Windows",
-            "Launch StinkShot to the tray when you sign in.",
+            "Launch Stinkshot to the tray when you sign in.",
             &mut g.start_with_windows,
         );
         widgets::setting_row(
@@ -815,7 +815,7 @@ impl SettingsWindow {
         toggle_row(
             ui,
             "Take Over PrintScreen",
-            "Replace the Windows Snipping Tool shortcut with StinkShot's region capture.",
+            "Replace the Windows Snipping Tool shortcut with Stinkshot's region capture.",
             &mut shared.config.hotkeys.take_over_printscreen,
         );
         if !self.hotkey_errors.is_empty() {
@@ -1064,7 +1064,7 @@ impl SettingsWindow {
                     "pattern",
                     &c.filename_pattern,
                     260.0,
-                    "StinkShot_{yyyy}-{MM}-{dd}",
+                    "Stinkshot_{yyyy}-{MM}-{dd}",
                 ) {
                     let t = t.trim().to_string();
                     c.filename_pattern = if t.is_empty() {
@@ -1515,7 +1515,7 @@ impl SettingsWindow {
             accent,
             Icon::Shield,
             "Your Captures Never Leave This PC",
-            "StinkShot has no upload targets, no accounts and no telemetry. OCR runs on Windows' built-in engine, offline. The only network request it can make is the update check below, and it is off until you turn it on.",
+            "Stinkshot has no upload targets, no accounts and no telemetry. OCR runs on Windows' built-in engine, offline. The only network request it can make is the update check below, and it is off until you turn it on.",
         );
         ui.add_space(2.0);
         let enabled = shared.config.privacy.check_for_updates;
@@ -1608,7 +1608,7 @@ impl SettingsWindow {
         ui.painter().text(
             r.min + vec2(92.0, 24.0),
             Align2::LEFT_TOP,
-            "StinkShot",
+            "Stinkshot",
             theme::semibold(20.0),
             p.text,
         );

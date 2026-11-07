@@ -1,4 +1,4 @@
-//! `%APPDATA%\StinkShot\config.toml`. Every field has a serde default so old or partial
+//! `%APPDATA%\Stinkshot\config.toml`. Every field has a serde default so old or partial
 //! files always load. Unknown keys are ignored. The settings UI edits this struct and calls
 //! `save`; nothing else writes the file.
 
@@ -110,7 +110,7 @@ pub struct Recording {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HistoryCfg {
-    /// Empty = `%USERPROFILE%\Pictures\StinkShot`.
+    /// Empty = `%USERPROFILE%\Pictures\Stinkshot`.
     pub folder: String,
     pub ocr_index: bool,
     /// 0 = keep forever.
@@ -174,7 +174,7 @@ impl Default for Capture {
             window_padding_color: "#5b7fa8".into(),
             format: ImageFormat::Png,
             jpeg_quality: 90,
-            filename_pattern: "StinkShot_{yyyy}-{MM}-{dd}_{HH}-{mm}-{ss}".into(),
+            filename_pattern: "Stinkshot_{yyyy}-{MM}-{dd}_{HH}-{mm}-{ss}".into(),
             scroll_max_height: 30000,
             scroll_delay_ms: 120,
             last_region: None,
@@ -235,7 +235,7 @@ impl Default for HistoryCfg {
 }
 
 /// Development profile: when `STINKSHOT_PROFILE=<name>` is set, the app uses
-/// `%APPDATA%\StinkShot-<name>`, `Pictures\StinkShot-<name>`, and its own single-instance
+/// `%APPDATA%\Stinkshot-<name>`, `Pictures\Stinkshot-<name>`, and its own single-instance
 /// mutex and IPC window, so a dev build can run beside the user's real instance without
 /// touching its config or history. Returns "" (normal) or "-<name>" (ASCII alnum, '-', '_').
 pub fn profile_suffix() -> String {
@@ -252,15 +252,18 @@ pub fn profile_suffix() -> String {
         .unwrap_or_default()
 }
 
+/// The default `capture.filename_pattern` written by builds that spelled the name "StinkShot".
+const LEGACY_FILENAME_PATTERN: &str = "StinkShot_{yyyy}-{MM}-{dd}_{HH}-{mm}-{ss}";
+
 impl Config {
-    /// `%APPDATA%\StinkShot` (plus the dev profile suffix, see `profile_suffix`).
+    /// `%APPDATA%\Stinkshot` (plus the dev profile suffix, see `profile_suffix`).
     pub fn dir() -> PathBuf {
         let base = std::env::var_os("APPDATA")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
             .or_else(|| directories::BaseDirs::new().map(|d| d.config_dir().to_path_buf()))
             .unwrap_or_else(|| PathBuf::from("."));
-        base.join(format!("StinkShot{}", profile_suffix()))
+        base.join(format!("Stinkshot{}", profile_suffix()))
     }
     pub fn path() -> PathBuf {
         Self::dir().join("config.toml")
@@ -319,7 +322,11 @@ impl Config {
     /// Clamp values that would break callers (hand-edited files).
     fn normalize(&mut self) {
         self.capture.jpeg_quality = self.capture.jpeg_quality.clamp(1, 100);
-        if self.capture.filename_pattern.trim().is_empty() {
+        // Empty, or the untouched default from before the "Stinkshot" spelling (Nov 2026):
+        // both become the current default. A customized pattern is left alone.
+        if self.capture.filename_pattern.trim().is_empty()
+            || self.capture.filename_pattern == LEGACY_FILENAME_PATTERN
+        {
             self.capture.filename_pattern = Capture::default().filename_pattern;
         }
         if !(self.editor.stroke_width.is_finite() && self.editor.stroke_width > 0.0) {
@@ -362,7 +369,7 @@ impl Config {
             .or_else(|| directories::UserDirs::new().map(|d| d.home_dir().to_path_buf()))
             .unwrap_or_else(|| PathBuf::from("."));
         home.join("Pictures")
-            .join(format!("StinkShot{}", profile_suffix()))
+            .join(format!("Stinkshot{}", profile_suffix()))
     }
 }
 
@@ -588,11 +595,33 @@ open_editor_after_capture = true
     }
 
     #[test]
+    fn legacy_default_filename_pattern_is_respelled() {
+        let d = tmp("legacy_pattern");
+        let p = d.join("config.toml");
+        let text = format!("[capture]\nfilename_pattern = \"{LEGACY_FILENAME_PATTERN}\"\n");
+        std::fs::write(&p, text).unwrap();
+        let cfg = Config::load_from(&p).unwrap();
+        assert_eq!(
+            cfg.capture.filename_pattern,
+            Capture::default().filename_pattern
+        );
+        assert!(cfg.capture.filename_pattern.starts_with("Stinkshot_"));
+        // A pattern the user changed keeps its spelling.
+        let text = "[capture]\nfilename_pattern = \"StinkShot_{title}\"\n";
+        std::fs::write(&p, text).unwrap();
+        assert_eq!(
+            Config::load_from(&p).unwrap().capture.filename_pattern,
+            "StinkShot_{title}"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn history_folder_default_and_custom() {
         let mut cfg = Config::default();
         let def = cfg.history_folder();
         assert!(
-            def.ends_with("Pictures/StinkShot") || def.ends_with("Pictures\\StinkShot"),
+            def.ends_with("Pictures/Stinkshot") || def.ends_with("Pictures\\Stinkshot"),
             "{def:?}"
         );
         cfg.history.folder = "D:\\Shots".into();
@@ -615,7 +644,7 @@ open_editor_after_capture = true
 
     #[test]
     fn config_dir_ends_with_app_name() {
-        assert!(Config::dir().ends_with("StinkShot"));
+        assert!(Config::dir().ends_with("Stinkshot"));
         assert!(Config::path().ends_with("config.toml"));
     }
 

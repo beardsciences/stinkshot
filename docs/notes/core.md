@@ -7,7 +7,7 @@ All `todo!()` bodies in `crates/core` are implemented. `cargo test -p stinkshot-
 
 - `image`: PNG / JPEG / lossless WebP encode, decode, `save` (atomic temp + rename), `thumbnail`
   (Lanczos3, premultiplied when alpha is present, never upscales). JPEG composites over white.
-- `config`: `dir()` (`%APPDATA%\StinkShot`), `load()` (writes defaults when missing, backs up a
+- `config`: `dir()` (`%APPDATA%\Stinkshot`), `load()` (writes defaults when missing, backs up a
   malformed file as `config.toml.bad-<yyyymmdd-hhmmss>` then writes fresh defaults), `load_from`,
   atomic `save_to`, `history_folder()`, `parse_hex_color`.
 - `naming`: all tokens, `sanitize`, `unique_path`.
@@ -66,7 +66,7 @@ All `todo!()` bodies in `crates/core` are implemented. `cargo test -p stinkshot-
 - **Naming**: unknown or unterminated `{tokens}` are kept literally; `{title}` is sanitized then
   cut to 40 chars; `{app}` has `.exe` stripped; the final stem is sanitized, capped at 150 chars,
   and reserved device names (`CON`, `NUL`, `COM1`...) get a trailing `_`; an empty result becomes
-  `StinkShot`.
+  `Stinkshot`.
 
 ## Contract changes (additive)
 
@@ -107,7 +107,7 @@ None.
    confirm it cannot be read at 400% zoom, in the flattened PNG and in the JPEG/WebP encodes.
 4. Window fx on a real WGC window capture: rounded corner radius 8 at 100/125/150% scale, shadow
    on a dark and a light wallpaper, padded background.
-5. Config: delete `%APPDATA%\StinkShot\config.toml` and call `Config::load()` (defaults are
+5. Config: delete `%APPDATA%\Stinkshot\config.toml` and call `Config::load()` (defaults are
    written); corrupt the file and confirm a `.bad-<timestamp>` copy appears next to it.
 6. Open a saved capture's sidecar from a path on a mapped/network drive and on a path with
    non-ASCII characters.

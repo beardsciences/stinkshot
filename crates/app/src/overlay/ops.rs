@@ -274,7 +274,7 @@ impl Overlay {
                 log::error!("overlay finish thread: {e}");
                 shared.outbox.push(Command::Notify {
                     title: "Could Not Finish Capture".into(),
-                    body: "StinkShot could not start the final render. Press Enter to try again."
+                    body: "Stinkshot could not start the final render. Press Enter to try again."
                         .into(),
                     error: true,
                 })

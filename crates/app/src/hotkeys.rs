@@ -144,7 +144,7 @@ impl Hotkeys {
             Err(e) => {
                 log::error!("global hotkey manager failed: {e}");
                 errors.push(
-                    "Global hotkeys are unavailable. Use the tray icon, or restart StinkShot."
+                    "Global hotkeys are unavailable. Use the tray icon, or restart Stinkshot."
                         .to_string(),
                 );
                 None
@@ -177,7 +177,7 @@ impl Hotkeys {
                 Err(e) => {
                     log::warn!("PrintScreen takeover change failed: {e:#}");
                     errors.push(
-                        "Windows did not let StinkShot take over PrtSc, so it may still open the Snipping Tool. Turn off Take Over PrintScreen or try again."
+                        "Windows did not let Stinkshot take over PrtSc, so it may still open the Snipping Tool. Turn off Take Over PrintScreen or try again."
                             .to_string(),
                     );
                 }

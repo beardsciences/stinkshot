@@ -1,4 +1,4 @@
-//! Tray icon + menu (docs/design/Tray.dc.html): header "StinkShot <version> · offline",
+//! Tray icon + menu (docs/design/Tray.dc.html): header "Stinkshot <version> · offline",
 //! capture modes with their hotkey labels, record MP4/GIF, History, Settings, Quit.
 //! Left click = region capture, started on the button-up with no delay; double click =
 //! History (the overlay the first click opened is dropped, see `Command::TrayDoubleClick`
@@ -57,7 +57,7 @@ fn header_text(config: &Config) -> String {
     } else {
         "Offline"
     };
-    format!("StinkShot {} \u{b7} {}", env!("CARGO_PKG_VERSION"), state)
+    format!("Stinkshot {} \u{b7} {}", env!("CARGO_PKG_VERSION"), state)
 }
 
 fn entry_text(label: &str, hotkey: &str) -> String {
@@ -120,7 +120,7 @@ impl Tray {
         let icon = TrayIconBuilder::new()
             .with_menu(Box::new(menu.clone()))
             .with_menu_on_left_click(false)
-            .with_tooltip("StinkShot")
+            .with_tooltip("Stinkshot")
             .with_icon(make_icon(dpi_size, accent)?)
             .build()
             .context("create tray icon")?;
@@ -298,6 +298,6 @@ mod tests {
     fn header_mentions_offline_by_default() {
         let cfg = Config::default();
         assert!(header_text(&cfg).ends_with("Offline"));
-        assert!(header_text(&cfg).starts_with("StinkShot "));
+        assert!(header_text(&cfg).starts_with("Stinkshot "));
     }
 }

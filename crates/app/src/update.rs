@@ -1,7 +1,7 @@
-//! The ONLY network code in StinkShot. Runs only when `config.privacy.check_for_updates`
+//! The ONLY network code in Stinkshot. Runs only when `config.privacy.check_for_updates`
 //! is on, at most once per 24 h, on a worker thread. GETs the latest release tag from the
 //! Forgejo API and compares with CARGO_PKG_VERSION. Sends no identifying data beyond what
-//! any HTTPS GET carries (User-Agent "StinkShot/<version>"). Never downloads binaries:
+//! any HTTPS GET carries (User-Agent "Stinkshot/<version>"). Never downloads binaries:
 //! the toast links to the release page.
 
 use std::time::Duration;
@@ -21,7 +21,7 @@ pub struct Release {
 pub fn check() -> anyhow::Result<Option<Release>> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(10)))
-        .user_agent(format!("StinkShot/{}", env!("CARGO_PKG_VERSION")))
+        .user_agent(format!("Stinkshot/{}", env!("CARGO_PKG_VERSION")))
         .build()
         .into();
     let mut resp = agent

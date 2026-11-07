@@ -189,7 +189,7 @@ about 5 s here because of the WGC hang described below).
 - [ ] OCR with a non-English profile language and with no OCR language installed (error text).
 - [ ] `scroll_at` against a browser page: scrolls, cursor returns to its position.
 - [ ] `InputHook`: click/key events while a game or elevated window has focus (low-level hooks
-      do not see higher-integrity input unless StinkShot is elevated).
+      do not see higher-integrity input unless Stinkshot is elevated).
 - [ ] PrintScreen takeover: toggle on, press PrintScreen (no Snipping Tool), toggle off and
       confirm the original value returned.
 - [ ] Autostart toggle shows up in Task Manager > Startup; second launch forwards its args to the
