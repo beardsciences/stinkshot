@@ -185,7 +185,7 @@ fn days_label(days: u32) -> String {
 
 fn gb_label(gb: f32) -> String {
     if gb <= 0.0 {
-        "No cap".into()
+        "No Cap".into()
     } else {
         format!("{gb:.1} GB")
     }
@@ -889,7 +889,7 @@ impl SettingsWindow {
                         clear = true;
                     }
                     let label = if capturing {
-                        "Press keys\u{2026}".to_string()
+                        "Press Keys\u{2026}".to_string()
                     } else {
                         display(&current)
                     };
@@ -1431,7 +1431,7 @@ impl SettingsWindow {
         }
         if open && let Err(e) = stinkshot_platform::system::open_path(&shown_folder) {
             shared.outbox.push(Command::Notify {
-                title: "Could not open folder".into(),
+                title: "Could Not Open Folder".into(),
                 body: e.to_string(),
                 error: true,
             });
@@ -1524,7 +1524,7 @@ impl SettingsWindow {
             p,
             accent,
             Icon::Shield,
-            "Your captures never leave this PC",
+            "Your Captures Never Leave This PC",
             "StinkShot has no upload targets, no accounts and no telemetry. OCR runs on Windows' built-in engine, offline. The only network request it can make is the update check below, and it is off until you turn it on.",
         );
         ui.add_space(2.0);
@@ -1579,11 +1579,11 @@ impl SettingsWindow {
                     .size(12.0)
                     .color(p.text_tertiary),
             );
-            if ui.link(RichText::new("Open file").size(12.0)).clicked()
+            if ui.link(RichText::new("Open File").size(12.0)).clicked()
                 && let Err(e) = stinkshot_platform::system::open_path(&Config::path())
             {
                 shared.outbox.push(Command::Notify {
-                    title: "Could not open file".into(),
+                    title: "Could Not Open File".into(),
                     body: e.to_string(),
                     error: true,
                 });
@@ -1641,7 +1641,7 @@ impl SettingsWindow {
         let mut copy = false;
         widgets::setting_row(ui, "Source Code", REPO_URL, |ui| {
             ui.horizontal(|ui| {
-                if widgets::button(ui, if copied { "Copied" } else { "Copy link" }).clicked() {
+                if widgets::button(ui, if copied { "Copied" } else { "Copy Link" }).clicked() {
                     copy = true;
                 }
                 if widgets::button(ui, "Open").clicked() {
@@ -1653,7 +1653,7 @@ impl SettingsWindow {
             && let Err(e) = stinkshot_platform::system::open_path(std::path::Path::new(REPO_URL))
         {
             shared.outbox.push(Command::Notify {
-                title: "Could not open link".into(),
+                title: "Could Not Open Link".into(),
                 body: e.to_string(),
                 error: true,
             });
@@ -1662,7 +1662,7 @@ impl SettingsWindow {
             match stinkshot_platform::clipboard::set_text(REPO_URL) {
                 Ok(()) => self.copied_url_at = Some(Instant::now()),
                 Err(e) => shared.outbox.push(Command::Notify {
-                    title: "Could not copy".into(),
+                    title: "Could Not Copy".into(),
                     body: e.to_string(),
                     error: true,
                 }),
@@ -1677,7 +1677,7 @@ impl SettingsWindow {
             "Local only: no uploads, no accounts, no telemetry. The single optional network call is the update check.",
             |ui| {
                 ui.label(
-                    RichText::new("Offline by default")
+                    RichText::new("Offline by Default")
                         .size(13.0)
                         .color(p.text_secondary),
                 );
@@ -1760,7 +1760,7 @@ mod tests {
         assert_eq!(days_label(0), "Forever");
         assert_eq!(days_label(1), "1 day");
         assert_eq!(days_label(90), "90 days");
-        assert_eq!(gb_label(0.0), "No cap");
+        assert_eq!(gb_label(0.0), "No Cap");
         assert_eq!(gb_label(5.0), "5.0 GB");
     }
 

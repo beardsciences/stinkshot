@@ -497,14 +497,14 @@ impl Shell {
         if !shell.hotkey_errors.is_empty() {
             let body = shell.hotkey_errors.join("\n");
             shell.pending.push_back(Command::Notify {
-                title: "Some hotkeys are not active".into(),
+                title: "Some Hotkeys Are Not Active".into(),
                 body,
                 error: true,
             });
         }
         if shell.tray.is_none() {
             shell.pending.push_back(Command::Notify {
-                title: "Tray icon unavailable".into(),
+                title: "Tray Icon Unavailable".into(),
                 body: "StinkShot is running but could not create its tray icon. Use the hotkeys or the command line.".into(),
                 error: true,
             });
@@ -1079,13 +1079,13 @@ impl Shell {
     fn record_summary(&self, gif: bool) -> String {
         let rc = &self.shared.config.recording;
         let audio = match (rc.microphone, rc.system_audio) {
-            (true, true) => "mic + system",
-            (true, false) => "mic",
-            (false, true) => "system audio",
-            (false, false) => "no audio",
+            (true, true) => "Mic + System",
+            (true, false) => "Mic",
+            (false, true) => "System Audio",
+            (false, false) => "No Audio",
         };
         format!(
-            "{} \u{b7} H.264 \u{b7} {} fps \u{b7} {}",
+            "{} \u{b7} H.264 \u{b7} {} FPS \u{b7} {}",
             if gif { "GIF" } else { "MP4" },
             rc.fps,
             audio
@@ -1433,7 +1433,7 @@ impl Shell {
         } else if gif_only {
             "GIF saved".to_string()
         } else {
-            "Recording saved".to_string()
+            "Recording Saved".to_string()
         };
         let body = format!(
             "{} \u{b7} {} x {} \u{b7} {}",
@@ -1460,7 +1460,7 @@ impl Shell {
                 .as_ref()
                 .and_then(|p| p.file_stem())
                 .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "Pinned capture".into());
+                .unwrap_or_else(|| "Pinned Capture".into());
             self.add_pin(img, title, s.item, Some(s.rect));
         }
         if !self.shared.config.general.show_toast {
@@ -1472,7 +1472,7 @@ impl Shell {
             s.mode.to_string()
         };
         let (title, body) = if let Some(text) = &s.copied_text {
-            ("Text copied".to_string(), workers::preview(text, 120))
+            ("Text Copied".to_string(), workers::preview(text, 120))
         } else if s.action == FinishAction::CopyText {
             return; // the worker already explained why nothing was copied
         } else {

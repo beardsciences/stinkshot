@@ -271,7 +271,7 @@ impl Overlay {
                 })
             }
             Err(e) => shared.outbox.push(Command::Notify {
-                title: "Could not finish capture".into(),
+                title: "Could Not Finish Capture".into(),
                 body: format!("{e}"),
                 error: true,
             }),
@@ -289,7 +289,7 @@ impl Overlay {
             Ok(None) | Err(TryRecvError::Disconnected) => {
                 self.finishing = None;
                 shared.outbox.push(Command::Notify {
-                    title: "Could not render annotations".into(),
+                    title: "Could Not Render Annotations".into(),
                     body: "The capture was not saved. Try again, or remove the last annotation."
                         .into(),
                     error: true,

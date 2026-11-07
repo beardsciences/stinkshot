@@ -306,38 +306,38 @@ impl Overlay {
     fn hint_items(&self) -> Vec<(&'static str, &'static str)> {
         if self.edit.is_some() {
             return vec![
-                ("Esc", "done"),
-                ("Ctrl+Enter", "done"),
-                ("Enter", "new line"),
+                ("Esc", "Done"),
+                ("Ctrl+Enter", "Done"),
+                ("Enter", "New Line"),
             ];
         }
         match (self.sel.is_some(), self.kind) {
             (false, Kind::Select(_)) => vec![
-                ("Drag", "region"),
-                ("Click", "window or element"),
-                ("Wheel", "level"),
-                ("Esc", "cancel"),
+                ("Drag", "Region"),
+                ("Click", "Window or Element"),
+                ("Wheel", "Level"),
+                ("Esc", "Cancel"),
             ],
             (false, _) => vec![
-                ("Drag", "region"),
-                ("Click", "window or element"),
-                ("Space", "move"),
-                ("Arrows", "nudge"),
-                ("Esc", "cancel"),
+                ("Drag", "Region"),
+                ("Click", "Window or Element"),
+                ("Space", "Move"),
+                ("Arrows", "Nudge"),
+                ("Esc", "Cancel"),
             ],
             (true, Kind::Annotate) => vec![
-                ("Enter", "copy"),
-                ("Ctrl+S", "save"),
-                ("Ctrl+Z", "undo"),
-                ("Del", "delete"),
-                ("Esc", "cancel"),
+                ("Enter", "Copy"),
+                ("Ctrl+S", "Save"),
+                ("Ctrl+Z", "Undo"),
+                ("Del", "Delete"),
+                ("Esc", "Cancel"),
             ],
             (true, _) => vec![
-                ("Enter", "copy"),
-                ("Ctrl+S", "save"),
-                ("Ctrl+Z", "undo"),
-                ("Space", "move"),
-                ("Esc", "cancel"),
+                ("Enter", "Copy"),
+                ("Ctrl+S", "Save"),
+                ("Ctrl+Z", "Undo"),
+                ("Space", "Move"),
+                ("Esc", "Cancel"),
             ],
         }
     }

@@ -791,12 +791,12 @@ impl Overlay {
         let hex = hover::hex_string(c);
         match clipboard::set_text(&hex) {
             Ok(()) => shared.outbox.push(Command::Notify {
-                title: "Color copied".into(),
+                title: "Color Copied".into(),
                 body: hex,
                 error: false,
             }),
             Err(e) => shared.outbox.push(Command::Notify {
-                title: "Could not copy color".into(),
+                title: "Could Not Copy Color".into(),
                 body: format!("{e:#}"),
                 error: true,
             }),

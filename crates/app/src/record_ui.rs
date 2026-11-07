@@ -239,7 +239,7 @@ impl Surface for Countdown {
             painter.text(
                 pos2(rect.center().x, rect.bottom() - 14.0),
                 Align2::CENTER_CENTER,
-                "Esc to cancel",
+                "Esc to Cancel",
                 uc::font(12.0),
                 p.text_secondary,
             );
@@ -493,9 +493,9 @@ impl Surface for RecordHud {
             // Toggles.
             let items: [(Icon, &str, &mut bool); 4] = [
                 (Icon::Mic, "Microphone", &mut toggles.mic),
-                (Icon::Speaker, "System audio", &mut toggles.system),
+                (Icon::Speaker, "System Audio", &mut toggles.system),
                 (Icon::Webcam, "Webcam", &mut toggles.webcam),
-                (Icon::Clicks, "Show clicks and keys", &mut toggles.overlays),
+                (Icon::Clicks, "Show Clicks and Keys", &mut toggles.overlays),
             ];
             for (icon, name, on) in items {
                 let r = btn(x);
@@ -535,7 +535,7 @@ impl Surface for RecordHud {
             // Summary / error line.
             let line_y = row.bottom() + 8.0;
             let (text, col) = match &error {
-                Some(e) => (format!("Recording error: {e}"), p.danger),
+                Some(e) => (format!("Recording Error: {e}"), p.danger),
                 None if dropped > 0 => (
                     format!("{summary} \u{b7} {dropped} dropped"),
                     p.text_secondary,
@@ -891,7 +891,7 @@ impl Surface for TrimWindow {
             painter.text(
                 inner.left_top() + vec2(0.0, 2.0),
                 Align2::LEFT_TOP,
-                "Trim recording",
+                "Trim Recording",
                 uc::font(14.0),
                 p.text,
             );
@@ -943,7 +943,7 @@ impl Surface for TrimWindow {
                 painter.text(
                     preview_area.center(),
                     Align2::CENTER_CENTER,
-                    "Loading preview",
+                    "Loading Preview",
                     uc::font(12.0),
                     p.text_tertiary,
                 );
@@ -998,7 +998,7 @@ impl Surface for TrimWindow {
                 painter.text(
                     strip.center(),
                     Align2::CENTER_CENTER,
-                    "Reading frames",
+                    "Reading Frames",
                     uc::font(12.0),
                     p.text_tertiary,
                 );
@@ -1240,7 +1240,7 @@ impl Surface for TrimWindow {
             let modal = egui::Modal::new(egui::Id::unique("trim_discard_modal")).show(ctx, |ui| {
                 ui.set_width(340.0);
                 ui.label(
-                    egui::RichText::new("Discard this recording?")
+                    egui::RichText::new("Discard This Recording?")
                         .size(15.0)
                         .color(p.text),
                 );
@@ -1259,7 +1259,7 @@ impl Surface for TrimWindow {
                         ui,
                         "keep",
                         r1,
-                        "Keep editing",
+                        "Keep Editing",
                         uc::BtnKind::Neutral,
                         true,
                         p,
@@ -1387,7 +1387,7 @@ impl Surface for ScrollHud {
             painter.text(
                 inner.left_top(),
                 Align2::LEFT_TOP,
-                format!("Stitching frame {frames}"),
+                format!("Stitching Frame {frames}"),
                 uc::font(13.0),
                 p.text,
             );
@@ -1434,7 +1434,7 @@ impl Surface for ScrollHud {
                 ui,
                 "scroll_stop",
                 b2,
-                "Stop here",
+                "Stop Here",
                 uc::BtnKind::Accent,
                 true,
                 p,

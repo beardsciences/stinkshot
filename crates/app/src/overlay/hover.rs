@@ -42,10 +42,10 @@ pub fn cycle_level(level: usize, wheel_delta_y: f32, max_level: usize) -> usize 
 
 pub fn purpose_label(p: RegionPurpose) -> &'static str {
     match p {
-        RegionPurpose::Ocr => "Select area to copy text",
-        RegionPurpose::Scrolling => "Select area to scroll-capture",
-        RegionPurpose::RecordMp4 => "Select area to record",
-        RegionPurpose::RecordGif => "Select area to record as GIF",
+        RegionPurpose::Ocr => "Select Area to Copy Text",
+        RegionPurpose::Scrolling => "Select Area to Scroll-Capture",
+        RegionPurpose::RecordMp4 => "Select Area to Record",
+        RegionPurpose::RecordGif => "Select Area to Record as GIF",
     }
 }
 
@@ -133,7 +133,7 @@ mod tests {
     fn labels_and_colors() {
         assert_eq!(
             purpose_label(RegionPurpose::RecordMp4),
-            "Select area to record"
+            "Select Area to Record"
         );
         assert_eq!(hex_string([0xce, 0x91, 0x78]), "#CE9178");
         assert_eq!(contrast_text([255, 255, 255, 255]), [0x14, 0x14, 0x14]);

@@ -257,7 +257,7 @@ impl Surface for Pin {
                             error: false,
                         },
                         Err(e) => Command::Notify {
-                            title: "Could not copy".into(),
+                            title: "Could Not Copy".into(),
                             body: e,
                             error: true,
                         },
@@ -364,19 +364,19 @@ impl Surface for Pin {
                 edit = true;
             }
             bg.context_menu(|ui| {
-                if ui.button("Copy image").clicked() {
+                if ui.button("Copy Image").clicked() {
                     want_copy = true;
                     ui.close();
                 }
-                if item.is_some() && ui.button("Open in editor").clicked() {
+                if item.is_some() && ui.button("Open in Editor").clicked() {
                     edit = true;
                     ui.close();
                 }
-                if ui.button("Reset zoom to 100%").clicked() {
+                if ui.button("Reset Zoom to 100%").clicked() {
                     reset_zoom = true;
                     ui.close();
                 }
-                if ui.button("Close pin").clicked() {
+                if ui.button("Close Pin").clicked() {
                     close = true;
                     ui.close();
                 }
@@ -453,7 +453,7 @@ impl Surface for Pin {
                                     Icon::Close,
                                     icon_col,
                                 );
-                                if resp.on_hover_text("Close pin (Esc)").clicked() {
+                                if resp.on_hover_text("Close Pin (Esc)").clicked() {
                                     close = true;
                                 }
                             }

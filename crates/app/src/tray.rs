@@ -56,9 +56,9 @@ const ID_UPDATE: &str = "update";
 
 fn header_text(config: &Config) -> String {
     let state = if config.privacy.check_for_updates {
-        "update check on"
+        "Update Check On"
     } else {
-        "offline"
+        "Offline"
     };
     format!("StinkShot {} \u{b7} {}", env!("CARGO_PKG_VERSION"), state)
 }
@@ -219,7 +219,7 @@ impl Tray {
         if let Some(r) = release {
             let item = MenuItem::with_id(
                 ID_UPDATE,
-                format!("Update available: {}", r.tag),
+                format!("Update Available: {}", r.tag),
                 !r.url.is_empty(),
                 None,
             );
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn header_mentions_offline_by_default() {
         let cfg = Config::default();
-        assert!(header_text(&cfg).ends_with("offline"));
+        assert!(header_text(&cfg).ends_with("Offline"));
         assert!(header_text(&cfg).starts_with("StinkShot "));
     }
 }

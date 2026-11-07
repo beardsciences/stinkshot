@@ -164,7 +164,7 @@ pub fn tool_bar(
                             .corner_radius(6)
                             .min_size(Vec2::new(46.0, 34.0)),
                     );
-                    let wb = wb.on_hover_text("Stroke width ([ and ])");
+                    let wb = wb.on_hover_text("Stroke Width ([ and ])");
                     width_btn = wb.rect;
                     if wb.clicked() {
                         out.push(UiAction::TogglePopup(Popup::Width));

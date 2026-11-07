@@ -1013,7 +1013,7 @@ impl Surface for HistoryWindow {
                 ui,
                 &mut y,
                 36.0,
-                "All captures",
+                "All Captures",
                 Some(stats.count),
                 filter == Filter::All,
                 "all".into(),
@@ -1046,7 +1046,7 @@ impl Surface for HistoryWindow {
             ui.painter().text(
                 pos2(sidebar.left() + 22.0, y),
                 Align2::LEFT_TOP,
-                "Source app",
+                "Source App",
                 uc::font(12.0),
                 p.text_tertiary,
             );
@@ -1178,7 +1178,7 @@ impl Surface for HistoryWindow {
                         egui::TextEdit::singleline(search)
                             .id(search_id)
                             .frame(egui::Frame::NONE)
-                            .hint_text("Search captures")
+                            .hint_text("Search Captures")
                             .font(uc::font(14.0))
                             .desired_width(te_rect.width()),
                     )
@@ -1207,7 +1207,7 @@ impl Surface for HistoryWindow {
                     Icon::Close,
                     p.text_secondary,
                 );
-                if cresp.on_hover_text("Clear search").clicked() {
+                if cresp.on_hover_text("Clear Search").clicked() {
                     search.clear();
                     search_changed = true;
                 }
@@ -1243,7 +1243,7 @@ impl Surface for HistoryWindow {
                 ui,
                 "open_folder",
                 folder_rect,
-                "Open folder",
+                "Open Folder",
                 uc::BtnKind::Neutral,
                 true,
                 p,
@@ -1327,7 +1327,7 @@ impl Surface for HistoryWindow {
                 let (icon, title, body) = if total_empty {
                     (
                         Icon::History,
-                        "No captures yet".to_string(),
+                        "No Captures Yet".to_string(),
                         format!(
                             "Press {hotkey_hint} to capture a region. Everything you capture is saved here, with searchable text."
                         ),
@@ -1335,7 +1335,7 @@ impl Surface for HistoryWindow {
                 } else {
                     (
                         Icon::Search,
-                        "Nothing matches".to_string(),
+                        "Nothing Matches".to_string(),
                         "Try different words, another date range, or clear the filters."
                             .to_string(),
                     )
@@ -1386,7 +1386,7 @@ impl Surface for HistoryWindow {
                     ui,
                     "empty_clear",
                     b,
-                    "Clear filters",
+                    "Clear Filters",
                     uc::BtnKind::Neutral,
                     true,
                     p,
@@ -1666,7 +1666,7 @@ impl Surface for HistoryWindow {
         }
         if open_folder && let Err(e) = stinkshot_platform::system::open_path(&folder) {
             shared.outbox.push(Command::Notify {
-                title: "Could not open folder".into(),
+                title: "Could Not Open Folder".into(),
                 body: e.to_string(),
                 error: true,
             });
@@ -1696,7 +1696,7 @@ impl Surface for HistoryWindow {
                         egui::Modal::new(egui::Id::unique("hist_delete_modal")).show(ctx, |ui| {
                             ui.set_width(360.0);
                             ui.label(
-                                RichText::new("Delete this capture?")
+                                RichText::new("Delete This Capture?")
                                     .size(15.0)
                                     .color(p.text),
                             );
@@ -1809,7 +1809,7 @@ fn paint_card(
                 let label = match m.kind {
                     ItemKind::Video => "MP4",
                     ItemKind::Gif => "GIF",
-                    ItemKind::Image => "Preview unavailable",
+                    ItemKind::Image => "Preview Unavailable",
                 };
                 painter.text(
                     thumb.center() + vec2(0.0, 22.0),

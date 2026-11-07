@@ -802,11 +802,11 @@ pub fn copy_item_image(env: &Env, id: ItemId) {
                 ItemKind::Image => {
                     let img = Rgba::load(&meta.path)?;
                     clipboard::set_file_and_image(&meta.path, Some(&img))?;
-                    Ok("Image copied")
+                    Ok("Image Copied")
                 }
                 _ => {
                     clipboard::set_file_and_image(&meta.path, None)?;
-                    Ok("File copied")
+                    Ok("File Copied")
                 }
             }
         };

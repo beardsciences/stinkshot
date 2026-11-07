@@ -70,7 +70,7 @@ unsafe fn show(
         };
         dlg.SetFileTypeIndex(index)?;
         dlg.SetDefaultExtension(ext)?;
-        dlg.SetTitle(w!("Save capture as"))?;
+        dlg.SetTitle(w!("Save Capture As"))?;
         dlg.SetFileName(&HSTRING::from(default_stem))?;
         let opts = dlg.GetOptions()?;
         dlg.SetOptions(

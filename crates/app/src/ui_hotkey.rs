@@ -274,11 +274,11 @@ fn friendly_part(part: &str) -> String {
     }
 }
 
-/// "Control+Shift+KeyS" -> "Ctrl+Shift+S"; "" -> "Not set".
+/// "Control+Shift+KeyS" -> "Ctrl+Shift+S"; "" -> "Not Set".
 pub fn display(hotkey: &str) -> String {
     let t = hotkey.trim();
     if t.is_empty() {
-        return "Not set".into();
+        return "Not Set".into();
     }
     t.split('+')
         .map(|p| friendly_part(p.trim()))
@@ -524,7 +524,7 @@ mod tests {
         assert_eq!(display("Control+Alt+Digit5"), "Ctrl+Alt+5");
         assert_eq!(display("Super+ArrowUp"), "Win+Up");
         assert_eq!(display("F12"), "F12");
-        assert_eq!(display(""), "Not set");
+        assert_eq!(display(""), "Not Set");
     }
 
     #[test]
@@ -561,7 +561,7 @@ mod tests {
             &d.record_gif,
         ] {
             assert!(HotKey::try_from(s.as_str()).is_ok());
-            assert_ne!(display(s), "Not set");
+            assert_ne!(display(s), "Not Set");
         }
     }
 }
