@@ -31,6 +31,19 @@ pub enum UiAction {
     ExactSize(i32, i32),
     CloseExact,
     TogglePopup(Popup),
+    /// The toolbar grip (see `toolbar.rs`). Positions are egui points.
+    Grip(GripEvent),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GripEvent {
+    /// Drag started with the pointer at this position.
+    Start(Pos2),
+    /// Pointer moved to this position while dragging.
+    Move(Pos2),
+    End,
+    /// Double click: dock under the selection again.
+    Redock,
 }
 
 pub const WIDTH_PRESETS: [f32; 8] = [1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0];
@@ -70,18 +83,70 @@ pub struct BarLayout {
     pub width_btn: Rect,
 }
 
-fn bar_frame(pal: &Palette) -> Frame {
+/// `lifted`: the toolbar is being dragged by its grip (deeper, softer shadow).
+fn bar_frame(pal: &Palette, lifted: bool) -> Frame {
+    let shadow = if lifted {
+        egui::epaint::Shadow {
+            offset: [0, 14],
+            blur: 36,
+            spread: 2,
+            color: Color32::from_black_alpha(140),
+        }
+    } else {
+        egui::epaint::Shadow {
+            offset: [0, 8],
+            blur: 24,
+            spread: 0,
+            color: Color32::from_black_alpha(115),
+        }
+    };
     Frame::NONE
         .fill(pal.flyout.gamma_multiply(0.96))
         .stroke(egui::Stroke::new(1.0, pal.stroke))
         .corner_radius(10)
         .inner_margin(Margin::same(5))
-        .shadow(egui::epaint::Shadow {
-            offset: [0, 8],
-            blur: 24,
-            spread: 0,
-            color: Color32::from_black_alpha(115),
-        })
+        .shadow(shadow)
+}
+
+pub const GRIP_TIP: &str = "Drag to Move \u{b7} Double-Click to Dock";
+
+/// Dotted grip at the tool bar's leading edge: drag moves the whole toolbar, double click
+/// docks it under the selection again. Move cursor on hover and while dragging.
+fn grip(ui: &mut egui::Ui, pal: &Palette, lifted: bool, out: &mut Vec<UiAction>) {
+    let (r, resp) = ui.allocate_exact_size(Vec2::new(14.0, 34.0), Sense::click_and_drag());
+    let active = resp.hovered() || resp.dragged() || lifted;
+    if active {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
+    }
+    let alpha = if active { 0.75 } else { 0.4 };
+    let dot = pal.text.gamma_multiply(alpha);
+    // Two columns of three dots, centred.
+    for col in [-1.0f32, 1.0] {
+        for row in [-1.0f32, 0.0, 1.0] {
+            ui.painter().circle_filled(
+                Pos2::new(r.center().x + col * 2.5, r.center().y + row * 5.0),
+                1.25,
+                dot,
+            );
+        }
+    }
+    if resp.double_clicked() {
+        out.push(UiAction::Grip(GripEvent::Redock));
+    } else if resp.drag_started() {
+        if let Some(p) = resp.interact_pointer_pos() {
+            out.push(UiAction::Grip(GripEvent::Start(p)));
+        }
+    } else if resp.dragged()
+        && let Some(p) = resp.interact_pointer_pos()
+    {
+        out.push(UiAction::Grip(GripEvent::Move(p)));
+    }
+    if resp.drag_stopped() {
+        out.push(UiAction::Grip(GripEvent::End));
+    }
+    if !resp.dragged() {
+        resp.on_hover_text(GRIP_TIP);
+    }
 }
 
 fn separator(ui: &mut egui::Ui, pal: &Palette) {
@@ -96,13 +161,14 @@ fn separator(ui: &mut egui::Ui, pal: &Palette) {
     );
 }
 
-/// Tool bar: design order, a separator between groups, color swatch and width button.
+/// Tool bar: grip, design order, a separator between groups, color swatch and width
+/// button. `lifted` = the toolbar is being dragged.
 pub fn tool_bar(
     ctx: &Context,
     pos: Pos2,
     info: &BarInfo,
     pal: &Palette,
-    accent: Color32,
+    lifted: bool,
     out: &mut Vec<UiAction>,
 ) -> BarLayout {
     let mut color_btn = Rect::NOTHING;
@@ -112,9 +178,10 @@ pub fn tool_bar(
         .order(Order::Foreground)
         .fixed_pos(pos)
         .show(ctx, |ui| {
-            bar_frame(pal).show(ui, |ui| {
+            bar_frame(pal, lifted).show(ui, |ui| {
                 ui.spacing_mut().item_spacing = Vec2::new(2.0, 0.0);
                 ui.horizontal(|ui| {
+                    grip(ui, pal, lifted, out);
                     for (gi, group) in TOOL_GROUPS.iter().enumerate() {
                         if gi > 0 {
                             separator(ui, pal);
@@ -182,7 +249,6 @@ pub fn tool_bar(
                 });
             });
         });
-    let _ = accent;
     BarLayout {
         rect: resp.response.rect,
         color_btn,
@@ -197,13 +263,14 @@ pub fn action_bar(
     pos: Pos2,
     pal: &Palette,
     ocr: bool,
+    lifted: bool,
     out: &mut Vec<UiAction>,
 ) -> Rect {
     let resp = Area::new(Id::unique("stinkshot-ov-actions"))
         .order(Order::Foreground)
         .fixed_pos(pos)
         .show(ctx, |ui| {
-            bar_frame(pal).show(ui, |ui| {
+            bar_frame(pal, lifted).show(ui, |ui| {
                 ui.spacing_mut().item_spacing = Vec2::new(2.0, 0.0);
                 ui.horizontal(|ui| {
                     let ocr_tip = if ocr {
@@ -256,23 +323,25 @@ fn popup_area(
     add: impl FnOnce(&mut egui::Ui),
 ) {
     let below = anchor.bottom() + 8.0 + size_hint.y <= screen.bottom();
+    // Kept on the bar's monitor horizontally too (the bar can be dragged to an edge).
+    let x = super::toolbar::popup_x(
+        anchor.center().x,
+        size_hint.x + 10.0,
+        screen.left(),
+        screen.right(),
+        8.0,
+    );
     let (pos, pivot) = if below {
-        (
-            Pos2::new(anchor.center().x, anchor.bottom() + 8.0),
-            Align2::CENTER_TOP,
-        )
+        (Pos2::new(x, anchor.bottom() + 8.0), Align2::CENTER_TOP)
     } else {
-        (
-            Pos2::new(anchor.center().x, anchor.top() - 8.0),
-            Align2::CENTER_BOTTOM,
-        )
+        (Pos2::new(x, anchor.top() - 8.0), Align2::CENTER_BOTTOM)
     };
     Area::new(Id::unique(id))
         .order(Order::Foreground)
         .fixed_pos(pos)
         .pivot(pivot)
         .show(ctx, |ui| {
-            bar_frame(pal).show(ui, add);
+            bar_frame(pal, false).show(ui, add);
         });
 }
 

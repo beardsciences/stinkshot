@@ -191,3 +191,36 @@ stubs).
 10. Annotate mode (window capture, history Edit): image centered on the cursor monitor, large
     images scaled to fit, annotations editable, finishing with `editing` set overwrites.
 11. Large 2-4K selection with many shapes stays responsive while dragging (render is async).
+
+## Movable toolbar (Nov 6 2026)
+
+User request: the tool palette + action bar that appears with a selection (or in the editor)
+should be movable. The tool bar now starts with a dotted grip (two columns of three dots,
+`ui::grip`, tooltip "Drag to Move · Double-Click to Dock"). Dragging it moves both bars as one
+block; the cursor is the move cursor on hover and while dragging, and both bars get a deeper,
+softer "lifted" shadow while dragging (`bar_frame(pal, lifted)`).
+
+- Docked (default): placed by `selection::layout_bars` and follows the selection as before.
+- Undocked: once dragged, the block keeps its own origin (`Overlay::bar_origin`) and no longer
+  follows the selection. Each frame `toolbar::undocked_layout` picks the monitor the block is
+  on (centre, else largest overlap, else nearest), lays the bars out side by side or stacked
+  for that monitor's width, and clamps the block inside it with the usual 8 px margin. It can
+  be dragged onto another monitor but never off-screen. The drag target is unclamped
+  (`GripDrag::target`, start origin + pointer delta), so pushing past an edge and coming back
+  does not drift; the clamped spot is stored when the drag ends.
+- Double-clicking the grip docks it again (and forgets the stored spot).
+- Session memory: `toolbar::remember` keeps the undocked origin in virtual-desktop px in a
+  process-wide static, and `Overlay::new` starts from it, so the next capture (Capture or
+  Annotate) opens with the bar where it was left. Not saved to config, so a restart docks it.
+- Color and width popups anchor to the buttons' rects from this frame's tool bar, open on the
+  bar's monitor (above when there is no room below) and are now also kept inside the monitor
+  horizontally (`toolbar::popup_x`). The presets chip belongs to the size label above the
+  selection and is unaffected.
+- Hit-testing: the grip is an egui widget, so a press on it is "over UI" and the overlay
+  ignores the gesture (`Drag::Ignore`) exactly like a press on any toolbar button. Keyboard
+  handling is untouched.
+
+Tests: `overlay::toolbar::tests` (side-by-side / stacked block, monitor choice, clamping,
+moving to another monitor and past the far corner, unclamped drag target, virtual round trip
+and session memory, popup x clamp). Verified from code and unit tests only; no synthetic input
+was sent to the overlay.

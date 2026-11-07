@@ -503,33 +503,40 @@ impl Overlay {
             && !matches!(self.drag, Drag::Selecting { .. })
             && let Some(sel) = self.sel
         {
-            let mon = self.monitor_for(sel);
             let gap = 8.0 * ppp;
-            let ((tx, ty), (ax, ay)) = selection::layout_bars(
-                sel,
-                mon,
-                (self.bar_sizes.0.x * ppp, self.bar_sizes.0.y * ppp),
-                (self.bar_sizes.1.x * ppp, self.bar_sizes.1.y * ppp),
-                gap,
-                gap,
-            );
+            let tool_px = (self.bar_sizes.0.x * ppp, self.bar_sizes.0.y * ppp);
+            let act_px = (self.bar_sizes.1.x * ppp, self.bar_sizes.1.y * ppp);
+            // Docked: follows the selection. Undocked (grip dragged): stays where it was
+            // left, clamped to the monitor it is on.
+            let ((tx, ty), (ax, ay), mon) = match self.bar_origin {
+                Some(origin) => self.undocked_bars(origin, ppp, sel),
+                None => {
+                    let mon = self.monitor_for(sel);
+                    let (t, a) = selection::layout_bars(sel, mon, tool_px, act_px, gap, gap);
+                    (t, a, mon)
+                }
+            };
+            self.bar_drawn_at = Some((tx, ty));
             let info = ui::BarInfo {
                 tool: self.tool,
                 color: self.color,
                 width: self.width,
             };
-            let lay = ui::tool_bar(ctx, Pos2::new(tx * k, ty * k), &info, pal, accent, actions);
+            let lifted = self.grip_drag.is_some();
+            let lay = ui::tool_bar(ctx, Pos2::new(tx * k, ty * k), &info, pal, lifted, actions);
             let act_rect = ui::action_bar(
                 ctx,
                 Pos2::new(ax * k, ay * k),
                 pal,
                 shared.ocr.is_some(),
+                lifted,
                 actions,
             );
             self.bar_sizes = (lay.rect.size(), act_rect.size());
             self.color_btn = lay.color_btn;
             self.width_btn = lay.width_btn;
 
+            // Popups open on the bar's monitor, wherever the bar is.
             let screen = rect_pt(mon, k);
             match self.popup {
                 Some(Popup::Color) => ui::color_popup(

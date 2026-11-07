@@ -336,6 +336,45 @@ impl Overlay {
 
     // ---------------------------------------------------------------- toolbar actions
 
+    /// Toolbar grip: drag undocks and moves the whole toolbar, double click docks it again.
+    /// The undocked spot is remembered for the next overlays of this session.
+    fn grip(&mut self, ctx: &Context, ev: GripEvent) {
+        let ppp = ctx.pixels_per_point();
+        let px = |p: Pos2| (p.x * ppp, p.y * ppp);
+        match ev {
+            GripEvent::Start(p) => {
+                let start_origin = self.bar_origin.or(self.bar_drawn_at).unwrap_or_default();
+                self.grip_drag = Some(toolbar::GripDrag {
+                    start_pointer: px(p),
+                    start_origin,
+                });
+                self.bar_origin = Some(start_origin);
+                self.popup = None;
+            }
+            GripEvent::Move(p) => {
+                if let Some(d) = self.grip_drag {
+                    self.bar_origin = Some(d.target(px(p)));
+                }
+            }
+            GripEvent::End => {
+                self.grip_drag = None;
+                // Store the clamped spot, not the raw pointer target, so the next drag
+                // starts from where the bar really is.
+                if let (Some(origin), Some(sel)) = (self.bar_origin, self.sel) {
+                    let (at, _, _) = self.undocked_bars(origin, ppp, sel);
+                    self.bar_origin = Some(at);
+                    toolbar::remember(Some(toolbar::to_virtual(at, self.bounds)));
+                }
+            }
+            GripEvent::Redock => {
+                self.grip_drag = None;
+                self.bar_origin = None;
+                toolbar::remember(None);
+            }
+        }
+        ctx.request_repaint();
+    }
+
     pub(super) fn apply_actions(
         &mut self,
         ctx: &Context,
@@ -383,6 +422,7 @@ impl Overlay {
                 UiAction::TogglePopup(p) => {
                     self.popup = if self.popup == Some(p) { None } else { Some(p) };
                 }
+                UiAction::Grip(ev) => self.grip(ctx, ev),
             }
         }
     }

@@ -33,6 +33,7 @@ mod paint;
 mod render;
 mod selection;
 mod shapes;
+mod toolbar;
 mod ui;
 mod undo;
 
@@ -54,7 +55,7 @@ use self::paint::ImgToPt;
 use self::render::{Renderer, TiledTexture};
 use self::selection::{Handle8, Mapping, Ratio};
 use self::shapes::{Tool, ToolParams};
-use self::ui::{ChipState, Popup, UiAction};
+use self::ui::{ChipState, GripEvent, Popup, UiAction};
 use self::undo::UndoStack;
 use crate::state::{
     CaptureOutput, Command, FinishAction, OverlayMode, OverlayRequest, RegionPurpose, Shared,
@@ -215,6 +216,13 @@ pub struct Overlay {
     drag: Drag,
     popup: Option<Popup>,
     bar_sizes: (Vec2, Vec2),
+    /// Undocked toolbar origin (top-left of the tool bar, local px, unclamped); None =
+    /// docked under the selection. See `toolbar.rs`.
+    bar_origin: Option<(f32, f32)>,
+    /// Grip drag in progress.
+    grip_drag: Option<toolbar::GripDrag>,
+    /// Where the tool bar was drawn last frame (local px), the start of a first undock.
+    bar_drawn_at: Option<(f32, f32)>,
     color_btn: Rect,
     width_btn: Rect,
     prefs_dirty: bool,
@@ -394,6 +402,9 @@ impl Overlay {
             drag: Drag::None,
             popup: None,
             bar_sizes: (Vec2::new(690.0, 46.0), Vec2::new(280.0, 46.0)),
+            bar_origin: toolbar::remembered().map(|v| toolbar::to_local(v, bounds)),
+            grip_drag: None,
+            bar_drawn_at: None,
             color_btn: Rect::NOTHING,
             width_btn: Rect::NOTHING,
             prefs_dirty: false,
@@ -536,6 +547,25 @@ impl Overlay {
             .map(|(m, _)| *m)
             .find(|m| m.contains(c))
             .unwrap_or(self.local_bounds())
+    }
+
+    /// Undocked toolbar placement for `origin`: (tool bar pos, action bar pos, monitor),
+    /// local px. Sizes are last frame's, in physical px.
+    fn undocked_bars(
+        &self,
+        origin: (f32, f32),
+        ppp: f32,
+        sel: PxRect,
+    ) -> ((f32, f32), (f32, f32), PxRect) {
+        let mons: Vec<PxRect> = self.monitors.iter().map(|(m, _)| *m).collect();
+        toolbar::undocked_layout(
+            origin,
+            (self.bar_sizes.0.x * ppp, self.bar_sizes.0.y * ppp),
+            (self.bar_sizes.1.x * ppp, self.bar_sizes.1.y * ppp),
+            8.0 * ppp,
+            &mons,
+            self.monitor_for(sel),
+        )
     }
 
     fn monitor_at(&self, p: (i32, i32)) -> (PxRect, f32) {
