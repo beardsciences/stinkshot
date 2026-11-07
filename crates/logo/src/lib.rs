@@ -600,6 +600,51 @@ pub fn render_threads(o: &Opts, threads: usize) -> Vec<u8> {
     out
 }
 
+/// One frame set up once and rendered a row at a time, for callers that run their own
+/// threads (the About animation sets their priority and hands out rows itself).
+pub struct Prepared {
+    o: Opts,
+    sc: Scene,
+    pl: Pal,
+}
+
+impl Prepared {
+    pub fn new(o: &Opts) -> Prepared {
+        Prepared {
+            o: *o,
+            sc: Scene::new(o),
+            pl: pal(),
+        }
+    }
+
+    /// Rows (and pixels per row) of the frame.
+    pub fn size(&self) -> usize {
+        self.o.size as usize
+    }
+
+    /// Renders row `y` into `row` (`size * 4` bytes of straight-alpha sRGB RGBA8), exactly
+    /// as `render` does.
+    pub fn row(&self, y: usize, row: &mut [u8]) {
+        render_row(&self.sc, &self.o, &self.pl, y, row);
+    }
+}
+
+/// FNV-1a hash of this renderer's source: changes whenever the drawing could, so caches of
+/// rendered frames key on it.
+pub fn source_hash() -> u64 {
+    static HASH: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *HASH.get_or_init(|| fnv1a(0xcbf2_9ce4_8422_2325, include_bytes!("lib.rs")))
+}
+
+/// FNV-1a over `bytes`, continuing from `h`.
+pub fn fnv1a(mut h: u64, bytes: &[u8]) -> u64 {
+    for b in bytes {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    h
+}
+
 fn render_row(sc: &Scene, o: &Opts, pl: &Pal, y: usize, row: &mut [u8]) {
     let size = o.size as f32;
     let cam = camera(o.half);
@@ -910,6 +955,19 @@ mod tests {
     fn threaded_render_matches_single_thread() {
         let o = Opts::icon(20);
         assert_eq!(render_threads(&o, 1), render_threads(&o, 5));
+    }
+
+    #[test]
+    fn prepared_rows_match_render() {
+        let o = Opts::about(24, 0.3, 1);
+        let p = Prepared::new(&o);
+        let mut out = vec![0u8; 24 * 24 * 4];
+        for (y, row) in out.chunks_mut(24 * 4).enumerate() {
+            p.row(y, row);
+        }
+        assert_eq!(out, render_threads(&o, 1));
+        assert_eq!(source_hash(), source_hash());
+        assert_ne!(fnv1a(1, b"a"), fnv1a(1, b"b"));
     }
 
     #[test]

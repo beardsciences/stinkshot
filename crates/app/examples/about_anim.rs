@@ -1,11 +1,21 @@
 //! Runs the About page header (the animated logo with the name, version and tagline, in
 //! the app's fonts and page colours) alone in a window and reports its timing:
-//! `cargo run -p stinkshot --example about_anim -- [dark|light] [seconds] [screenshot.png]`.
+//! `cargo run -p stinkshot --example about_anim -- [dark|light] [seconds] [screenshot.png]
+//! [cold] [prewarm]`.
 //!
-//! Prints how long the still frame and the full loop took to render, then, once the loop
-//! plays, the frame interval and the UI-thread CPU time of `logo_anim::show` over the
-//! measuring window. Saves a screenshot of the window at the end when a path is given.
+//! The window shows a blank page for 1 s first, so the numbers are those of switching to
+//! the About page in a window that is already up (not of the window's own start-up).
+//! `cold` deletes the disk cache entry for this display scale first. `prewarm` calls
+//! `logo_anim::prewarm` during that second (as the Settings window does), for 2 s instead.
+//! `top` keeps the window on top, so it is never covered while measuring.
+//! `STINKSHOT_LOGO_CACHE=off` runs without the cache at all.
+//!
+//! Prints, from the header's first frame: the first orb image, the first movement and every
+//! frame at full quality, whether the loop came from the cache, then the frame interval
+//! and the UI-thread CPU time of `logo_anim::show` while frames were still arriving and
+//! afterwards. Saves a screenshot of the window at the end when a path is given.
 
+#[allow(dead_code)] // the app also uses prewarm_cache
 #[path = "../src/logo_anim.rs"]
 mod logo_anim;
 
@@ -13,14 +23,34 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 fn main() -> eframe::Result {
-    let mut args = std::env::args().skip(1);
-    let dark = args.next().as_deref() != Some("light");
-    let seconds: f64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(6.0);
-    let shot = args.next();
+    let mut dark = true;
+    let mut seconds = 6.0;
+    let mut shot = None;
+    let mut cold = false;
+    let mut prewarm = false;
+    let mut top = false;
+    for a in std::env::args().skip(1) {
+        match a.as_str() {
+            "dark" => dark = true,
+            "light" => dark = false,
+            "cold" => cold = true,
+            "prewarm" => prewarm = true,
+            "top" => top = true,
+            s => match s.parse::<f64>() {
+                Ok(v) => seconds = v,
+                Err(_) => shot = Some(s.to_string()),
+            },
+        }
+    }
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("About logo")
+        .with_inner_size([520.0, 300.0]);
+    if top {
+        viewport = viewport.with_always_on_top();
+    }
+    let intro = Duration::from_millis(if prewarm { 2000 } else { 1000 });
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("About logo")
-            .with_inner_size([520.0, 300.0]),
+        viewport,
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
@@ -38,11 +68,13 @@ fn main() -> eframe::Result {
                 seconds,
                 shot,
                 dark,
-                opened: Instant::now(),
-                playing_since: None,
+                cold,
+                prewarm,
+                intro_until: Instant::now() + intro,
+                header_since: None,
                 last: None,
-                dts: Vec::new(),
-                show_ms: Vec::new(),
+                dts: [Vec::new(), Vec::new()],
+                show_ms: [Vec::new(), Vec::new()],
                 state: Arc::new(Mutex::new(Phase::Measuring)),
             }))
         }),
@@ -59,17 +91,32 @@ struct App {
     dark: bool,
     seconds: f64,
     shot: Option<String>,
-    opened: Instant,
-    playing_since: Option<Instant>,
+    cold: bool,
+    prewarm: bool,
+    intro_until: Instant,
+    header_since: Option<Instant>,
     last: Option<Instant>,
-    dts: Vec<f32>,
-    show_ms: Vec<f32>,
+    /// Samples while frames were still arriving [0] and once all were full quality [1].
+    dts: [Vec<f32>; 2],
+    show_ms: [Vec<f32>; 2],
     state: Arc<Mutex<Phase>>,
 }
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        if self.cold {
+            self.cold = false;
+            let (size, ss) = frame_size(ctx.pixels_per_point());
+            if let Some(p) = logo_anim::cache_path(size, ss) {
+                let gone = std::fs::remove_file(&p).is_ok();
+                println!(
+                    "cold: {} ({})",
+                    p.display(),
+                    if gone { "deleted" } else { "absent" }
+                );
+            }
+        }
         // The settings content pane colour and text colours (theme.rs palette).
         let (layer, text, secondary) = if self.dark {
             (
@@ -84,48 +131,62 @@ impl eframe::App for App {
                 egui::Color32::from_rgb(0x5c, 0x5c, 0x5c),
             )
         };
+        let intro = Instant::now() < self.intro_until;
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(layer).inner_margin(12.0))
             .show(ui, |ui| {
-                logo_anim::header(
-                    ui,
-                    egui::FontId::new(22.0, egui::FontFamily::Name(SEMIBOLD.into())),
-                    egui::FontId::proportional(13.0),
-                    text,
-                    secondary,
-                );
+                if intro {
+                    if self.prewarm {
+                        logo_anim::prewarm(&ctx);
+                    }
+                    ui.label("Another settings page");
+                    ctx.request_repaint();
+                } else {
+                    logo_anim::header(
+                        ui,
+                        egui::FontId::new(22.0, egui::FontFamily::Name(SEMIBOLD.into())),
+                        egui::FontId::proportional(13.0),
+                        text,
+                        secondary,
+                    );
+                }
             });
+        if intro {
+            return;
+        }
+        let now = Instant::now();
+        let since = *self.header_since.get_or_insert(now);
         let Some(stats) = logo_anim::stats(&ctx) else {
             return;
         };
-        let now = Instant::now();
-        if self.playing_since.is_none() && stats.loop_total.is_some() {
-            self.playing_since = Some(now);
-            println!(
-                "frames: {} px, ss {}, still {:?}, loop of {} frames {:?} (window opened {:?} ago)",
-                stats.size,
-                stats.ss,
-                stats.still,
-                logo_anim::FRAMES,
-                stats.loop_total,
-                self.opened.elapsed()
-            );
+        let bucket = usize::from(stats.all_full.is_some());
+        if let Some(last) = self.last {
+            self.dts[bucket].push((now - last).as_secs_f32() * 1000.0);
         }
-        let Some(since) = self.playing_since else {
-            return;
-        };
-        // Skip the first half second of playback (texture warm-up).
-        if since.elapsed() > Duration::from_millis(500) {
-            if let Some(last) = self.last {
-                self.dts.push((now - last).as_secs_f32() * 1000.0);
-            }
-            self.show_ms.push(stats.show_ms);
-        }
+        self.show_ms[bucket].push(stats.show_ms);
         self.last = Some(now);
         let mut phase = self.state.lock().expect("state");
         if matches!(*phase, Phase::Measuring) && since.elapsed().as_secs_f64() > self.seconds {
-            report("frame interval", &mut self.dts);
-            report("show() CPU", &mut self.show_ms);
+            println!(
+                "frames: {} px, ss {}, {} frames {} in {:?}",
+                stats.size,
+                stats.ss,
+                logo_anim::FRAMES,
+                if stats.from_cache {
+                    "loaded from the cache"
+                } else {
+                    "rendered"
+                },
+                stats.loop_total,
+            );
+            println!(
+                "from the header's first frame: first image {:?}, first motion {:?}, all full quality {:?}",
+                stats.first_frame, stats.first_motion, stats.all_full
+            );
+            report("frame interval while frames arrive", &mut self.dts[0]);
+            report("show() CPU while frames arrive", &mut self.show_ms[0]);
+            report("frame interval after", &mut self.dts[1]);
+            report("show() CPU after", &mut self.show_ms[1]);
             match &self.shot {
                 Some(path) => {
                     let path = path.clone();
@@ -151,6 +212,12 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
+}
+
+/// Same as `logo_anim`'s private helper.
+fn frame_size(ppp: f32) -> (u32, u32) {
+    let size = (logo_anim::VIEW * ppp).round().max(16.0) as u32;
+    (size, if ppp < 1.5 { 2 } else { 1 })
 }
 
 const SEMIBOLD: &str = "StinkShot.Semibold";

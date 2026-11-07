@@ -76,6 +76,8 @@ file extension (png, jpg, webp). The others are handy for scripts, AutoHotkey an
 
 - Config: `%APPDATA%\Stinkshot\config.toml` (the settings window writes the same file).
 - Log: `%APPDATA%\Stinkshot\stinkshot.log`.
+- Cache: `%LOCALAPPDATA%\Stinkshot\cache` holds the About page's pre-rendered logo animation
+  (a few MB, safe to delete; it is rebuilt in the background).
 - Captures: the history folder set in Settings. Annotation data lives beside each image in a
   `.stinkshot` subfolder, together with the search index and thumbnails.
 

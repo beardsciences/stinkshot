@@ -349,6 +349,9 @@ impl Surface for SettingsWindow {
     }
 
     fn show(&mut self, ctx: &egui::Context, shared: &mut Shared) -> SurfaceStatus {
+        // Load (or render) the About page's logo loop in the background so it moves as
+        // soon as the page is opened.
+        crate::logo_anim::prewarm(ctx);
         let before = shared.config.clone();
         self.pump(ctx, shared);
         let capturing_before = self.capturing.is_some();

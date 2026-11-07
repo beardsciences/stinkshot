@@ -74,6 +74,18 @@ const MAX_TOASTS: usize = 6;
 const QUIT_GRACE: Duration = Duration::from_secs(30);
 /// How long after a tray click a double click may still cancel the overlay it opened.
 const TRAY_DOUBLE_CLICK_GRACE: Duration = Duration::from_millis(900);
+/// How long after startup (or after a capture or recording) the About logo's loop may be
+/// rendered into its disk cache.
+const LOGO_PREWARM_DELAY: Duration = Duration::from_secs(30);
+
+/// The system display scale (the primary monitor's at sign-in), for work done before any
+/// window is on screen.
+fn system_scale() -> f32 {
+    // SAFETY: no arguments; returns the system DPI.
+    let dpi = unsafe { windows::Win32::UI::HiDpi::GetDpiForSystem() };
+    if dpi == 0 { 1.0 } else { dpi as f32 / 96.0 }
+}
+
 /// After a double click is handled, tray single clicks are ignored this long: the button-up of
 /// the second click can still reach the tray icon once the overlay under it is gone.
 const TRAY_CLICK_QUIET: Duration = Duration::from_millis(700);
@@ -481,6 +493,9 @@ struct Shell {
     update_forced: bool,
     update_retry_at: Instant,
     last_housekeeping: Instant,
+    /// When to render the About logo's loop into its disk cache if it has no copy (once,
+    /// a while after startup, so the first visit to the About page is instant).
+    logo_prewarm_at: Option<Instant>,
     root_setup_tries: u32,
     first_frame_seen: bool,
     needs_repaint: bool,
@@ -638,6 +653,7 @@ impl Shell {
             update_forced: false,
             update_retry_at: Instant::now(),
             last_housekeeping: Instant::now(),
+            logo_prewarm_at: Some(Instant::now() + LOGO_PREWARM_DELAY),
             root_setup_tries: 0,
             first_frame_seen: false,
             needs_repaint: false,
@@ -2093,6 +2109,19 @@ impl Shell {
         if self.last_housekeeping.elapsed() >= Duration::from_secs(3600) {
             self.last_housekeeping = Instant::now();
             self.maybe_check_updates(false);
+        }
+        if let Some(at) = self.logo_prewarm_at {
+            let now = Instant::now();
+            if now < at {
+                self.ctx.request_repaint_after(at - now);
+            } else if self.overlay.is_some() || !matches!(self.rec, Rec::Idle) {
+                // Never compete with a capture or a recording; try again later.
+                self.logo_prewarm_at = Some(now + LOGO_PREWARM_DELAY);
+                self.ctx.request_repaint_after(LOGO_PREWARM_DELAY);
+            } else {
+                self.logo_prewarm_at = None;
+                crate::logo_anim::prewarm_cache(&self.ctx, system_scale());
+            }
         }
         self.ctx.request_repaint_after(Duration::from_secs(60));
     }
