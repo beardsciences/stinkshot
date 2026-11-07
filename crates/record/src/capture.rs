@@ -8,7 +8,8 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use stinkshot_core::PxRect;
@@ -22,7 +23,10 @@ use windows::Graphics::SizeInt32;
 use windows::Win32::Foundation::{HMODULE, LPARAM, RECT, TRUE};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN};
 use windows::Win32::Graphics::Direct3D11::*;
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_MODE_ROTATION_IDENTITY, DXGI_MODE_ROTATION_UNSPECIFIED,
+    DXGI_SAMPLE_DESC,
+};
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
@@ -41,8 +45,14 @@ use crate::mf::{ComGuard, SendCom};
 /// How long WGC gets to create its sessions before we fall back to Desktop Duplication.
 const WGC_INIT_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Set once WGC failed or hung in this process so later recordings skip the wait.
-static WGC_BROKEN: AtomicBool = AtomicBool::new(false);
+/// When WGC session creation last hung. A hang (not an ordinary error, which may be
+/// transient such as a display reconfiguration) makes later recordings skip the wait for a
+/// while.
+static WGC_HUNG_AT: Mutex<Option<Instant>> = Mutex::new(None);
+const WGC_COOLDOWN: Duration = Duration::from_secs(300);
+
+/// Consecutive duplicated frames in an unsupported pixel format before giving up.
+const MAX_BAD_FORMAT_FRAMES: u32 = 30;
 
 #[derive(Clone, Copy, Debug)]
 pub struct MonitorRect {
@@ -93,10 +103,14 @@ enum Backend {
         pool: Direct3D11CaptureFramePool,
         session: GraphicsCaptureSession,
         size: SizeInt32,
+        /// Set by `GraphicsCaptureItem.Closed` (monitor unplugged, topology change).
+        closed: Arc<AtomicBool>,
     },
     Dup {
         output: IDXGIOutput1,
         dup: Option<IDXGIOutputDuplication>,
+        /// Consecutive frames delivered in a format other than BGRA8.
+        bad_format: u32,
     },
 }
 
@@ -117,6 +131,11 @@ pub struct Capturer {
     stage: ID3D11Texture2D,
     /// Name of the backend in use, for logs.
     pub backend_name: &'static str,
+    /// Region in virtual-desktop px (origin for cursor compositing).
+    region: PxRect,
+    /// The backend cannot draw the pointer itself and the user wants it: the video loop
+    /// composites it with `composite_cursor`.
+    cursor_overlay: bool,
 }
 
 // Used from the single video thread only; moved there once after construction.
@@ -220,19 +239,22 @@ impl Capturer {
         if plan.is_empty() {
             bail!("region {region:?} does not intersect any monitor");
         }
-        let wgc = if WGC_BROKEN.load(Ordering::Relaxed) {
-            Err(anyhow!("WGC failed earlier in this process"))
+        let recently_hung = WGC_HUNG_AT
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some_and(|t| t.elapsed() < WGC_COOLDOWN);
+        let wgc = if recently_hung {
+            Err(anyhow!("WGC hung earlier in this process"))
         } else {
             Self::new_wgc_with_timeout(region, &plan, include_cursor, fps)
         };
         match wgc {
             Ok(c) => Ok(c),
             Err(wgc_err) => {
-                WGC_BROKEN.store(true, Ordering::Relaxed);
                 log::warn!(
                     "Windows Graphics Capture unavailable ({wgc_err:#}); falling back to DXGI Desktop Duplication"
                 );
-                Self::new_dxgi(region, &plan)
+                Self::new_dxgi(region, &plan, include_cursor)
                     .with_context(|| format!("screen capture failed (WGC: {wgc_err:#})"))
             }
         }
@@ -260,9 +282,12 @@ impl Capturer {
             Ok(Ok(c)) => Ok(c.0),
             Ok(Err(e)) => Err(anyhow!(e)),
             // The helper thread stays blocked inside the OS call; it holds nothing we need.
-            Err(_) => Err(anyhow!(
-                "WGC session creation did not complete within {WGC_INIT_TIMEOUT:?}"
-            )),
+            Err(_) => {
+                *WGC_HUNG_AT.lock().unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
+                Err(anyhow!(
+                    "WGC session creation did not complete within {WGC_INIT_TIMEOUT:?}"
+                ))
+            }
         }
     }
 
@@ -298,6 +323,15 @@ impl Capturer {
                     .CreateForMonitor(HMONITOR(m.handle as *mut _))
                     .context("CreateForMonitor")?;
                 let size = item.Size()?;
+                let closed = Arc::new(AtomicBool::new(false));
+                {
+                    let flag = Arc::clone(&closed);
+                    item.Closed(&windows::Foundation::TypedEventHandler::new(move |_, _| {
+                        flag.store(true, Ordering::Relaxed);
+                        Ok(())
+                    }))
+                    .context("GraphicsCaptureItem.Closed")?;
+                }
                 let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
                     &winrt_device,
                     DirectXPixelFormat::B8G8R8A8UIntNormalized,
@@ -321,6 +355,7 @@ impl Capturer {
                         pool,
                         session,
                         size,
+                        closed,
                     },
                     got_frame: false,
                     src: *src,
@@ -340,11 +375,13 @@ impl Capturer {
                 mons,
                 stage,
                 backend_name: "Windows Graphics Capture",
+                region,
+                cursor_overlay: false,
             })
         }
     }
 
-    fn new_dxgi(region: PxRect, plan: &Plan) -> Result<Capturer> {
+    fn new_dxgi(region: PxRect, plan: &Plan, include_cursor: bool) -> Result<Capturer> {
         unsafe {
             let factory: IDXGIFactory1 = CreateDXGIFactory1().context("CreateDXGIFactory1")?;
             // All duplicated monitors must live on one adapter (they share one D3D11 device);
@@ -396,14 +433,14 @@ impl Capturer {
             let ctx = ctx.context("no D3D11 context")?;
             let mut mons = Vec::new();
             for (out, pi) in outs {
-                let dup = out
-                    .DuplicateOutput(&device)
+                let dup = duplicate_output(&out, &device)
                     .context("DuplicateOutput (secure desktop or another duplication in use?)")?;
                 let (_, src, dst) = &plan[pi];
                 mons.push(MonCap {
                     backend: Backend::Dup {
                         output: out,
                         dup: Some(dup),
+                        bad_format: 0,
                     },
                     got_frame: false,
                     src: *src,
@@ -418,7 +455,56 @@ impl Capturer {
                 mons,
                 stage,
                 backend_name: "DXGI Desktop Duplication",
+                region,
+                // Desktop Duplication frames never contain the pointer.
+                cursor_overlay: include_cursor,
             })
+        }
+    }
+
+    /// True when the caller must draw the pointer onto each frame (`composite_cursor`).
+    pub fn needs_cursor_overlay(&self) -> bool {
+        self.cursor_overlay
+    }
+
+    /// Alpha-blend the current pointer into a BGRA frame of the capture region.
+    pub fn composite_cursor(&self, bgra: &mut [u8], w: usize, h: usize) {
+        if !self.cursor_overlay || bgra.len() < w * h * 4 {
+            return;
+        }
+        // Pointer shapes are at most a few hundred px; draw into a small transparent patch
+        // centered on the pointer instead of converting the whole frame.
+        const HALF: i32 = 160;
+        let pos = stinkshot_platform::input::cursor_pos();
+        let origin = stinkshot_core::PxPoint {
+            x: pos.x - HALF,
+            y: pos.y - HALF,
+        };
+        let mut patch = stinkshot_core::Rgba::new(HALF as u32 * 2, HALF as u32 * 2);
+        stinkshot_platform::capture::draw_cursor(&mut patch, origin);
+        let pw = patch.width as i32;
+        for py in 0..patch.height as i32 {
+            let fy = origin.y + py - self.region.y;
+            if fy < 0 || fy >= h as i32 {
+                continue;
+            }
+            for px in 0..pw {
+                let s = &patch.data[((py * pw + px) * 4) as usize..][..4];
+                let a = s[3] as u32;
+                if a == 0 {
+                    continue;
+                }
+                let fx = origin.x + px - self.region.x;
+                if fx < 0 || fx >= w as i32 {
+                    continue;
+                }
+                let d = &mut bgra[(fy as usize * w + fx as usize) * 4..][..4];
+                // s is RGBA, d is BGRA.
+                for (di, si) in [(0usize, 2usize), (1, 1), (2, 0)] {
+                    d[di] = ((s[si] as u32 * a + d[di] as u32 * (255 - a)) / 255) as u8;
+                }
+                d[3] = 255;
+            }
         }
     }
 
@@ -436,22 +522,30 @@ impl Capturer {
         let mut stats = PollStats::default();
         for m in &mut self.mons {
             let got = match &mut m.backend {
-                Backend::Wgc { pool, size, .. } => poll_wgc(
+                Backend::Wgc {
+                    pool, size, closed, ..
+                } => poll_wgc(
                     &self.ctx,
                     &self.stage,
                     self.winrt_device.as_ref(),
                     pool,
                     size,
+                    closed,
                     m.src,
                     m.dst,
                     &mut stats,
                 )?,
-                Backend::Dup { output, dup } => poll_dup(
+                Backend::Dup {
+                    output,
+                    dup,
+                    bad_format,
+                } => poll_dup(
                     &self.device,
                     &self.ctx,
                     &self.stage,
                     output,
                     dup,
+                    bad_format,
                     m.src,
                     m.dst,
                     &mut stats,
@@ -487,10 +581,14 @@ fn poll_wgc(
     winrt_device: Option<&IDirect3DDevice>,
     pool: &Direct3D11CaptureFramePool,
     size: &mut SizeInt32,
+    closed: &AtomicBool,
     src: PxRect,
     dst: (u32, u32),
     stats: &mut PollStats,
 ) -> Result<bool> {
+    if closed.load(Ordering::Relaxed) {
+        bail!("the captured display was disconnected or changed, so the recording cannot continue");
+    }
     let mut latest: Option<windows::Graphics::Capture::Direct3D11CaptureFrame> = None;
     let mut delivered = 0u32;
     while let Ok(frame) = pool.TryGetNextFrame() {
@@ -535,6 +633,7 @@ fn poll_dup(
     stage: &ID3D11Texture2D,
     output: &IDXGIOutput1,
     dup: &mut Option<IDXGIOutputDuplication>,
+    bad_format: &mut u32,
     src: PxRect,
     dst: (u32, u32),
     stats: &mut PollStats,
@@ -542,7 +641,7 @@ fn poll_dup(
     let mut got = false;
     if dup.is_none() {
         // lost earlier (mode change, UAC desktop): try to re-establish quietly
-        *dup = unsafe { output.DuplicateOutput(device) }.ok();
+        *dup = duplicate_output(output, device).ok();
     }
     let Some(d) = dup.as_ref() else {
         return Ok(false);
@@ -558,6 +657,23 @@ fn poll_dup(
                 {
                     let mut desc = D3D11_TEXTURE2D_DESC::default();
                     unsafe { tex.GetDesc(&mut desc) };
+                    if desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM {
+                        // Copying e.g. an HDR (FP16) surface into the BGRA8 stage fails
+                        // silently and would record black.
+                        *bad_format += 1;
+                        let fatal = *bad_format > MAX_BAD_FORMAT_FRAMES;
+                        unsafe {
+                            let _ = d.ReleaseFrame();
+                        }
+                        if fatal {
+                            bail!(
+                                "the display is delivering {:?} frames (HDR or another format the fallback capture cannot record)",
+                                desc.Format
+                            );
+                        }
+                        continue;
+                    }
+                    *bad_format = 0;
                     copy_region(
                         ctx,
                         stage,
@@ -588,6 +704,29 @@ fn poll_dup(
         stats.new_frames += 1;
     }
     Ok(got)
+}
+
+/// Duplicate `output`, asking for plain BGRA8 so HDR outputs are tone-mapped to SDR by the
+/// system, and refusing rotated outputs (the duplicated surface is unrotated, so the crop
+/// would be wrong; WGC handles those).
+fn duplicate_output(
+    output: &IDXGIOutput1,
+    device: &ID3D11Device,
+) -> Result<IDXGIOutputDuplication> {
+    unsafe {
+        let dup = match output
+            .cast::<IDXGIOutput5>()
+            .and_then(|o5| o5.DuplicateOutput1(device, 0, &[DXGI_FORMAT_B8G8R8A8_UNORM]))
+        {
+            Ok(d) => d,
+            Err(_) => output.DuplicateOutput(device)?,
+        };
+        let rot = dup.GetDesc().Rotation;
+        if rot != DXGI_MODE_ROTATION_IDENTITY && rot != DXGI_MODE_ROTATION_UNSPECIFIED {
+            bail!("the display is rotated ({rot:?}), which the fallback capture does not support");
+        }
+        Ok(dup)
+    }
 }
 
 fn copy_region(

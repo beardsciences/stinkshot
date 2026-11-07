@@ -133,40 +133,34 @@ impl Recorder {
         });
 
         // Audio sources first: failing to open a requested device fails the recording.
-        let mut captures: Vec<JoinHandle<()>> = Vec::new();
+        let mut guard = StartGuard {
+            shared: shared.clone(),
+            captures: Vec::new(),
+            video: None,
+            temp: temp_path.clone(),
+            armed: true,
+        };
         let mut sys_q = None;
         let mut mic_q = None;
-        let teardown_audio = |shared: &Shared, captures: &mut Vec<JoinHandle<()>>| {
-            shared.audio_stop.store(true, Ordering::Relaxed);
-            for h in captures.drain(..) {
-                let _ = h.join();
-            }
-        };
         if opts.system_audio {
             let q = Arc::new(Mutex::new(SourceQueue::default()));
             // capture threads watch audio_stop through a dedicated Arc<AtomicBool>
             match spawn_audio(Source::Loopback, &q, &shared) {
                 Ok(h) => {
-                    captures.push(h);
+                    guard.captures.push(h);
                     sys_q = Some(q);
                 }
-                Err(e) => {
-                    teardown_audio(&shared, &mut captures);
-                    return Err(e.context("system audio capture"));
-                }
+                Err(e) => return Err(e.context("system audio capture")),
             }
         }
         if opts.microphone {
             let q = Arc::new(Mutex::new(SourceQueue::default()));
             match spawn_audio(Source::Microphone(opts.mic_device.clone()), &q, &shared) {
                 Ok(h) => {
-                    captures.push(h);
+                    guard.captures.push(h);
                     mic_q = Some(q);
                 }
-                Err(e) => {
-                    teardown_audio(&shared, &mut captures);
-                    return Err(e.context("microphone capture"));
-                }
+                Err(e) => return Err(e.context("microphone capture")),
             }
         }
 
@@ -174,17 +168,14 @@ impl Recorder {
         let webcam = match &opts.webcam {
             Some(w) => match Webcam::start(w.device.as_deref(), webcam_latest.clone()) {
                 Ok(c) => Some(c),
-                Err(e) => {
-                    teardown_audio(&shared, &mut captures);
-                    return Err(e.context("webcam"));
-                }
+                Err(e) => return Err(e.context("webcam")),
             },
             None => None,
         };
 
         // Video thread: owns capture + encoder creation so COM objects live on one MTA thread.
         let (init_tx, init_rx) = mpsc::channel::<InitResult>();
-        let video = {
+        guard.video = Some({
             let shared = shared.clone();
             let opts = opts.clone();
             let temp = temp_path.clone();
@@ -204,22 +195,13 @@ impl Recorder {
                     );
                 })
                 .context("spawn video thread")?
-        };
+        });
         let (enc, encoder_name, capture_backend) =
             match init_rx.recv_timeout(Duration::from_secs(30)) {
                 Ok(Ok(v)) => v,
-                Ok(Err(e)) => {
-                    let _ = video.join();
-                    teardown_audio(&shared, &mut captures);
-                    let _ = std::fs::remove_file(&temp_path);
-                    return Err(anyhow!(e));
-                }
-                Err(_) => {
-                    shared.stop.store(true, Ordering::Relaxed);
-                    teardown_audio(&shared, &mut captures);
-                    let _ = std::fs::remove_file(&temp_path);
-                    bail!("recording initialisation timed out");
-                }
+                // The guard stops and joins every worker and removes the temp file.
+                Ok(Err(e)) => return Err(anyhow!(e)),
+                Err(_) => bail!("recording initialisation timed out"),
             };
 
         let mixer = if want_audio {
@@ -235,13 +217,17 @@ impl Recorder {
             None
         };
 
+        // Everything is running: ownership passes to the recorder.
+        guard.armed = false;
+        let captures = std::mem::take(&mut guard.captures);
+        let video = guard.video.take();
         log::info!(
             "recording started: {width}x{height} @ {fps} fps, encoder {encoder_name}, capture {capture_backend}"
         );
         Ok(Recorder {
             shared,
             enc,
-            video: Some(video),
+            video,
             mixer,
             captures,
             webcam,
@@ -402,6 +388,7 @@ fn spawn_audio(
     let fatal = Arc::new(Mutex::new(None::<String>));
     let handle = audio::spawn(source, queue.clone(), stop.clone(), fatal.clone())?;
     let shared = shared.clone();
+    let stop_on_failure = stop.clone();
     // Watcher thread: forwards the shared stop flag and surfaces runtime errors. It is the
     // handle the recorder joins, and it joins the capture thread itself.
     std::thread::Builder::new()
@@ -419,7 +406,63 @@ fn spawn_audio(
             stop.store(true, Ordering::Relaxed);
             let _ = handle.join();
         })
-        .context("spawn audio watcher")
+        .map_err(|e| {
+            // The capture thread is already running; with no watcher to forward the stop
+            // flag it would run until the process exits.
+            stop_on_failure.store(true, Ordering::Relaxed);
+            anyhow::Error::from(e).context("spawn audio watcher")
+        })
+}
+
+/// Joins a thread that may be stuck in an OS call; false when it did not finish in time.
+fn join_bounded(h: JoinHandle<()>, limit: Duration) -> bool {
+    let end = Instant::now() + limit;
+    while !h.is_finished() {
+        if Instant::now() >= end {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let _ = h.join();
+    true
+}
+
+/// Owns everything `Recorder::start` has spawned until the recorder exists, so every early
+/// return stops and joins the workers (releasing devices) and removes the temp file.
+struct StartGuard {
+    shared: Arc<Shared>,
+    captures: Vec<JoinHandle<()>>,
+    video: Option<JoinHandle<()>>,
+    temp: PathBuf,
+    armed: bool,
+}
+
+impl Drop for StartGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.shared.stop.store(true, Ordering::Relaxed);
+        self.shared.audio_stop.store(true, Ordering::Relaxed);
+        let video_done = match self.video.take() {
+            Some(v) => {
+                let done = join_bounded(v, Duration::from_secs(10));
+                if !done {
+                    log::warn!("recording start failed while the video thread was still busy");
+                }
+                done
+            }
+            None => true,
+        };
+        for h in self.captures.drain(..) {
+            let _ = h.join();
+        }
+        if video_done {
+            let _ = std::fs::remove_file(&self.temp);
+        }
+        // Otherwise the video thread removes the temp file itself once it notices nobody
+        // is waiting for it (see `video_thread`).
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -472,6 +515,14 @@ fn video_thread(
         .send(Ok((enc.clone(), name, cap.backend_name)))
         .is_err()
     {
+        // `Recorder::start` gave up (timed out) while we were still initialising: nobody
+        // will finalize this file.
+        drop(cap);
+        if let Ok(e) = enc.lock() {
+            let _ = e.finalize();
+        }
+        drop(enc);
+        let _ = std::fs::remove_file(&temp);
         return;
     }
 
@@ -590,9 +641,15 @@ fn video_loop(
                 let overlay_live = overlay.is_active(elapsed, clicks, keys);
                 let webcam_live =
                     show_webcam && webcam_latest.lock().map(|g| g.is_some()).unwrap_or(false);
-                if stats.new_frames > 0 || overlay_live || webcam_live || !have_picture {
+                let cursor_live = cap.needs_cursor_overlay();
+                if stats.new_frames > 0
+                    || overlay_live
+                    || webcam_live
+                    || cursor_live
+                    || !have_picture
+                {
                     let mapped = cap.map()?;
-                    if overlay_live || webcam_live {
+                    if overlay_live || webcam_live || cursor_live {
                         let dst = pixmap.data_mut();
                         let src = mapped.bytes(h);
                         for y in 0..h {
@@ -601,6 +658,7 @@ fn video_loop(
                             );
                         }
                         drop(mapped);
+                        cap.composite_cursor(pixmap.data_mut(), w, h);
                         overlay.render(&mut pixmap, elapsed, accent, clicks, keys, fonts.as_ref());
                         if webcam_live
                             && let Some(wc) = &webcam_enabled

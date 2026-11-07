@@ -11,10 +11,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetCursorPos, GetMessageW, HHOOK, KBDLLHOOKSTRUCT, MSG,
-    MSLLHOOKSTRUCT, PostThreadMessageW, SetCursorPos, SetWindowsHookExW, TranslateMessage,
-    UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
-    WM_SYSKEYDOWN, WM_SYSKEYUP,
+    MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostThreadMessageW, SetCursorPos, SetWindowsHookExW,
+    TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_QUIT, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER,
 };
 
 pub fn cursor_pos() -> PxPoint {
@@ -289,6 +289,8 @@ impl InputHook {
                 let _ = join.join();
                 Err(e)
             }
+            // `ready_rx` is dropped on return, so if the thread installs its hooks later its
+            // `ready.send` fails and it unhooks and exits on its own.
             Err(e) => Err(anyhow::anyhow!("input hook thread did not start: {e}")),
         }
     }
@@ -319,8 +321,17 @@ fn hook_thread(tx: Sender<(Instant, InputEvent)>, ready: Sender<anyhow::Result<u
                 return;
             }
         };
-        let _ = ready.send(Ok(GetCurrentThreadId()));
+        // Create this thread's message queue before announcing the thread id, so a WM_QUIT
+        // posted right after install cannot fail with ERROR_INVALID_THREAD_ID.
         let mut msg = MSG::default();
+        let _ = PeekMessageW(&mut msg, None, WM_USER, WM_USER, PM_NOREMOVE);
+        if ready.send(Ok(GetCurrentThreadId())).is_err() {
+            // The installer gave up waiting (timeout): nobody owns these hooks.
+            let _ = UnhookWindowsHookEx(mouse);
+            let _ = UnhookWindowsHookEx(kb);
+            STATE.with(|s| *s.borrow_mut() = None);
+            return;
+        }
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
@@ -334,11 +345,16 @@ fn hook_thread(tx: Sender<(Instant, InputEvent)>, ready: Sender<anyhow::Result<u
 impl Drop for InputHook {
     fn drop(&mut self) {
         // SAFETY: posting WM_QUIT to our own hook thread.
-        unsafe {
-            let _ = PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0));
-        }
+        let posted =
+            unsafe { PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) }.is_ok();
         if let Some(j) = self.join.take() {
-            let _ = j.join();
+            if posted {
+                let _ = j.join();
+            } else {
+                // Without a quit message the thread would never leave GetMessageW and a
+                // join would hang the caller; leave it detached.
+                log::warn!("input hook thread could not be told to quit");
+            }
         }
     }
 }

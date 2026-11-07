@@ -207,6 +207,11 @@ pub fn to_pcm16(samples: &[f32], out: &mut Vec<u8>) {
     }
 }
 
+/// Largest rate correction applied to a block (0.5 %, well under what is audible).
+const MAX_DRIFT: f64 = 0.005;
+/// A queue surplus below this (10 ms) is normal packet jitter, not drift.
+const DRIFT_MARGIN_FRAMES: usize = (OUT_RATE as usize) / 100;
+
 /// Per-source FIFO of stereo frames that is pulled at the output clock. Underruns pad with
 /// silence; a queue that runs further ahead than `max_lead_frames` (the device clock is
 /// faster than ours) is trimmed from the oldest end to keep sync.
@@ -228,13 +233,47 @@ impl SourceQueue {
         self.q.clear();
     }
 
-    /// Pull exactly `frames` frames (interleaved) into `out`, padding with silence.
+    /// Pull exactly `frames` frames (interleaved) into `out`.
+    ///
+    /// Device clocks drift against the output clock, so small mismatches are absorbed by
+    /// resampling the block by at most `MAX_DRIFT` instead of splicing: a persistent
+    /// surplus is consumed slightly faster (squeeze), a shortfall of a frame or two is
+    /// stretched. Larger underruns pad with silence.
     pub fn pull(&mut self, frames: usize, max_lead_frames: usize, out: &mut Vec<f32>) {
         out.clear();
         let have = self.len_frames();
-        let take = have.min(frames);
-        out.extend(self.q.drain(..take * 2));
-        out.resize(frames * 2, 0.0);
+        let max_adjust = (frames as f64 * MAX_DRIFT) as usize;
+        let n_in = if have >= frames {
+            let surplus = have - frames;
+            if surplus > DRIFT_MARGIN_FRAMES {
+                frames + ((surplus - DRIFT_MARGIN_FRAMES) / 16).min(max_adjust)
+            } else {
+                frames
+            }
+        } else if have > 1 && frames - have <= max_adjust {
+            have
+        } else {
+            // Real underrun: handled by the padding branch below.
+            frames
+        };
+        if n_in != frames && n_in > 1 && frames > 1 {
+            let src: Vec<f32> = self.q.drain(..n_in * 2).collect();
+            let step = (n_in - 1) as f64 / (frames - 1) as f64;
+            for i in 0..frames {
+                let p = i as f64 * step;
+                let a = (p.floor() as usize).min(n_in - 1);
+                let b = (a + 1).min(n_in - 1);
+                let t = (p - a as f64) as f32;
+                for c in 0..2 {
+                    let (x, y) = (src[a * 2 + c], src[b * 2 + c]);
+                    out.push(x + (y - x) * t);
+                }
+            }
+        } else {
+            let take = have.min(frames);
+            out.extend(self.q.drain(..take * 2));
+            out.resize(frames * 2, 0.0);
+        }
         let left = self.len_frames();
         if left > max_lead_frames {
             let drop = left - max_lead_frames;
@@ -400,5 +439,22 @@ mod tests {
         assert_eq!(q.len_frames(), 4);
         q.pull(1, 4, &mut out);
         assert_eq!(out, vec![12.0, 13.0]);
+    }
+
+    #[test]
+    fn source_queue_absorbs_small_drift_without_silence() {
+        // A source one frame short of a 960-frame block is stretched, not padded.
+        let mut q = SourceQueue::default();
+        q.push(&vec![0.5f32; 959 * 2]);
+        let mut out = Vec::new();
+        q.pull(960, 4800, &mut out);
+        assert_eq!(out.len(), 960 * 2);
+        assert!(out.iter().all(|s| (*s - 0.5).abs() < 1e-6));
+        // A persistent surplus is squeezed: more input is consumed than output produced.
+        q.push(&vec![0.5f32; 4000 * 2]);
+        q.pull(960, 48_000, &mut out);
+        assert_eq!(out.len(), 960 * 2);
+        assert!(q.len_frames() < 4000 - 960);
+        assert!(q.len_frames() > 4000 - 960 - 960 / 100);
     }
 }

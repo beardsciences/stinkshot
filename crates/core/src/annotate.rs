@@ -540,17 +540,67 @@ pub fn render_subset(base: &Rgba, doc: &Doc, ids: &[ShapeId], fonts: &Fonts) -> 
 // Sidecars
 // ---------------------------------------------------------------------------------------
 
+/// Sidecar locations keyed by the full file name (`Foo.png.json`), so two captures that
+/// share a stem but differ in extension never share a sidecar.
 fn sidecar_paths(flat_path: &Path) -> Option<(PathBuf, PathBuf)> {
-    let stem = flat_path.file_stem()?.to_string_lossy().to_string();
-    let dir = flat_path
+    let name = flat_path.file_name()?.to_string_lossy().to_string();
+    let dir = sidecar_dir(flat_path);
+    Some((
+        dir.join(format!("{name}.json")),
+        dir.join(format!("{name}.base.png")),
+    ))
+}
+
+fn sidecar_dir(flat_path: &Path) -> PathBuf {
+    flat_path
         .parent()
         .unwrap_or_else(|| Path::new(""))
         .join(".stinkshot")
-        .join("edit");
+        .join("edit")
+}
+
+/// Pre-extension-keyed layout (`Foo.json`), still read for captures made by older builds.
+fn legacy_sidecar_paths(flat_path: &Path) -> Option<(PathBuf, PathBuf)> {
+    let stem = flat_path.file_stem()?.to_string_lossy().to_string();
+    let dir = sidecar_dir(flat_path);
     Some((
         dir.join(format!("{stem}.json")),
         dir.join(format!("{stem}.base.png")),
     ))
+}
+
+/// True when another capture with a different extension shares this file's stem, in which
+/// case a legacy stem-keyed sidecar cannot be attributed to this file.
+fn stem_shared(flat_path: &Path) -> bool {
+    let (Some(stem), Some(own), Some(dir)) = (
+        flat_path.file_stem(),
+        flat_path.file_name(),
+        flat_path.parent(),
+    ) else {
+        return false;
+    };
+    ["png", "jpg", "jpeg", "webp"].iter().any(|ext| {
+        let mut name = stem.to_os_string();
+        name.push(".");
+        name.push(ext);
+        name != own && dir.join(&name).exists()
+    })
+}
+
+/// Sidecar paths that currently exist for this file (current layout, plus a legacy one
+/// that is unambiguously this file's). Used for size accounting and cleanup.
+pub fn editable_files(flat_path: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut take = |pair: Option<(PathBuf, PathBuf)>| {
+        if let Some((j, b)) = pair {
+            out.extend([j, b].into_iter().filter(|p| p.is_file()));
+        }
+    };
+    take(sidecar_paths(flat_path));
+    if !stem_shared(flat_path) {
+        take(legacy_sidecar_paths(flat_path));
+    }
+    out
 }
 
 pub fn save_editable(flat_path: &Path, base: &Rgba, doc: &Doc) -> anyhow::Result<()> {
@@ -566,9 +616,16 @@ pub fn save_editable(flat_path: &Path, base: &Rgba, doc: &Doc) -> anyhow::Result
 
 /// None if no sidecar exists for this file.
 pub fn load_editable(flat_path: &Path) -> anyhow::Result<Option<(Rgba, Doc)>> {
-    let Some((json_path, base_path)) = sidecar_paths(flat_path) else {
+    let Some((mut json_path, mut base_path)) = sidecar_paths(flat_path) else {
         return Ok(None);
     };
+    if !json_path.is_file()
+        && !base_path.is_file()
+        && !stem_shared(flat_path)
+        && let Some((j, b)) = legacy_sidecar_paths(flat_path)
+    {
+        (json_path, base_path) = (j, b);
+    }
     if !json_path.is_file() || !base_path.is_file() {
         if json_path.is_file() != base_path.is_file() {
             log::warn!("incomplete edit sidecar for {}", flat_path.display());
@@ -590,10 +647,7 @@ pub fn load_editable(flat_path: &Path) -> anyhow::Result<Option<(Rgba, Doc)>> {
 }
 
 pub fn delete_editable(flat_path: &Path) -> anyhow::Result<()> {
-    let Some((json_path, base_path)) = sidecar_paths(flat_path) else {
-        return Ok(());
-    };
-    for p in [json_path, base_path] {
+    for p in editable_files(flat_path) {
         match std::fs::remove_file(&p) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -604,7 +658,10 @@ pub fn delete_editable(flat_path: &Path) -> anyhow::Result<()> {
 }
 
 pub fn has_editable(flat_path: &Path) -> bool {
-    sidecar_paths(flat_path).is_some_and(|(j, b)| j.is_file() && b.is_file())
+    let has =
+        |pair: Option<(PathBuf, PathBuf)>| pair.is_some_and(|(j, b)| j.is_file() && b.is_file());
+    has(sidecar_paths(flat_path))
+        || (!stem_shared(flat_path) && has(legacy_sidecar_paths(flat_path)))
 }
 
 #[cfg(test)]

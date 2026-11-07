@@ -1372,6 +1372,32 @@ fn z_order_later_shapes_cover_earlier() {
 }
 
 #[test]
+fn redact_covers_earlier_vector_shapes() {
+    let f = test_fonts();
+    let base = white(80, 60);
+    let mut d = Doc::new(80, 60);
+    d.add(
+        ShapeKind::Rect {
+            rect: RectF::new(10.0, 10.0, 50.0, 40.0),
+            corner_radius: 0.0,
+        },
+        Style {
+            fill: Some([255, 0, 0, 255]),
+            ..style(RED, 1.0)
+        },
+    );
+    d.add(
+        ShapeKind::Redact {
+            rect: RectF::new(20.0, 20.0, 20.0, 20.0),
+        },
+        style([0, 0, 0, 255], 1.0),
+    );
+    let out = render(&base, &d, &f);
+    assert_eq!(out.pixel(30, 30), [0, 0, 0, 255]);
+    assert_eq!(out.pixel(15, 15), [255, 0, 0, 255]);
+}
+
+#[test]
 fn shadow_adds_pixels_below_the_stroke() {
     let f = test_fonts();
     let base = white(100, 60);
@@ -1498,13 +1524,13 @@ fn sidecar_round_trip_and_layout() {
     assert!(
         dir.join(".stinkshot")
             .join("edit")
-            .join("Shot.json")
+            .join("Shot.png.json")
             .is_file()
     );
     assert!(
         dir.join(".stinkshot")
             .join("edit")
-            .join("Shot.base.png")
+            .join("Shot.png.base.png")
             .is_file()
     );
 
@@ -1543,14 +1569,62 @@ fn sidecars_are_per_file_and_tolerate_partial_state() {
     assert!(!has_editable(&b));
 
     // Missing base -> treated as no sidecar.
-    std::fs::remove_file(dir.join(".stinkshot").join("edit").join("a.base.png")).unwrap();
+    std::fs::remove_file(dir.join(".stinkshot").join("edit").join("a.png.base.png")).unwrap();
     assert!(!has_editable(&a));
     assert!(load_editable(&a).unwrap().is_none());
 
     // Corrupt json -> error, not panic.
     save_editable(&a, &base, &doc).unwrap();
-    std::fs::write(dir.join(".stinkshot").join("edit").join("a.json"), "{ nope").unwrap();
+    std::fs::write(
+        dir.join(".stinkshot").join("edit").join("a.png.json"),
+        "{ nope",
+    )
+    .unwrap();
     assert!(load_editable(&a).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn same_stem_different_extension_do_not_share_a_sidecar() {
+    let dir = tmpdir("sidecar_ext");
+    let png = dir.join("Foo.png");
+    let webp = dir.join("Foo.webp");
+    let base = white(10, 10);
+    let mut d1 = Doc::new(10, 10);
+    d1.add(
+        ShapeKind::Line {
+            from: pt(0.0, 0.0),
+            to: pt(5.0, 5.0),
+        },
+        Style::default(),
+    );
+    let d2 = Doc::new(10, 10);
+    save_editable(&png, &base, &d1).unwrap();
+    save_editable(&webp, &base, &d2).unwrap();
+    assert_eq!(load_editable(&png).unwrap().unwrap().1.shapes.len(), 1);
+    assert_eq!(load_editable(&webp).unwrap().unwrap().1.shapes.len(), 0);
+    delete_editable(&webp).unwrap();
+    assert!(has_editable(&png));
+    assert!(!has_editable(&webp));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn legacy_stem_keyed_sidecar_still_loads() {
+    let dir = tmpdir("sidecar_legacy");
+    let flat = dir.join("Old.png");
+    std::fs::write(&flat, b"x").unwrap();
+    let base = white(6, 6);
+    let doc = Doc::new(6, 6);
+    let edit = dir.join(".stinkshot").join("edit");
+    std::fs::create_dir_all(&edit).unwrap();
+    std::fs::write(edit.join("Old.json"), doc.to_json().unwrap()).unwrap();
+    std::fs::write(edit.join("Old.base.png"), base.to_png().unwrap()).unwrap();
+    assert!(has_editable(&flat));
+    assert!(load_editable(&flat).unwrap().is_some());
+    assert_eq!(editable_files(&flat).len(), 2);
+    delete_editable(&flat).unwrap();
+    assert!(!has_editable(&flat));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

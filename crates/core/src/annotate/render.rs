@@ -10,7 +10,7 @@ use super::{
     ArrowGeom, CALLOUT_PAD, HIGHLIGHT_ALPHA, Shape, ShapeKind, Style, arrow_geom, norm, text_rect,
 };
 use crate::fonts::{Fonts, LINE_HEIGHT};
-use crate::geom::{PtF, RectF};
+use crate::geom::{PtF, PxRect, RectF};
 use crate::image::Rgba;
 use crate::redact;
 
@@ -108,6 +108,16 @@ pub(crate) fn render_shapes(
 
     // Step 4: remaining vector shapes in z-order.
     for s in shapes {
+        if let ShapeKind::Redact { rect } = &s.kind {
+            // Redact boxes also cover vector shapes drawn before them (z-order), so text
+            // or callouts underneath cannot show through the box.
+            fill_pixmap(
+                &mut pm,
+                norm(*rect).to_px(),
+                [s.style.color[0], s.style.color[1], s.style.color[2], 255],
+            );
+            continue;
+        }
         if is_destructive(&s.kind) || matches!(s.kind, ShapeKind::Spotlight { .. }) {
             continue;
         }
@@ -118,6 +128,28 @@ pub(crate) fn render_shapes(
         width: w,
         height: h,
         data: pm.take_demultiplied(),
+    }
+}
+
+/// Opaque rectangle fill straight into pixmap memory (opaque, so premultiplied == straight).
+fn fill_pixmap(pm: &mut Pixmap, rect: PxRect, color: [u8; 4]) {
+    let bounds = PxRect {
+        x: 0,
+        y: 0,
+        w: pm.width() as i32,
+        h: pm.height() as i32,
+    };
+    let Some(r) = rect.intersect(&bounds) else {
+        return;
+    };
+    let stride = pm.width() as usize * 4;
+    let data = pm.data_mut();
+    for y in r.y..r.bottom() {
+        let row = y as usize * stride;
+        for x in r.x..r.right() {
+            let i = row + x as usize * 4;
+            data[i..i + 4].copy_from_slice(&color);
+        }
     }
 }
 

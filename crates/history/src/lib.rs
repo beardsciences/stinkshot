@@ -1,6 +1,8 @@
 //! Capture history. The folder of images/videos is the source of truth and is usable
-//! without the app; `<folder>\.stinkshot\index.sqlite` is a rebuildable index (metadata +
-//! FTS5 over OCR text, window title and app). Re-edit sidecars live in
+//! without the app; `<folder>\.stinkshot\index.sqlite` is an index (metadata +
+//! FTS5 over OCR text, window title and app) that `rescan` can refill from the folder. Stars
+//! are also mirrored to `<folder>\.stinkshot\starred.json` so they survive a rebuild; app,
+//! window title and capture mode are not recoverable from the files. Re-edit sidecars live in
 //! `<folder>\.stinkshot\edit\` (owned by `stinkshot_core::annotate`); `delete` and retention
 //! must remove them too, and thumbnails cached in `<folder>\.stinkshot\thumbs\<id>.png`.
 //!

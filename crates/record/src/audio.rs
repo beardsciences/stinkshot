@@ -125,6 +125,7 @@ pub fn spawn(
     fatal: Arc<Mutex<Option<String>>>,
 ) -> Result<JoinHandle<()>> {
     let (tx, rx) = mpsc::channel::<Result<(), String>>();
+    let stop_on_failure = stop.clone();
     let name = format!("record-audio-{source:?}");
     let handle = std::thread::Builder::new()
         .name(name)
@@ -151,7 +152,12 @@ pub fn spawn(
             let _ = handle.join();
             Err(anyhow!(e))
         }
-        Err(_) => Err(anyhow!("audio device initialisation timed out")),
+        Err(_) => {
+            // Nobody can reach the thread's stop flag after this returns; set it so the
+            // thread exits instead of capturing forever if the device finally opens.
+            stop_on_failure.store(true, Ordering::Relaxed);
+            Err(anyhow!("audio device initialisation timed out"))
+        }
     }
 }
 

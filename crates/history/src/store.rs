@@ -13,6 +13,8 @@ use crate::{ItemId, ItemKind, ItemMeta, NewItem, Query, Stats};
 const SCHEMA_VERSION: i32 = 1;
 const META_DIR: &str = ".stinkshot";
 const THUMBS_DIR: &str = "thumbs";
+/// Starred file names, kept outside the index so stars survive an index rebuild.
+const STARRED_FILE: &str = "starred.json";
 const COLS: &str = "id, path, kind, created, width, height, app, window_title, starred, \
                     ocr_text, bytes, mode";
 
@@ -217,6 +219,8 @@ impl History {
         let meta = folder.join(META_DIR);
         std::fs::create_dir_all(&meta).with_context(|| format!("create {}", meta.display()))?;
         let db = meta.join("index.sqlite");
+        let existed = db.exists();
+        let mut fresh = !existed;
         let conn = match open_connection(&db) {
             Ok(c) => c,
             Err(e) if e.to_string().contains("newer than supported") => return Err(e),
@@ -227,13 +231,61 @@ impl History {
                 std::fs::rename(&db, &bad).context("move corrupt index aside")?;
                 let _ = std::fs::remove_file(meta.join("index.sqlite-wal"));
                 let _ = std::fs::remove_file(meta.join("index.sqlite-shm"));
+                fresh = true;
                 open_connection(&db)?
             }
         };
-        Ok(History {
+        if fresh {
+            // Thumbnails are keyed by item id and ids restart in a new index, so every
+            // cached thumbnail now belongs to a different (or no) item.
+            let _ = std::fs::remove_dir_all(meta.join(THUMBS_DIR));
+        }
+        let h = History {
             folder: folder.to_path_buf(),
             conn: Mutex::new(conn),
-        })
+        };
+        if !fresh && !meta.join(STARRED_FILE).exists() {
+            // Index from an older build: seed the star file so a later rebuild keeps stars.
+            h.sync_starred();
+        }
+        Ok(h)
+    }
+
+    /// Writes the starred file names to `.stinkshot/starred.json`, best effort.
+    fn sync_starred(&self) {
+        let names: Vec<String> = {
+            let conn = self.lock();
+            let Ok(mut stmt) = conn.prepare("SELECT path FROM items WHERE starred = 1") else {
+                return;
+            };
+            let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) else {
+                return;
+            };
+            rows.flatten()
+                .map(|p| file_name_of(Path::new(&p)).to_lowercase())
+                .collect()
+        };
+        let path = self.folder.join(META_DIR).join(STARRED_FILE);
+        let result = serde_json::to_vec(&names)
+            .map_err(anyhow::Error::from)
+            .and_then(|json| {
+                let tmp = path.with_extension("json.tmp");
+                std::fs::write(&tmp, json)?;
+                std::fs::rename(&tmp, &path)?;
+                Ok(())
+            });
+        if let Err(e) = result {
+            log::warn!("history: could not write {}: {e:#}", path.display());
+        }
+    }
+
+    fn saved_stars(&self) -> std::collections::HashSet<String> {
+        let path = self.folder.join(META_DIR).join(STARRED_FILE);
+        std::fs::read(&path)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Vec<String>>(&b).ok())
+            .map(|v| v.into_iter().collect())
+            .unwrap_or_default()
     }
 
     fn lock(&self) -> MutexGuard<'_, Connection> {
@@ -407,6 +459,7 @@ impl History {
             "UPDATE items SET starred = ?2 WHERE id = ?1",
             params![id, starred],
         )?;
+        self.sync_starred();
         Ok(())
     }
 
@@ -474,7 +527,21 @@ impl History {
         self.remove_artifacts(id, &item.path);
         self.lock()
             .execute("DELETE FROM items WHERE id = ?1", [id])?;
+        if item.starred {
+            self.sync_starred();
+        }
         Ok(())
+    }
+
+    /// Bytes a row really occupies: the file plus its re-edit sidecars and thumbnail.
+    fn disk_size(&self, id: ItemId, path: &Path, bytes: i64) -> i64 {
+        let side: u64 = stinkshot_core::annotate::editable_files(path)
+            .iter()
+            .chain(std::iter::once(&self.thumb_path(id)))
+            .filter_map(|p| std::fs::metadata(p).ok())
+            .map(|m| m.len())
+            .sum();
+        bytes.saturating_add(i64::try_from(side).unwrap_or(i64::MAX))
     }
 
     /// Remove non-starred items older than `keep_days` (0 = no age limit), then oldest
@@ -500,16 +567,30 @@ impl History {
         }
         if max_bytes > 0 {
             let cap = i64::try_from(max_bytes).unwrap_or(i64::MAX);
-            let (mut total, candidates): (i64, Vec<(ItemId, i64)>) = {
+            let rows: Vec<(ItemId, PathBuf, i64, bool)> = {
                 let conn = self.lock();
-                let total: i64 =
-                    conn.query_row("SELECT COALESCE(SUM(bytes),0) FROM items", [], |r| r.get(0))?;
                 let mut stmt = conn.prepare(
-                    "SELECT id, bytes FROM items WHERE starred = 0 ORDER BY created ASC, id ASC",
+                    "SELECT id, path, bytes, starred FROM items ORDER BY created ASC, id ASC",
                 )?;
-                let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
-                (total, rows.collect::<rusqlite::Result<Vec<_>>>()?)
+                let rows = stmt.query_map([], |r| {
+                    Ok((
+                        r.get(0)?,
+                        PathBuf::from(r.get::<_, String>(1)?),
+                        r.get(2)?,
+                        r.get::<_, i64>(3)? != 0,
+                    ))
+                })?;
+                rows.collect::<rusqlite::Result<Vec<_>>>()?
             };
+            let mut total = 0i64;
+            let mut candidates: Vec<(ItemId, i64)> = Vec::new();
+            for (id, path, bytes, starred) in rows {
+                let size = self.disk_size(id, &path, bytes);
+                total = total.saturating_add(size);
+                if !starred {
+                    candidates.push((id, size));
+                }
+            }
             for (id, size) in candidates {
                 if total <= cap {
                     break;
@@ -557,6 +638,7 @@ impl History {
             m
         };
 
+        let stars = self.saved_stars();
         let mut added = 0u32;
         for (path, kind, md) in &on_disk {
             if known.contains_key(&path.to_string_lossy().to_lowercase()) {
@@ -568,8 +650,9 @@ impl History {
                 read_dimensions(path)
             };
             let res = self.lock().execute(
-                "INSERT OR IGNORE INTO items (path, name, kind, created, width, height, bytes) \
-                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                "INSERT OR IGNORE INTO items \
+                 (path, name, kind, created, width, height, bytes, starred) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
                 params![
                     path.to_string_lossy().as_ref(),
                     file_name_of(path),
@@ -577,7 +660,8 @@ impl History {
                     file_created_ms(md),
                     w,
                     h,
-                    md.len() as i64
+                    md.len() as i64,
+                    stars.contains(&file_name_of(path).to_lowercase())
                 ],
             );
             match res {
@@ -1200,6 +1284,61 @@ mod tests {
         h.touch(id, 400, 200).unwrap();
         assert!(!th.exists());
         assert!(h.thumbnail(12345, 64).unwrap().is_none());
+    }
+
+    #[test]
+    fn stars_survive_a_corrupt_index_and_retention_spares_them() {
+        let t = Tmp::new();
+        let p = write_png(&t.0, "keep.png", 4, 4);
+        write_png(&t.0, "other.png", 4, 4);
+        {
+            let h = History::open(&t.0).unwrap();
+            let id = h.add(new_item(p.clone(), "", "")).unwrap();
+            h.set_starred(id, true).unwrap();
+            h.thumbnail(id, 32).unwrap().unwrap();
+        }
+        let db = t.0.join(".stinkshot").join("index.sqlite");
+        std::fs::write(&db, b"this is not a database at all, not even close").unwrap();
+        let h = History::open(&t.0).unwrap();
+        assert!(!t.0.join(".stinkshot").join("thumbs").exists());
+        assert_eq!(h.rescan().unwrap().0, 2);
+        assert!(h.find_by_path(&p).unwrap().unwrap().starred);
+        assert!(
+            !h.find_by_path(&t.0.join("other.png"))
+                .unwrap()
+                .unwrap()
+                .starred
+        );
+        // Everything is "old", but the star keeps the file through retention.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        h.apply_retention(0, 1).unwrap();
+        assert!(p.exists());
+        assert!(!t.0.join("other.png").exists());
+    }
+
+    #[test]
+    fn retention_counts_sidecars_and_thumbnails() {
+        let t = Tmp::new();
+        let h = History::open(&t.0).unwrap();
+        let a = write_png(&t.0, "a.png", 40, 40);
+        let b = write_png(&t.0, "b.png", 40, 40);
+        let ia = h.add(new_item(a.clone(), "", "")).unwrap();
+        h.add(new_item(b.clone(), "", "")).unwrap();
+        let flat = std::fs::metadata(&a).unwrap().len();
+        let base = stinkshot_core::Rgba::new(40, 40);
+        let mut doc = stinkshot_core::annotate::Doc::new(40, 40);
+        doc.add(
+            stinkshot_core::annotate::ShapeKind::Line {
+                from: stinkshot_core::geom::PtF { x: 0.0, y: 0.0 },
+                to: stinkshot_core::geom::PtF { x: 5.0, y: 5.0 },
+            },
+            stinkshot_core::annotate::Style::default(),
+        );
+        stinkshot_core::annotate::save_editable(&a, &base, &doc).unwrap();
+        // Flat files alone (2 * flat) fit this cap; with a's sidecar they do not.
+        let removed = h.apply_retention(0, flat * 2 + 1).unwrap();
+        assert_eq!(removed, 1);
+        assert!(h.get(ia).unwrap().is_none());
     }
 
     #[test]

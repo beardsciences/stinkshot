@@ -37,6 +37,13 @@ fn to_hwnd(h: Hwnd) -> HWND {
     HWND(h as *mut _)
 }
 
+fn window_pid(hwnd: HWND) -> u32 {
+    let mut pid = 0u32;
+    // SAFETY: out pointer is a live local.
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    pid
+}
+
 fn class_name(hwnd: HWND) -> String {
     let mut buf = [0u16; 256];
     // SAFETY: buffer is a live local.
@@ -174,6 +181,12 @@ pub fn visible_windows() -> Vec<WinInfo> {
         if is_cloaked(hwnd) {
             continue;
         }
+        // Own windows are never targets. Skip them before anything that reads their title:
+        // GetWindowTextW on a window of this process sends WM_GETTEXT synchronously and
+        // blocks forever on helper windows whose thread does not pump messages.
+        if window_pid(hwnd) == own_pid {
+            continue;
+        }
         let class = class_name(hwnd);
         if matches!(class.as_str(), "Progman" | "WorkerW") {
             continue;
@@ -214,6 +227,12 @@ pub fn foreground() -> Option<WinInfo> {
     // SAFETY: trivial query.
     let hwnd = unsafe { GetForegroundWindow() };
     if hwnd.0.is_null() {
+        return None;
+    }
+    // Our own windows (tray host, overlays, toasts) are not capture targets, and reading
+    // their titles can block.
+    // SAFETY: trivial query.
+    if window_pid(hwnd) == unsafe { GetCurrentProcessId() } {
         return None;
     }
     info(hwnd.0 as isize)
