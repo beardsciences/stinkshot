@@ -6,6 +6,7 @@ members = [
     "crates/history",
     "crates/platform",
     "crates/record",
+    "crates/logo",
     "crates/app",
 ]
 
@@ -22,6 +23,7 @@ stinkshot-stitch = { path = "crates/stitch" }
 stinkshot-history = { path = "crates/history" }
 stinkshot-platform = { path = "crates/platform" }
 stinkshot-record = { path = "crates/record" }
+stinkshot-logo = { path = "crates/logo" }
 
 anyhow = "1"
 thiserror = "2"
@@ -66,3 +68,12 @@ opt-level = 2
 # Full-desktop `Rgba` fills and blits on the same path.
 [profile.dev.package.stinkshot-core]
 opt-level = 2
+
+# The logo renderer runs in build.rs (exe icon, tray bitmaps) and on a worker thread for the
+# About animation; optimized it takes about a second, unoptimized it would take minutes.
+[profile.dev.package.stinkshot-logo]
+opt-level = 3
+
+# Release builds compile build-script dependencies at opt-level 0 by default.
+[profile.release.package.stinkshot-logo]
+opt-level = 3

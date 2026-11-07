@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/logo-256.png" width="128" height="128" alt="Stinkshot logo: a glossy green gel orb"></p>
+
 # Stinkshot
 
 A local-first screenshot and screen-recording tool for Windows 11. It freezes the screen, lets you

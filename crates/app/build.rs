@@ -1,28 +1,40 @@
-//! Embeds the application manifest (PerMonitorV2 DPI, Common Controls v6, asInvoker), the
-//! generated icon and version info into the exe.
-
-#[path = "src/icon_gen.rs"]
-mod icon_gen;
+//! Renders the logo (`stinkshot-logo`) once: the multi-resolution exe icon, plus raw RGBA
+//! bitmaps of the tray and window sizes that `src/icon_gen.rs` embeds, so the app never ray
+//! marches an icon at runtime. Then embeds the application manifest (PerMonitorV2 DPI,
+//! Common Controls v6, asInvoker), the icon and version info into the exe.
 
 use std::path::PathBuf;
 
+/// Sizes `src/icon_gen.rs` embeds (tray 16-32, window 64). All are also in the .ico.
+const EMBEDDED_SIZES: [u32; 5] = [16, 20, 24, 32, 64];
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=src/icon_gen.rs");
     println!("cargo:rerun-if-changed=assets/stinkshot.manifest");
-
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
-        return;
-    }
 
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR is set by cargo"));
     let manifest_dir = PathBuf::from(
         std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo"),
     );
 
+    // About a second with the renderer optimized (see the workspace profile overrides).
+    let frames: Vec<(u32, Vec<u8>)> = stinkshot_logo::ICO_SIZES
+        .iter()
+        .map(|s| (*s, stinkshot_logo::render_icon(*s)))
+        .collect();
+    for (size, rgba) in &frames {
+        if EMBEDDED_SIZES.contains(size) {
+            std::fs::write(out_dir.join(format!("logo-{size}.rgba")), rgba)
+                .expect("write logo bitmap");
+        }
+    }
+
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+
     let ico_path = out_dir.join("stinkshot.ico");
-    std::fs::write(&ico_path, icon_gen::ico_bytes([0x7f, 0xd3, 0x6a]))
-        .expect("write generated icon");
+    std::fs::write(&ico_path, stinkshot_logo::ico_from(&frames)).expect("write generated icon");
 
     let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.1.0".into());
     let mut parts = version.split('.').map(|p| {

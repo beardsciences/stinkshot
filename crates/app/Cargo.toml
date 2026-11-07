@@ -16,6 +16,7 @@ stinkshot-stitch.workspace = true
 stinkshot-history.workspace = true
 stinkshot-platform.workspace = true
 stinkshot-record.workspace = true
+stinkshot-logo.workspace = true
 anyhow.workspace = true
 log.workspace = true
 chrono.workspace = true
@@ -34,6 +35,7 @@ features = [
     "Win32_Foundation",
     "Win32_System_Com",
     "Win32_System_Console",
+    "Win32_System_LibraryLoader",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
@@ -43,3 +45,8 @@ features = [
 
 [build-dependencies]
 embed-resource = "3.0.12"
+stinkshot-logo.workspace = true
+
+[dev-dependencies]
+image.workspace = true
+gif.workspace = true

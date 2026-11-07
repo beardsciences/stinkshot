@@ -2,8 +2,9 @@
 //! capture modes with their hotkey labels, record MP4/GIF, History, Settings, Quit.
 //! Left click = region capture, started on the button-up with no delay; double click =
 //! History (the overlay the first click opened is dropped, see `Command::TrayDoubleClick`
-//! and the overlay's own double-click check). Icon generated in code (rounded accent
-//! square with a small white shutter mark) at 16/20/24/32 px for DPI.
+//! and the overlay's own double-click check). Icon is the green gel orb (`icon_gen`,
+//! pre-rendered at 16/20/24/32 px for DPI); it squishes and pulses after a capture
+//! (`flash_capture`) and carries a red dot while recording (`set_recording`).
 
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
@@ -44,6 +45,10 @@ pub struct Tray {
     last_double: Option<Instant>,
     accent: [u8; 3],
     dpi_size: u32,
+    /// Capture animation start and the frame currently shown (`None` = rest pose).
+    anim_start: Option<Instant>,
+    anim_frame: Option<usize>,
+    recording: bool,
 }
 
 const ID_HISTORY: &str = "history";
@@ -74,8 +79,9 @@ fn accent_of(config: &Config) -> [u8; 3] {
     [c[0], c[1], c[2]]
 }
 
-fn make_icon(size: u32, accent: [u8; 3]) -> anyhow::Result<Icon> {
-    Icon::from_rgba(icon_gen::render_rgba(size, accent), size, size).context("build tray icon")
+fn make_icon(size: u32, accent: [u8; 3], pose: icon_gen::Pose) -> anyhow::Result<Icon> {
+    Icon::from_rgba(icon_gen::render_pose(size, accent, pose), size, size)
+        .context("build tray icon")
 }
 
 /// True while `at` is less than `window` ago.
@@ -121,7 +127,7 @@ impl Tray {
             .with_menu(Box::new(menu.clone()))
             .with_menu_on_left_click(false)
             .with_tooltip("Stinkshot")
-            .with_icon(make_icon(dpi_size, accent)?)
+            .with_icon(make_icon(dpi_size, accent, icon_gen::Pose::REST)?)
             .build()
             .context("create tray icon")?;
 
@@ -177,7 +183,70 @@ impl Tray {
             last_double: None,
             accent,
             dpi_size,
+            anim_start: None,
+            anim_frame: None,
+            recording: false,
         })
+    }
+
+    /// Play the short squish-and-pulse animation (a capture just completed). `poll` advances it.
+    pub fn flash_capture(&mut self) {
+        self.anim_start = Some(Instant::now());
+        self.anim_frame = None;
+        crate::wake::wake();
+    }
+
+    /// Show or clear the red recording dot. Cheap to call every frame.
+    pub fn set_recording(&mut self, on: bool) {
+        if on != self.recording {
+            self.recording = on;
+            self.refresh_icon();
+        }
+    }
+
+    fn pose(&self) -> icon_gen::Pose {
+        let base = self
+            .anim_frame
+            .map(|f| icon_gen::ANIM[f])
+            .unwrap_or(icon_gen::Pose::REST);
+        icon_gen::Pose {
+            recording: self.recording,
+            ..base
+        }
+    }
+
+    fn refresh_icon(&mut self) {
+        match make_icon(self.dpi_size, self.accent, self.pose()) {
+            Ok(icon) => {
+                if let Err(e) = self.icon.set_icon(Some(icon)) {
+                    log::warn!("tray icon update failed: {e}");
+                }
+            }
+            Err(e) => log::warn!("tray icon rebuild failed: {e:#}"),
+        }
+    }
+
+    fn tick_animation(&mut self) {
+        let Some(start) = self.anim_start else {
+            return;
+        };
+        let frame_len = Duration::from_millis(icon_gen::ANIM_FRAME_MS);
+        let elapsed = start.elapsed();
+        let idx = (elapsed.as_millis() / frame_len.as_millis()) as usize;
+        let next = if idx < icon_gen::ANIM.len() {
+            Some(idx)
+        } else {
+            self.anim_start = None;
+            None
+        };
+        if next != self.anim_frame {
+            self.anim_frame = next;
+            self.refresh_icon();
+        }
+        if self.anim_start.is_some() {
+            let due = frame_len * (idx as u32 + 1);
+            crate::wake::wake_after(due.saturating_sub(elapsed) + Duration::from_millis(2));
+        }
     }
 
     /// Refresh hotkey labels (and accent / header) after settings change.
@@ -192,14 +261,7 @@ impl Tray {
         let accent = accent_of(config);
         if accent != self.accent {
             self.accent = accent;
-            match make_icon(self.dpi_size, accent) {
-                Ok(icon) => {
-                    if let Err(e) = self.icon.set_icon(Some(icon)) {
-                        log::warn!("tray icon update failed: {e}");
-                    }
-                }
-                Err(e) => log::warn!("tray icon rebuild failed: {e:#}"),
-            }
+            self.refresh_icon();
         }
     }
 
@@ -229,6 +291,7 @@ impl Tray {
 
     /// Drain menu/icon events into commands. Call every frame.
     pub fn poll(&mut self) -> Vec<Command> {
+        self.tick_animation();
         let mut out = Vec::new();
         while let Ok(msg) = self.rx.try_recv() {
             match msg {

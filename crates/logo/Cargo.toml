@@ -1,0 +1,8 @@
+[package]
+name = "stinkshot-logo"
+description = "Stinkshot logo renderer: a ray-marched glossy green gel orb (pure std)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]

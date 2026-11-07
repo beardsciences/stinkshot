@@ -3138,12 +3138,15 @@ dependencies = [
  "eframe",
  "egui",
  "embed-resource",
+ "gif",
  "global-hotkey",
+ "image",
  "log",
  "serde",
  "serde_json",
  "stinkshot-core",
  "stinkshot-history",
+ "stinkshot-logo",
  "stinkshot-platform",
  "stinkshot-record",
  "stinkshot-stitch",
@@ -3182,6 +3185,10 @@ dependencies = [
  "serde_json",
  "stinkshot-core",
 ]
+
+[[package]]
+name = "stinkshot-logo"
+version = "0.1.0"
 
 [[package]]
 name = "stinkshot-platform"

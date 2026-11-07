@@ -11,6 +11,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod actions;
+mod app_icon;
 mod capture_ops;
 mod cli;
 mod errors;
@@ -19,6 +20,7 @@ mod history_ui;
 mod hotkeys;
 mod icon_gen;
 mod logger;
+mod logo_anim;
 mod overlay;
 mod pin;
 mod record_ui;
