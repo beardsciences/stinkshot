@@ -477,6 +477,11 @@ fn video_thread(
     init_tx: mpsc::Sender<InitResult>,
 ) {
     let _timer = TimerResolution::new();
+    // Every capture call (duplication, frame acquisition, cursor position) runs on this
+    // thread; Desktop Duplication refuses DPI-unaware callers on scaled displays, and a
+    // duplication made from an aware thread delivers no frames to an unaware one. The app is
+    // aware through its manifest; tools and test binaries are not.
+    let _dpi = stinkshot_platform::dpi::ThreadPerMonitorAware::new();
     let session = match MfSession::new() {
         Ok(s) => s,
         Err(e) => {

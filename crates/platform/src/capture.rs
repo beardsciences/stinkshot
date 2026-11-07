@@ -12,6 +12,7 @@
 //!   IsBorderRequired = false).
 
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use stinkshot_core::{PxPoint, PxRect, Rgba};
 use windows::Graphics::Capture::{Direct3D11CaptureFramePool, GraphicsCaptureItem};
@@ -536,6 +537,14 @@ unsafe fn duplicate(
     device: &ID3D11Device,
     hdr: bool,
 ) -> Option<IDXGIOutputDuplication> {
+    if duplication_lent() {
+        // The recorder owns this process's duplications right now (a second duplication of
+        // an output in one process fails with E_INVALIDARG); GDI serves the capture.
+        log::debug!("duplication lent to the recorder; using GDI for this output");
+        return None;
+    }
+    // DuplicateOutput1 refuses DPI-unaware callers on scaled displays.
+    let _dpi = crate::dpi::ThreadPerMonitorAware::new();
     // SAFETY: caller guarantees `output` and `device` are live.
     unsafe {
         let attempt = (|| -> windows::core::Result<IDXGIOutputDuplication> {
@@ -886,6 +895,10 @@ fn capture_region(rect: PxRect) -> anyhow::Result<Rgba> {
 /// A session that reports access lost (desktop switch, mode change) is rebuilt once. Failure
 /// is harmless: captures create the session themselves or fall back to GDI.
 pub fn warm_up() {
+    if duplication_lent() {
+        log::debug!("capture warm-up skipped: duplication lent to the recorder");
+        return;
+    }
     let t0 = std::time::Instant::now();
     let mut guard = SESSION.lock().unwrap_or_else(|p| p.into_inner());
     for attempt in 0..2 {
@@ -941,6 +954,56 @@ pub fn warm_up() {
 /// next capture creates a new session.
 pub fn release_cached_capture() {
     *SESSION.lock().unwrap_or_else(|p| p.into_inner()) = None;
+}
+
+/// Outstanding `DuplicationLease`s.
+static LENT: AtomicUsize = AtomicUsize::new(0);
+
+fn duplication_lent() -> bool {
+    LENT.load(Ordering::SeqCst) > 0
+}
+
+/// Hands this process's Desktop Duplication over to another user (the recorder) until dropped.
+///
+/// Windows allows one duplication per output per process: a second `DuplicateOutput(1)` of
+/// an output this process already duplicates fails with `E_INVALIDARG`. The cached capture
+/// session (kept warm from start-up so the overlay opens fast) holds every output, so the
+/// recorder's own duplication failed while it existed. Taking a lease drops the cached
+/// session; while any lease is held, captures (`freeze_all`, `capture_rect`) use GDI for
+/// every output and `warm_up` does nothing. Dropping the last lease discards the GDI-only
+/// session made meanwhile and, if the session was warm before, warms it up again on a
+/// worker thread.
+#[must_use = "the duplication is returned as soon as the lease is dropped"]
+pub struct DuplicationLease(());
+
+/// Whether a warm duplication session was dropped by a lease (restored after the last one).
+static REWARM_AFTER_LEASE: AtomicBool = AtomicBool::new(false);
+
+pub fn lend_duplication() -> DuplicationLease {
+    LENT.fetch_add(1, Ordering::SeqCst);
+    let was_warm = SESSION
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .take()
+        .is_some_and(|s| s.outputs.iter().any(|o| o.dup.is_some()));
+    if was_warm {
+        REWARM_AFTER_LEASE.store(true, Ordering::SeqCst);
+    }
+    DuplicationLease(())
+}
+
+impl Drop for DuplicationLease {
+    fn drop(&mut self) {
+        if LENT.fetch_sub(1, Ordering::SeqCst) != 1 {
+            return;
+        }
+        release_cached_capture();
+        if REWARM_AFTER_LEASE.swap(false, Ordering::SeqCst) {
+            let _ = std::thread::Builder::new()
+                .name("capture-rewarm-after-lease".into())
+                .spawn(warm_up);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------
