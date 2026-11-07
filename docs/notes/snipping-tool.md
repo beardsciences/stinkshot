@@ -26,12 +26,18 @@ Settings > Hotkeys > Windows Integration > **Replace Snipping Tool**
 
 Turning it off removes the hook at once and restores the PrintScreen value Stinkshot
 remembered (or keeps the takeover if Take Over PrintScreen is still on by itself). Quitting
-does the same (`Hotkeys::shutdown`). Nothing else on the system is changed; a crash removes
-the hook automatically (Windows drops a process's hooks when it exits).
+does the same (`Hotkeys::shutdown`). Nothing else on the system is changed. After a crash or
+a kill from Task Manager, Windows drops the hook with the process, but the PrintScreen
+registry value stays at 0. The next start repairs it: `Hotkeys::new` assumes a takeover is in
+place, so the first `reload` calls `take_over_printscreen(false)` when the takeover is not
+wanted, which restores the remembered value (and does nothing when none was saved). The
+remembered value lives at `HKCU\Software\StinkShot\PrevPrintScreenSnipping<profile>`, so a
+dev-profile instance never restores or keeps the release instance's value.
 
 ## The hook (`crates/platform/src/snip.rs`)
 
-- `ChordFilter` is a pure state machine over `KeyEvent { vk, down }`, unit tested (17 tests):
+- `ChordFilter` is a pure state machine over `KeyEvent { vk, down, time }`, unit tested
+  (22 tests):
   - Only the chord letter is ever swallowed: its first down, its auto-repeats, and its
     matching up, in any release order (Win or Shift released first still swallows the S up;
     an S up whose down it did not swallow passes). Win/Shift/Ctrl/Alt always pass, so no key
@@ -43,6 +49,12 @@ the hook automatically (Windows drops a process's hooks when it exits).
     corrects the tracked state. This covers missed key-ups (Win+L locks the session and the
     hook never sees Win come up on the secure desktop; a later Shift+S must type a capital S)
     and modifiers held before the hook was installed.
+  - A missed letter up (S held when the secure desktop takes input, or the hook was dropped
+    for a while) cannot leave the letter stuck: a down counts as an auto-repeat only within
+    `REPEAT_WINDOW_MS` (1100 ms, the longest Windows repeat delay is 1 s) of the previous
+    swallowed event for that letter, using `KBDLLHOOKSTRUCT::time`. Later downs are judged as
+    fresh presses: a plain S types, Win+Shift+S fires again. `GetAsyncKeyState` cannot cover
+    this, since a swallowed down never reaches the async key state.
 - Start menu: swallowing the letter means Explorer sees Win go down and up with nothing in
   between and would open Start. The hook injects an unassigned key (VK 0xE8, the AutoHotkey
   "menu mask" trick) from inside the callback, while Win is still down.
@@ -56,9 +68,12 @@ the hook automatically (Windows drops a process's hooks when it exits).
   `LowLevelHooksTimeout`. The hook thread re-installs the hook every 30 s (new one first, then
   the old one is removed; callbacks only run while that thread waits for messages, so no
   event is processed twice).
-- While Settings is recording a shortcut (`Hotkeys::set_suspended`), routed chords are
-  dropped, like hotkeys. The hook keeps swallowing them, so the Snipping Tool does not open
-  either.
+- While Settings is recording a shortcut (`Hotkeys::set_suspended`), the hook is put in
+  pass-through (`SnipHook::set_pass_through`, an `AtomicBool` the callback reads on each S/R
+  down): it keeps tracking state but swallows and reports no new chord, so the recorder sees
+  Win+Shift+S / Win+Shift+R (and Windows may open the Snipping Tool, as with any unbound
+  chord while recording). Ups and repeats of a letter swallowed before the switch stay
+  swallowed. `reload` and resuming turn pass-through off.
 
 ## ms-screenclip: and other Snipping Tool entry points (investigated, not implemented)
 
@@ -84,7 +99,8 @@ Snipping Tool app is the user's call and is not something Stinkshot does.
 
 ## Verification (Nov 7 2026)
 
-- `cargo test -p stinkshot-platform --lib snip`: 17 state-machine tests.
+- `cargo test -p stinkshot-platform --lib snip`: 22 state-machine tests (missed letter up,
+  tick wraparound and pass-through added after review).
 - App unit tests: `hotkeys::snip_routes_default_and_follow_bindings`,
   `hotkeys::snip_chord_strings_parse_and_match_recorded_form`,
   `settings_ui::snip_status_lines`, `settings_ui::snip_chord_rows`.

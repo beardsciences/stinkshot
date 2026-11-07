@@ -11,6 +11,10 @@ const EMBEDDED_SIZES: [u32; 5] = [16, 20, 24, 32, 64];
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=assets/stinkshot.manifest");
+    println!(
+        "cargo:rustc-env=STINKSHOT_EGUI_VERSIONS={}",
+        egui_versions()
+    );
 
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR is set by cargo"));
     let manifest_dir = PathBuf::from(
@@ -88,4 +92,33 @@ END
     embed_resource::compile(&rc_path, embed_resource::NONE)
         .manifest_required()
         .expect("embed Windows resources (needs the Windows SDK rc.exe)");
+}
+
+/// "ecolor 0.37.0;egui 0.37.0;epaint 0.37.0" from the workspace Cargo.lock. The About logo's
+/// disk cache key includes it, since cached frames are stored after egui's premultiply.
+fn egui_versions() -> String {
+    let lock = PathBuf::from(
+        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo"),
+    )
+    .join("../../Cargo.lock");
+    println!("cargo:rerun-if-changed={}", lock.display());
+    let text = std::fs::read_to_string(&lock).unwrap_or_default();
+    let mut found = Vec::new();
+    let mut name: Option<&str> = None;
+    for line in text.lines() {
+        if let Some(n) = line.strip_prefix("name = ") {
+            name = Some(n.trim_matches('"'));
+        } else if let (Some(n), Some(v)) = (name, line.strip_prefix("version = ")) {
+            if matches!(n, "ecolor" | "egui" | "epaint") {
+                found.push(format!("{n} {}", v.trim_matches('"')));
+            }
+            name = None;
+        }
+    }
+    found.sort();
+    if found.is_empty() {
+        "unknown".into()
+    } else {
+        found.join(";")
+    }
 }

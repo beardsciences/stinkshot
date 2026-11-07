@@ -183,6 +183,7 @@ impl eframe::App for App {
                 "from the header's first frame: first image {:?}, first motion {:?}, all full quality {:?}",
                 stats.first_frame, stats.first_motion, stats.all_full
             );
+            println!("playback held waiting for frames: {:?}", stats.held);
             report("frame interval while frames arrive", &mut self.dts[0]);
             report("show() CPU while frames arrive", &mut self.show_ms[0]);
             report("frame interval after", &mut self.dts[1]);

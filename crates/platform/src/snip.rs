@@ -10,6 +10,13 @@
 //! - Before deciding on a letter down, the tracked modifier state is checked against
 //!   `GetAsyncKeyState`, so a key-up the hook never saw (lock screen, UAC prompt, a hook that
 //!   was removed for a while) cannot turn a plain Shift+S into a capture.
+//! - A swallowed letter whose up the hook never saw (the secure desktop took input while it
+//!   was held, or the hook was removed for a while) is not stuck: a down counts as an
+//!   auto-repeat only within `REPEAT_WINDOW_MS` of the previous swallowed event for that
+//!   letter, otherwise it is judged as a fresh press. `GetAsyncKeyState` cannot help here,
+//!   since a swallowed down never reaches the async key state.
+//! - While pass-through is on (`SnipHook::set_pass_through`, used while Settings records a
+//!   shortcut), no new chord is swallowed or reported; state is still tracked.
 //! - Events injected by this hook (the Start-menu mask key) carry `SNIP_EXTRA_INFO` and are
 //!   ignored. Other injected input (AutoHotkey, Stream Deck, tests) is handled like typing.
 //! - After swallowing a chord, an unassigned key (VK 0xE8) is injected while Win is still
@@ -20,6 +27,8 @@
 //!   re-installs the hook every `REFRESH_MS`.
 
 use std::cell::RefCell;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
@@ -103,6 +112,9 @@ pub const MASK_VK: u32 = 0xE8;
 pub const SNIP_EXTRA_INFO: usize = 0x534E_4950;
 /// Re-install interval: undoes a silent removal after a callback timeout.
 const REFRESH_MS: u32 = 30_000;
+/// Longest gap between a swallowed letter event and its next auto-repeat. The longest
+/// keyboard repeat delay Windows offers is 1 s; repeats after that come every 33-400 ms.
+pub const REPEAT_WINDOW_MS: u32 = 1_100;
 /// Thread message carrying a chord (`wParam` = `SnipChord::index`).
 const WM_SNIP_CHORD: u32 = WM_APP + 0x51;
 const LLKHF_INJECTED: u32 = 0x10;
@@ -121,14 +133,28 @@ pub struct Mods {
 pub struct KeyEvent {
     pub vk: u32,
     pub down: bool,
+    /// Event time in milliseconds (`KBDLLHOOKSTRUCT::time`, wraps around).
+    pub time: u32,
 }
 
 impl KeyEvent {
     pub fn down(vk: u32) -> KeyEvent {
-        KeyEvent { vk, down: true }
+        KeyEvent {
+            vk,
+            down: true,
+            time: 0,
+        }
     }
     pub fn up(vk: u32) -> KeyEvent {
-        KeyEvent { vk, down: false }
+        KeyEvent {
+            vk,
+            down: false,
+            time: 0,
+        }
+    }
+    /// The same event at time `ms`.
+    pub fn at(self, ms: u32) -> KeyEvent {
+        KeyEvent { time: ms, ..self }
     }
 }
 
@@ -156,6 +182,10 @@ pub struct ChordFilter {
     ralt: bool,
     /// Letter keys whose down was swallowed and whose up has not arrived yet.
     swallowed: [bool; 2],
+    /// Time of the last swallowed event for each letter (repeat detection).
+    last: [u32; 2],
+    /// Swallow and report no new chord (see `set_pass_through`).
+    pass_through: bool,
 }
 
 impl ChordFilter {
@@ -176,6 +206,13 @@ impl ChordFilter {
     /// Whether a chord letter is held after its down was swallowed.
     pub fn holding(&self) -> bool {
         self.swallowed.iter().any(|s| *s)
+    }
+
+    /// While on, no new chord is swallowed or reported: a letter down passes through even
+    /// with Win+Shift held. Ups and auto-repeats of a letter already swallowed stay
+    /// swallowed, so no lone half of a key press leaks out.
+    pub fn set_pass_through(&mut self, on: bool) {
+        self.pass_through = on;
     }
 
     /// Correct the tracked modifiers with the real key state. A modifier that is up for
@@ -226,18 +263,27 @@ impl ChordFilter {
         let Some(chord) = SnipChord::from_vk(ev.vk) else {
             return pass;
         };
-        let held = &mut self.swallowed[chord.index()];
+        let idx = chord.index();
         if !ev.down {
             // The up of a swallowed down is swallowed too, whatever the modifiers are now.
-            let swallow = std::mem::replace(held, false);
+            let swallow = std::mem::replace(&mut self.swallowed[idx], false);
             return Verdict { swallow, ..pass };
         }
-        if *held {
-            // Auto-repeat of a letter whose first down was swallowed.
-            return Verdict {
-                swallow: true,
-                ..pass
-            };
+        if self.swallowed[idx] {
+            if ev.time.wrapping_sub(self.last[idx]) <= REPEAT_WINDOW_MS {
+                // Auto-repeat of a letter whose first down was swallowed.
+                self.last[idx] = ev.time;
+                return Verdict {
+                    swallow: true,
+                    ..pass
+                };
+            }
+            // Too long since the last swallowed event to be a repeat: the up was missed.
+            // Judge this down as a fresh press.
+            self.swallowed[idx] = false;
+        }
+        if self.pass_through {
+            return pass;
         }
         let m = Mods {
             win: self.lwin || self.rwin,
@@ -246,7 +292,8 @@ impl ChordFilter {
             alt: self.lalt || self.ralt,
         };
         if m.win && m.shift && !m.ctrl && !m.alt {
-            *held = true;
+            self.swallowed[idx] = true;
+            self.last[idx] = ev.time;
             return Verdict {
                 swallow: true,
                 fire: Some(chord),
@@ -262,6 +309,7 @@ impl ChordFilter {
 struct HookCtx {
     filter: ChordFilter,
     thread_id: u32,
+    pass_through: Arc<AtomicBool>,
 }
 
 thread_local! {
@@ -312,12 +360,15 @@ unsafe extern "system" fn snip_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
             let ev = KeyEvent {
                 vk: info.vkCode,
                 down,
+                time: info.time,
             };
             let verdict = CTX.with(|c| {
                 let mut c = c.borrow_mut();
                 let c = c.as_mut()?;
                 if down && SnipChord::from_vk(ev.vk).is_some() {
                     c.filter.sync(async_mods());
+                    let through = c.pass_through.load(Ordering::Relaxed);
+                    c.filter.set_pass_through(through);
                 }
                 Some((c.filter.on_key(ev), c.thread_id))
             });
@@ -351,6 +402,7 @@ unsafe extern "system" fn snip_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
 pub struct SnipHook {
     thread_id: u32,
     join: Option<std::thread::JoinHandle<()>>,
+    pass_through: Arc<AtomicBool>,
 }
 
 impl SnipHook {
@@ -358,14 +410,17 @@ impl SnipHook {
     /// from that thread's message loop (never from inside the hook callback).
     pub fn install(tx: Sender<SnipChord>) -> anyhow::Result<SnipHook> {
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<anyhow::Result<u32>>();
+        let pass_through = Arc::new(AtomicBool::new(false));
+        let flag = pass_through.clone();
         let join = std::thread::Builder::new()
             .name("stinkshot-snip-hook".into())
-            .spawn(move || hook_thread(tx, ready_tx))
+            .spawn(move || hook_thread(tx, ready_tx, flag))
             .map_err(|e| anyhow::anyhow!("spawn Snipping Tool hook thread: {e}"))?;
         match ready_rx.recv_timeout(std::time::Duration::from_secs(5)) {
             Ok(Ok(thread_id)) => Ok(SnipHook {
                 thread_id,
                 join: Some(join),
+                pass_through,
             }),
             Ok(Err(e)) => {
                 let _ = join.join();
@@ -379,6 +434,14 @@ impl SnipHook {
     }
 }
 
+impl SnipHook {
+    /// Let the chords through untouched (Win+Shift+S opens the Snipping Tool again) and
+    /// report none, e.g. while Settings records a shortcut. The hook stays installed.
+    pub fn set_pass_through(&self, on: bool) {
+        self.pass_through.store(on, Ordering::Relaxed);
+    }
+}
+
 fn install_hook() -> windows::core::Result<HHOOK> {
     // SAFETY: installs a hook whose procedure lives in this module for the process lifetime.
     unsafe {
@@ -387,13 +450,18 @@ fn install_hook() -> windows::core::Result<HHOOK> {
     }
 }
 
-fn hook_thread(tx: Sender<SnipChord>, ready: Sender<anyhow::Result<u32>>) {
+fn hook_thread(
+    tx: Sender<SnipChord>,
+    ready: Sender<anyhow::Result<u32>>,
+    pass_through: Arc<AtomicBool>,
+) {
     // SAFETY: trivial query.
     let thread_id = unsafe { GetCurrentThreadId() };
     CTX.with(|c| {
         *c.borrow_mut() = Some(HookCtx {
             filter: ChordFilter::new(),
             thread_id,
+            pass_through,
         })
     });
     let mut hook = match install_hook() {
@@ -752,6 +820,98 @@ mod tests {
         let mut f = ChordFilter::new();
         run(&mut f, &[K::down(VK_LWIN), K::down(VK_LSHIFT)]);
         assert!(!f.on_key(K::up(VK_S)).swallow);
+    }
+
+    #[test]
+    fn missed_letter_up_does_not_leave_the_letter_stuck() {
+        // Win+Shift+S, then the secure desktop takes the S up (Ctrl+Alt+Del, UAC, Win+L).
+        let mut f = ChordFilter::new();
+        let v = run(
+            &mut f,
+            &[
+                K::down(VK_LWIN).at(1_000),
+                K::down(VK_LSHIFT).at(1_010),
+                K::down(VK_S).at(1_020),
+            ],
+        );
+        assert_eq!(fired(&v), vec![SnipChord::Region]);
+        // Repeats inside the window are still swallowed, and extend it.
+        assert!(f.on_key(K::down(VK_S).at(1_600)).swallow);
+        assert!(f.on_key(K::down(VK_S).at(2_650)).swallow);
+        f.on_key(K::up(VK_LSHIFT).at(2_700));
+        f.on_key(K::up(VK_LWIN).at(2_710));
+        f.sync(Mods::default());
+        // Much later a plain s is typed: it reaches the app.
+        let late = 2_650 + REPEAT_WINDOW_MS + 1;
+        assert_eq!(f.on_key(K::down(VK_S).at(late)), Verdict::default());
+        assert!(!f.on_key(K::up(VK_S).at(late + 50)).swallow);
+        // And a new Win+Shift+S fires again.
+        f.on_key(K::down(VK_LWIN).at(late + 100));
+        f.on_key(K::down(VK_LSHIFT).at(late + 110));
+        assert_eq!(
+            f.on_key(K::down(VK_S).at(late + 120)).fire,
+            Some(SnipChord::Region)
+        );
+    }
+
+    #[test]
+    fn missed_letter_up_then_chord_fires_after_the_window() {
+        let mut f = ChordFilter::new();
+        run(
+            &mut f,
+            &[K::down(VK_LWIN), K::down(VK_LSHIFT), K::down(VK_S).at(5)],
+        );
+        // Win+Shift still down, no S up seen: the next press 1.2 s later fires.
+        let v = f.on_key(K::down(VK_S).at(5 + 1_200));
+        assert_eq!(v.fire, Some(SnipChord::Region));
+        assert!(v.swallow);
+    }
+
+    #[test]
+    fn repeat_window_survives_tick_wraparound() {
+        let mut f = ChordFilter::new();
+        let t0 = u32::MAX - 100;
+        run(
+            &mut f,
+            &[K::down(VK_LWIN), K::down(VK_LSHIFT), K::down(VK_S).at(t0)],
+        );
+        let v = f.on_key(K::down(VK_S).at(t0.wrapping_add(500)));
+        assert!(v.swallow && v.fire.is_none());
+    }
+
+    #[test]
+    fn pass_through_lets_chords_reach_windows() {
+        let mut f = ChordFilter::new();
+        f.set_pass_through(true);
+        let evs = [
+            K::down(VK_LWIN),
+            K::down(VK_LSHIFT),
+            K::down(VK_S),
+            K::up(VK_S),
+            K::down(VK_R),
+            K::up(VK_R),
+        ];
+        let vs = run(&mut f, &evs);
+        assert!(fired(&vs).is_empty());
+        assert!(swallowed(&evs, &vs).is_empty());
+        assert!(vs.iter().all(|v| !v.mask_win));
+        // Modifiers were still tracked: turning it off makes the next press a chord.
+        f.set_pass_through(false);
+        assert_eq!(f.on_key(K::down(VK_S)).fire, Some(SnipChord::Region));
+    }
+
+    #[test]
+    fn pass_through_keeps_swallowing_a_letter_already_held() {
+        let mut f = ChordFilter::new();
+        run(
+            &mut f,
+            &[K::down(VK_LWIN), K::down(VK_LSHIFT), K::down(VK_S)],
+        );
+        f.set_pass_through(true);
+        let v = f.on_key(K::down(VK_S));
+        assert!(v.swallow && v.fire.is_none());
+        assert!(f.on_key(K::up(VK_S)).swallow);
+        assert!(!f.holding());
     }
 
     #[test]

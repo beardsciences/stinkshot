@@ -34,7 +34,14 @@ fn run_value() -> String {
 const KEYBOARD_KEY: &str = r"Control Panel\Keyboard";
 const PRTSC_VALUE: &str = "PrintScreenKeyForSnippingEnabled";
 const APP_KEY: &str = r"Software\StinkShot";
-const PRTSC_PREV_VALUE: &str = "PrevPrintScreenSnipping";
+/// Where `take_over_printscreen` keeps the Windows value it replaced, suffixed with the dev
+/// profile so a dev instance never restores (or keeps) the release instance's saved value.
+fn prtsc_prev_value() -> String {
+    format!(
+        "PrevPrintScreenSnipping{}",
+        stinkshot_core::config::profile_suffix()
+    )
+}
 /// Stored in `PrevPrintScreenSnipping` when the Windows value did not exist.
 const PREV_ABSENT: u32 = u32::MAX;
 const PERSONALIZE_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
@@ -69,14 +76,17 @@ pub fn autostart_enabled() -> bool {
 /// Windows 11 routes PrintScreen to Snipping Tool when
 /// HKCU\Control Panel\Keyboard\PrintScreenKeyForSnippingEnabled = 1, which steals the key
 /// from RegisterHotKey. `take_over(true)` sets it to 0 (remembering the previous value in
-/// HKCU\Software\StinkShot\PrevPrintScreenSnipping); `take_over(false)` restores it.
-/// Takes effect without sign-out on current builds; returns whether a change was made.
+/// HKCU\Software\StinkShot\PrevPrintScreenSnipping, plus the dev profile suffix);
+/// `take_over(false)` restores it, and does nothing when no value was saved, so calling it
+/// at startup repairs a takeover a crashed or killed instance left behind. Takes effect
+/// without sign-out on current builds; returns whether a change was made.
 pub fn take_over_printscreen(take: bool) -> anyhow::Result<bool> {
     let current = reg_get_dword(KEYBOARD_KEY, PRTSC_VALUE);
-    let saved = reg_get_dword(APP_KEY, PRTSC_PREV_VALUE);
+    let prev_value = prtsc_prev_value();
+    let saved = reg_get_dword(APP_KEY, &prev_value);
     if take {
         if saved.is_none() {
-            reg_set_dword(APP_KEY, PRTSC_PREV_VALUE, current.unwrap_or(PREV_ABSENT))?;
+            reg_set_dword(APP_KEY, &prev_value, current.unwrap_or(PREV_ABSENT))?;
         }
         if current == Some(0) {
             return Ok(false);
@@ -93,7 +103,7 @@ pub fn take_over_printscreen(take: bool) -> anyhow::Result<bool> {
             reg_set_dword(KEYBOARD_KEY, PRTSC_VALUE, prev)?;
             current != Some(prev)
         };
-        reg_delete_value(APP_KEY, PRTSC_PREV_VALUE)?;
+        reg_delete_value(APP_KEY, &prev_value)?;
         Ok(changed)
     }
 }

@@ -210,7 +210,10 @@ impl Hotkeys {
             registered: Vec::new(),
             actions: HashMap::new(),
             suspended: false,
-            took_over_printscreen: false,
+            // Assume a takeover is in place, so the first reload hands PrtSc back to
+            // Windows when the takeover is not wanted. That repairs the registry value a
+            // crashed or killed instance left at 0; with nothing saved it does nothing.
+            took_over_printscreen: true,
             rx,
             snip: None,
             snip_status: SnipStatus::Off,
@@ -236,10 +239,22 @@ impl Hotkeys {
         // it stays off then (Settings says so).
         let want_takeover = (cfg.take_over_printscreen || replace) && uses_printscreen;
         self.set_snip_hook(replace);
+        if let Some(h) = &self.snip {
+            // Reload leaves everything live (see the end of this function).
+            h.set_pass_through(false);
+        }
         self.snip_routes = snip_routes(cfg);
         if want_takeover || self.took_over_printscreen {
             match stinkshot_platform::system::take_over_printscreen(want_takeover) {
-                Ok(_) => self.took_over_printscreen = want_takeover,
+                Ok(changed) => {
+                    if changed && !want_takeover {
+                        log::info!("PrintScreen handed back to Windows");
+                    }
+                    self.took_over_printscreen = want_takeover;
+                }
+                Err(e) if !want_takeover => {
+                    log::warn!("could not restore PrintScreen setting: {e:#}");
+                }
                 Err(e) => {
                     log::warn!("PrintScreen takeover change failed: {e:#}");
                     errors.push(
@@ -388,12 +403,17 @@ impl Hotkeys {
     /// Pause all hotkeys (while the settings window is capturing a new combo). The combos
     /// are unregistered from Windows, not just ignored: RegisterHotKey swallows the
     /// keystroke before any window sees it, so the settings window could never record a
-    /// combination that is already bound. Resuming registers them again.
+    /// combination that is already bound. Resuming registers them again. The Snipping Tool
+    /// hook is told to pass its chords through for the same reason, so Win+Shift+S and
+    /// Win+Shift+R reach the recorder (and Windows) instead of being swallowed.
     pub fn set_suspended(&mut self, suspended: bool) {
         if self.suspended == suspended {
             return;
         }
         self.suspended = suspended;
+        if let Some(h) = &self.snip {
+            h.set_pass_through(suspended);
+        }
         let Some(m) = &self.manager else { return };
         if suspended {
             for hk in &self.registered {

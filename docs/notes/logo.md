@@ -392,3 +392,33 @@ a window that is already up, like switching to the About page):
 - Reduced motion with this change (the still is now loop frame 6 and needs only that
   frame).
 
+## Nov 7 2026: review fixes (render order, prewarm, cache key)
+
+- **Render order on slow machines.** Previews used to cover only the playhead and the next
+  frame, and the first full-quality render was the frame already on screen. Where one full
+  frame takes longer than a playback step (125 ms; 62 ms hovered), the playhead caught up
+  during every full render and waited for it. `pick` now keeps previews from the playhead to
+  `PREVIEW_AHEAD` (4) frames past it, and full-quality renders start one past the playhead
+  once the frame on screen has something (without previews, at 1x supersampling, the empty
+  frame on screen still comes first). The frame on screen gets its full frame last.
+- `Stats::held` (printed by the `about_anim` example and in the debug log line) is the
+  playback time spent waiting on a missing frame after the first movement.
+  `STINKSHOT_LOGO_CORES=<n>` makes `worker_count` pretend the machine has `n` cores.
+- Measured (`STINKSHOT_LOGO_CACHE=off`, `about_anim -- dark 8 top`, 230 px ss 2, 8 s):
+
+  | Cores (workers) | Before: held | After: held |
+  |---|---|---|
+  | 4 (3) | 894 ms | 0 |
+  | 12 (8) | 36 ms | 0 |
+  | 2 (1) | not run | 504 ms |
+
+  With one worker a preview itself takes about a playback step, so some waiting remains.
+- **Shell prewarm vs Settings.** `prewarm_cache` (the shell's one-time 30 s prewarm at the
+  system DPI) now does nothing while frames are loaded, loading or about to start
+  (`started_for` or `prewarm_pending` set). Before, with Settings or About open on a monitor
+  at another scale, it reset their frames to the system size and the orb restarted twice.
+  Not verified on a real second monitor.
+- **Cache key.** The hash now also covers the app version and the `ecolor`, `egui` and
+  `epaint` versions from Cargo.lock (`build.rs` sets `STINKSHOT_EGUI_VERSIONS`), since
+  frames are stored after egui's premultiply (`ColorImage::from_rgba_unmultiplied`). An
+  egui upgrade re-renders the loop once in the background.

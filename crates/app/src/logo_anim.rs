@@ -58,6 +58,9 @@ const HEADER_TEXT: f32 = 80.0;
 const TAGLINE: &str = "Local-first screenshots and screen recording for Windows";
 /// CPU frames are freed this long after the page was last shown or prewarmed.
 const KEEP: Duration = Duration::from_secs(60);
+/// Frames past the playhead kept covered by previews while rendering on screen (`pick`):
+/// 500 ms of playback, more than a full frame takes with 3 worker threads.
+const PREVIEW_AHEAD: usize = 4;
 /// Bumped when the cache file layout changes.
 const CACHE_FORMAT: u64 = 1;
 const CACHE_MAGIC: &[u8; 8] = b"STKORB1\n";
@@ -120,22 +123,32 @@ impl Frames {
 }
 
 /// The next frame to produce: (index, supersampling), or None when the loop is complete.
-/// Previews (1x supersampling) only for the two frames at the playhead that have nothing
-/// yet, then full-quality frames in playback order from the playhead.
+/// On screen, previews (1x supersampling) first for any frame from the playhead to
+/// `PREVIEW_AHEAD` frames past it that has nothing yet; then full-quality frames in
+/// playback order starting one past the playhead once the frame on screen has something
+/// (it is about to be left behind, so it gets its full frame last). The preview window covers more than one full
+/// frame's render time even on a slow machine, so playback never waits on a full frame.
 fn pick(f: &Frames, hint: usize, want_loop: bool, preview: bool) -> Option<(usize, u32)> {
     if !want_loop {
         return (!f.full[STILL]).then_some((STILL, f.ss));
     }
     if preview && f.ss > 1 {
-        for k in 0..2 {
+        for k in 0..=PREVIEW_AHEAD {
             let i = (hint + k) % FRAMES;
             if f.slots[i].is_none() {
                 return Some((i, 1));
             }
         }
     }
+    // Past the frame on screen only once it has something to show (without previews,
+    // e.g. at 1x supersampling, it may still be empty).
+    let start = if f.slots[hint % FRAMES].is_some() {
+        hint + 1
+    } else {
+        hint
+    };
     (0..FRAMES)
-        .map(|k| (hint + k) % FRAMES)
+        .map(|k| (start + k) % FRAMES)
         .find(|&i| !f.full[i])
         .map(|i| (i, f.ss))
 }
@@ -171,6 +184,9 @@ pub struct Stats {
     pub first_frame: Option<Duration>,
     pub first_motion: Option<Duration>,
     pub all_full: Option<Duration>,
+    /// Playback time spent held on the last existing frame after the first movement,
+    /// waiting for the next one (stops and starts while the loop renders).
+    pub held: Duration,
     /// Wall time of the worker run that completed the loop (render or cache load).
     pub loop_total: Option<Duration>,
     /// CPU time of `show` on the UI thread: last call and running mean / max (ms).
@@ -269,6 +285,14 @@ pub fn prewarm(ctx: &egui::Context) {
 /// scale `ppp`, so even the first visit to the About page is instant. Does nothing when the
 /// cache is warm or the frames are already loading.
 pub fn prewarm_cache(ctx: &egui::Context, ppp: f32) {
+    // Frames already loaded or loading are for whatever is on screen (Settings may be at
+    // another display scale than the system's), and that run writes its own cache.
+    let busy = handle(ctx)
+        .lock()
+        .is_ok_and(|a| a.started_for.is_some() || a.prewarm_pending.is_some());
+    if busy {
+        return;
+    }
     let (size, ss) = frame_size(ppp);
     if cache_enabled() && cache_path(size, ss).is_some_and(|p| !p.exists()) {
         prewarm_at(ctx, ppp, false);
@@ -406,11 +430,17 @@ pub fn show(ui: &mut Ui) {
         } else {
             f0.floor() + 1.0
         };
-        let f1 = (f0 + dt * a.rate * n).min(cap);
+        let want = f0 + dt * a.rate * n;
+        let f1 = want.min(cap);
         if f1 > f0 && a.stats.first_motion.is_none() {
             a.stats.first_motion = Some(opened.elapsed());
         }
+        if want > cap && a.stats.first_motion.is_some() {
+            a.stats.held += Duration::from_secs_f64(dt);
+        }
         a.phase = (f1 / n).fract();
+    } else if !reduced && has[0] && a.stats.first_motion.is_some() {
+        a.stats.held += Duration::from_secs_f64(dt);
     }
     let f = a.phase * n;
     let i = f.floor() as usize % FRAMES;
@@ -448,7 +478,7 @@ pub fn show(ui: &mut Ui) {
         a.stats.all_full = Some(opened.elapsed());
         log::debug!(
             "about logo: {} px ss {}, {} frames {} in {:?}; first image {:?}, first motion \
-             {:?}, all full quality {:?} after the page appeared",
+             {:?}, all full quality {:?} after the page appeared; held {:?}",
             size,
             ss,
             FRAMES,
@@ -456,7 +486,8 @@ pub fn show(ui: &mut Ui) {
             took,
             a.stats.first_frame,
             a.stats.first_motion,
-            a.stats.all_full
+            a.stats.all_full,
+            a.stats.held
         );
     }
 
@@ -623,11 +654,18 @@ impl Anim {
 }
 
 /// Worker threads: on screen, all cores but one (at most 8); in the background, half the
-/// cores (at most 4).
+/// cores (at most 4). `STINKSHOT_LOGO_CORES=<n>` pretends the machine has `n` cores (for
+/// measuring slower machines).
 fn worker_count(visible: bool) -> usize {
-    let cores = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
+    let cores = std::env::var("STINKSHOT_LOGO_CORES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+        });
     if visible {
         cores.saturating_sub(1).clamp(1, 8)
     } else {
@@ -800,9 +838,13 @@ fn cache_dir() -> Option<PathBuf> {
 }
 
 /// The cache file for one frame size: the name changes with the renderer's source, the
-/// size, the supersampling, the frame count and the file layout.
+/// size, the supersampling, the frame count, the file layout, the app version and the
+/// egui / epaint / ecolor versions from Cargo.lock (frames are stored after egui's
+/// premultiply, `ColorImage::from_rgba_unmultiplied`).
 pub fn cache_path(size: u32, ss: u32) -> Option<PathBuf> {
     let mut h = stinkshot_logo::source_hash();
+    h = stinkshot_logo::fnv1a(h, env!("CARGO_PKG_VERSION").as_bytes());
+    h = stinkshot_logo::fnv1a(h, env!("STINKSHOT_EGUI_VERSIONS").as_bytes());
     for v in [size as u64, ss as u64, FRAMES as u64, CACHE_FORMAT] {
         h = stinkshot_logo::fnv1a(h, &v.to_le_bytes());
     }
@@ -1152,20 +1194,40 @@ mod tests {
     fn render_order_previews_the_playhead_then_follows_it() {
         let mut f = Frames::default();
         f.reset(2, 2);
-        // Visible and empty: cheap previews of the two frames at the playhead first.
-        assert_eq!(pick(&f, 10, true, true), Some((10, 1)));
-        assert!(f.put(2, 2, 10, img(1), false));
-        assert_eq!(pick(&f, 10, true, true), Some((11, 1)));
-        assert!(f.put(2, 2, 11, img(1), false));
-        // Then full quality in playback order, replacing the previews.
+        // Visible and empty: cheap previews from the playhead to PREVIEW_AHEAD past it.
+        for i in 10..=10 + PREVIEW_AHEAD {
+            assert_eq!(pick(&f, 10, true, true), Some((i, 1)));
+            assert!(f.put(2, 2, i, img(1), false));
+        }
+        // Then full quality in playback order from one past the playhead.
+        assert_eq!(pick(&f, 10, true, true), Some((11, 2)));
+        assert!(f.put(2, 2, 11, img(2), true));
+        // The playhead moved on: the new edge of the window gets a preview first.
+        assert_eq!(pick(&f, 11, true, true), Some((11 + PREVIEW_AHEAD, 1)));
+        assert!(f.put(2, 2, 11 + PREVIEW_AHEAD, img(1), false));
+        assert_eq!(pick(&f, 11, true, true), Some((12, 2)));
+        // The frame on screen is done last of all.
+        for i in (0..FRAMES).filter(|&i| i != 10 && i != 11) {
+            f.put(2, 2, i, img(2), true);
+        }
         assert_eq!(pick(&f, 10, true, true), Some((10, 2)));
         assert!(f.put(2, 2, 10, img(2), true));
         assert!(f.full[10] && f.ver[10] == 2);
         // A late preview never replaces a full frame.
         assert!(f.put(2, 2, 10, img(3), false));
         assert_eq!(f.slots[10].as_ref().map(|s| s.pixels[0].r()), Some(2));
-        // In the background: no previews, wrapping around the loop.
-        assert_eq!(pick(&f, 95, true, false), Some((95, 2)));
+        // Without supersampling there are no previews: the empty frame on screen comes first.
+        let mut f = Frames::default();
+        f.reset(2, 1);
+        assert_eq!(pick(&f, 10, true, true), Some((10, 1)));
+        assert!(f.put(2, 1, 10, img(2), true));
+        assert_eq!(pick(&f, 10, true, true), Some((11, 1)));
+        // In the background: no previews, from the playhead, wrapping around the loop.
+        let mut f = Frames::default();
+        f.reset(2, 2);
+        f.put(2, 2, 95, img(2), true);
+        assert_eq!(pick(&f, 94, true, false), Some((94, 2)));
+        assert_eq!(pick(&f, 95, true, false), Some((0, 2)));
         // Still only: just the still frame.
         assert_eq!(pick(&f, 40, false, true), Some((STILL, 2)));
         // Frames for another size are refused.
@@ -1175,6 +1237,14 @@ mod tests {
         }
         assert_eq!(f.full_done, FRAMES);
         assert_eq!(pick(&f, 0, true, true), None);
+    }
+
+    #[test]
+    fn cache_key_covers_the_egui_versions() {
+        let v = env!("STINKSHOT_EGUI_VERSIONS");
+        for name in ["ecolor ", "egui ", "epaint "] {
+            assert!(v.contains(name), "{v}");
+        }
     }
 
     #[test]
