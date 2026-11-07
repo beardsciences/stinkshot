@@ -109,11 +109,29 @@ fn kind_item(kind: &ToastKind) -> Option<ItemId> {
     }
 }
 
+/// Line height of a 12 px body row.
+const BODY_ROW_H: f32 = 15.0;
+/// Rough characters per body row at the card width (12 px proportional font).
+const BODY_ROW_CHARS: usize = 46;
+
+/// Body rows a message toast reserves: 2 normally, up to 4 for long errors so the reason is
+/// not cut off mid-sentence. 4 rows still fit the stack pitch of a capture toast.
+pub fn message_rows(body: &str) -> usize {
+    let rows: usize = body
+        .lines()
+        .map(|l| l.chars().count().div_ceil(BODY_ROW_CHARS).max(1))
+        .sum();
+    rows.clamp(2, 4)
+}
+
 /// Logical window size for a toast.
 pub fn logical_size(kind: &ToastKind) -> Vec2 {
     let has_actions = !actions_for(kind).is_empty();
     match kind {
-        ToastKind::Message { .. } => vec2(CARD_W, PAD + 16.0 + 3.0 + 20.0 + 3.0 + 30.0 + PAD),
+        ToastKind::Message { body, .. } => vec2(
+            CARD_W,
+            PAD + 16.0 + 3.0 + 20.0 + 3.0 + BODY_ROW_H * message_rows(body) as f32 + PAD,
+        ),
         _ => {
             let h = if has_actions {
                 SLOT_H
@@ -322,7 +340,8 @@ impl Surface for Toast {
                     close = command.is_some() || close;
                 }
                 if item.is_some() && (can_edit || is_recording) {
-                    r.on_hover_cursor(egui::CursorIcon::PointingHand);
+                    r.on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text(if can_edit { "Edit" } else { "Play" });
                 }
                 text_x = thumb_rect.right() + 12.0;
             }
@@ -383,7 +402,7 @@ impl Surface for Toast {
                 title_g
             };
             painter.galley(pos2(text_x, top + 20.0), title_g, p.text);
-            let body_rows = if is_message { 2 } else { 1 };
+            let body_rows = if is_message { message_rows(&body) } else { 1 };
             let mut job = egui::text::LayoutJob::single_section(
                 body,
                 egui::TextFormat::simple(uc::font(12.0), p.text_tertiary),
@@ -447,6 +466,20 @@ impl Surface for Toast {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn long_messages_get_more_rows_but_fit_the_slot() {
+        assert_eq!(message_rows("short"), 2);
+        let long = "x".repeat(150);
+        assert_eq!(message_rows(&long), 4);
+        assert_eq!(message_rows(&"y".repeat(100)), 3);
+        let k = ToastKind::Message {
+            title: "t".into(),
+            body: long,
+            error: true,
+        };
+        assert!(logical_size(&k).y <= SLOT_H);
+    }
     use super::*;
 
     fn cap(item: Option<ItemId>, can_edit: bool) -> ToastKind {

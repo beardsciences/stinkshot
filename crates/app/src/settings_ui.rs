@@ -406,7 +406,15 @@ impl Surface for SettingsWindow {
     fn show(&mut self, ctx: &egui::Context, shared: &mut Shared) -> SurfaceStatus {
         let before = shared.config.clone();
         self.pump(ctx, shared);
+        let capturing_before = self.capturing.is_some();
         let key_consumed = self.apply_capture(shared, ctx);
+        // Esc closes the window unless it belongs to a hotkey field, a text field or a popup.
+        let esc_close = !capturing_before
+            && !key_consumed
+            && self.capturing.is_none()
+            && !ctx.egui_wants_keyboard_input()
+            && !egui::Popup::is_any_open(ctx)
+            && ctx.input(|i| i.key_pressed(egui::Key::Escape));
         if self.capturing.is_some() {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
@@ -565,7 +573,7 @@ impl Surface for SettingsWindow {
             self.pending_dirty = true;
         }
         let held = ctx.input(|i| i.pointer.any_down());
-        let closing = ctx.input(|i| i.viewport().close_requested());
+        let closing = esc_close || ctx.input(|i| i.viewport().close_requested());
         if self.pending_dirty && (!held || closing) {
             shared.config_dirty = true;
             self.pending_dirty = false;
@@ -965,12 +973,6 @@ impl SettingsWindow {
             "Include Mouse Cursor",
             "Draw the pointer into screenshots.",
             &mut c.include_cursor,
-        );
-        toggle_row(
-            ui,
-            "Freeze Screen",
-            "Snapshot every monitor first so menus, tooltips and video stay still while you select.",
-            &mut c.freeze_screen,
         );
         toggle_row(
             ui,
@@ -1443,7 +1445,10 @@ impl SettingsWindow {
         let ocr_desc = if has_ocr {
             "OCR each capture in the background so you can search what was on screen.".to_string()
         } else {
-            "OCR each capture in the background so you can search what was on screen. No OCR language is installed: add one in Windows Settings, Time and language, Language and region.".to_string()
+            format!(
+                "OCR each capture in the background so you can search what was on screen. No OCR language is installed. {}",
+                crate::workers::NO_OCR_HELP
+            )
         };
         toggle_row(
             ui,
@@ -1575,9 +1580,12 @@ impl SettingsWindow {
         ui.add_space(14.0);
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new("Settings are stored in %APPDATA%\\StinkShot\\config.toml.")
-                    .size(12.0)
-                    .color(p.text_tertiary),
+                RichText::new(format!(
+                    "Settings are stored in {}.",
+                    Config::path().display()
+                ))
+                .size(12.0)
+                .color(p.text_tertiary),
             );
             if ui.link(RichText::new("Open File").size(12.0)).clicked()
                 && let Err(e) = stinkshot_platform::system::open_path(&Config::path())

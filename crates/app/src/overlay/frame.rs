@@ -311,33 +311,38 @@ impl Overlay {
                 ("Enter", "New Line"),
             ];
         }
+        // Esc steps back one level before it cancels; say which.
+        let esc = if self.annotating()
+            && self.sel.is_some()
+            && (self.selected.is_some() || self.tool != Tool::Select)
+        {
+            ("Esc", "Deselect")
+        } else if self.discard_prompt_active() {
+            ("Esc", "Discard")
+        } else {
+            ("Esc", "Cancel")
+        };
         match (self.sel.is_some(), self.kind) {
-            (false, Kind::Select(_)) => vec![
-                ("Drag", "Region"),
-                ("Click", "Window or Element"),
-                ("Wheel", "Level"),
-                ("Esc", "Cancel"),
-            ],
             (false, _) => vec![
                 ("Drag", "Region"),
                 ("Click", "Window or Element"),
-                ("Space", "Move"),
-                ("Arrows", "Nudge"),
-                ("Esc", "Cancel"),
+                ("Wheel", "Parent or Child"),
+                ("Enter", "Select Highlight"),
+                esc,
             ],
             (true, Kind::Annotate) => vec![
                 ("Enter", "Copy"),
                 ("Ctrl+S", "Save"),
                 ("Ctrl+Z", "Undo"),
                 ("Del", "Delete"),
-                ("Esc", "Cancel"),
+                esc,
             ],
             (true, _) => vec![
                 ("Enter", "Copy"),
                 ("Ctrl+S", "Save"),
                 ("Ctrl+Z", "Undo"),
-                ("Space", "Move"),
-                ("Esc", "Cancel"),
+                ("Arrows", "Nudge"),
+                esc,
             ],
         }
     }
@@ -373,7 +378,12 @@ impl Overlay {
         }
 
         // Hint bar.
-        let leading = if let Kind::Select(p) = self.kind {
+        let leading = if self.discard_prompt_active() {
+            if let Some(t) = self.discard_armed {
+                ctx.request_repaint_after(DISCARD_WINDOW.saturating_sub(t.elapsed()));
+            }
+            Some("Press Esc Again to Discard Your Annotations")
+        } else if let Kind::Select(p) = self.kind {
             Some(hover::purpose_label(p))
         } else {
             None
@@ -451,7 +461,13 @@ impl Overlay {
                 width: self.width,
             };
             let lay = ui::tool_bar(ctx, Pos2::new(tx * k, ty * k), &info, pal, accent, actions);
-            let act_rect = ui::action_bar(ctx, Pos2::new(ax * k, ay * k), pal, actions);
+            let act_rect = ui::action_bar(
+                ctx,
+                Pos2::new(ax * k, ay * k),
+                pal,
+                shared.ocr.is_some(),
+                actions,
+            );
             self.bar_sizes = (lay.rect.size(), act_rect.size());
             self.color_btn = lay.color_btn;
             self.width_btn = lay.width_btn;

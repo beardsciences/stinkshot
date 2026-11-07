@@ -37,7 +37,7 @@ mod undo;
 
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use egui::{Color32, Context, CursorIcon, Event, Key, LayerId, Order, Pos2, Rect, Vec2};
 use stinkshot_core::annotate::{Doc, Shape, ShapeId, ShapeKind, Style};
@@ -227,6 +227,16 @@ pub struct Overlay {
 
     finishing: Option<Finishing>,
     closed: bool,
+    /// First Esc with unsaved annotations: a second Esc within `DISCARD_WINDOW` cancels.
+    discard_armed: Option<Instant>,
+}
+
+/// How long the "press Esc again to discard" prompt waits for the second Esc.
+const DISCARD_WINDOW: Duration = Duration::from_secs(3);
+
+/// Whether this Esc should only arm the discard prompt instead of closing the editor.
+fn esc_needs_confirm(edited: bool, armed_at: Option<Instant>, now: Instant) -> bool {
+    edited && armed_at.is_none_or(|t| now.saturating_duration_since(t) >= DISCARD_WINDOW)
 }
 
 impl Overlay {
@@ -313,6 +323,7 @@ impl Overlay {
             initialized: false,
             finishing: None,
             closed: false,
+            discard_armed: None,
         };
 
         if shared.config.capture.snap_to_elements {
@@ -777,7 +788,23 @@ impl Overlay {
             self.tool = Tool::Select;
             return;
         }
+        let now = Instant::now();
+        if esc_needs_confirm(self.has_unsaved_edits(), self.discard_armed, now) {
+            self.discard_armed = Some(now);
+            return;
+        }
         self.cancel(shared);
+    }
+
+    /// Annotations the user drew or changed in this session (lost on cancel).
+    fn has_unsaved_edits(&self) -> bool {
+        self.annotating() && !self.doc.shapes.is_empty() && self.undo.can_undo()
+    }
+
+    /// True while the discard prompt is showing.
+    fn discard_prompt_active(&self) -> bool {
+        self.discard_armed
+            .is_some_and(|t| t.elapsed() < DISCARD_WINDOW)
     }
 
     fn cancel(&mut self, shared: &mut Shared) {
@@ -849,5 +876,29 @@ impl Surface for Overlay {
 
     fn show(&mut self, ctx: &Context, shared: &mut Shared) -> SurfaceStatus {
         self.frame(ctx, shared)
+    }
+}
+
+#[cfg(test)]
+mod esc_tests {
+    use super::*;
+
+    #[test]
+    fn esc_with_edits_needs_a_second_press() {
+        let now = Instant::now();
+        assert!(!esc_needs_confirm(false, None, now));
+        assert!(esc_needs_confirm(true, None, now));
+        // Second Esc inside the window cancels.
+        assert!(!esc_needs_confirm(
+            true,
+            Some(now),
+            now + Duration::from_millis(500)
+        ));
+        // Too late: it asks again.
+        assert!(esc_needs_confirm(
+            true,
+            Some(now),
+            now + DISCARD_WINDOW + Duration::from_millis(1)
+        ));
     }
 }
