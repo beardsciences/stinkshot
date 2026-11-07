@@ -8,6 +8,7 @@
 //!    a `Surface` shown as an immediate viewport by `shell::Shell`.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod app_icon;
 mod capture_ops;
 mod cli;
 mod filedialog;

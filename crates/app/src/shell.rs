@@ -209,6 +209,9 @@ fn root_viewport() -> egui::ViewportBuilder {
         .with_active(false)
         .with_resizable(false)
         .with_mouse_passthrough(true)
+        // eframe stamps the root icon onto the first active window; without one it uses
+        // the egui logo.
+        .with_icon(crate::app_icon::window_icon())
 }
 
 // ------------------------------------------------------------------------ surfaces
@@ -248,13 +251,17 @@ fn drive(
 ) -> SurfaceStatus {
     let title = surf.title();
     let id = egui::ViewportId::from_hash_of(&title);
-    let builder = surf.viewport_builder(shared).with_title(title.clone());
+    let builder = surf
+        .viewport_builder(shared)
+        .with_title(title.clone())
+        .with_icon(crate::app_icon::window_icon());
     let status = ctx.show_viewport_immediate(id, builder, |ctx, _class| surf.show(ctx, shared));
     if !st.created && st.tries < 90 {
         st.tries += 1;
         match window_util::find_own_window(&title) {
             Some(hwnd) => {
                 st.created = true;
+                crate::app_icon::apply_native(hwnd);
                 surf.on_created(hwnd, shared);
                 if focus {
                     window_util::force_foreground(hwnd);
@@ -1462,6 +1469,11 @@ impl Shell {
         if let Some(err) = &x.error {
             self.notify("Export Problem", err.clone(), true);
         }
+        if !x.items.is_empty()
+            && let Some(t) = &mut self.tray
+        {
+            t.flash_capture();
+        }
         let Some((id, path, kind)) = x.items.first().cloned() else {
             return;
         };
@@ -1493,6 +1505,9 @@ impl Shell {
     }
 
     fn capture_saved(&mut self, s: workers::CaptureSaved) {
+        if let Some(t) = &mut self.tray {
+            t.flash_capture();
+        }
         if s.action == FinishAction::Pin
             && let Some(img) = s.pin_image
         {
@@ -1723,7 +1738,9 @@ impl Shell {
     }
 
     fn poll_inputs(&mut self) {
+        let recording = matches!(self.rec, Rec::Active { .. });
         if let Some(t) = &mut self.tray {
+            t.set_recording(recording);
             self.pending.extend(t.poll());
         }
         self.pending.extend(self.hotkeys.poll());

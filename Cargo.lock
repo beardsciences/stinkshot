@@ -3139,6 +3139,7 @@ dependencies = [
  "egui",
  "embed-resource",
  "global-hotkey",
+ "image",
  "log",
  "serde",
  "serde_json",

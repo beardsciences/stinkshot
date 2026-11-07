@@ -34,6 +34,7 @@ features = [
     "Win32_Foundation",
     "Win32_System_Com",
     "Win32_System_Console",
+    "Win32_System_LibraryLoader",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
@@ -43,3 +44,6 @@ features = [
 
 [build-dependencies]
 embed-resource = "3.0.12"
+
+[dev-dependencies]
+image.workspace = true
