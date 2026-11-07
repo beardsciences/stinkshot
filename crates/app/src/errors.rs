@@ -2,8 +2,9 @@
 //! what to do in one or two sentences; the raw error chain (paths, HRESULTs, OS messages)
 //! goes to the log only. Use `report` / `report_str` at every user-facing failure site.
 
-/// Appended to fallback sentences when the cause is not one we recognise.
-pub const LOG_HINT: &str = "Details are in the StinkShot log.";
+/// Appended once, at the end of the body, when the cause is not one we recognise. Settings >
+/// About has the Open Log button it points to.
+pub const LOG_HINT: &str = "Details are in the log (Settings > About > Open Log).";
 
 /// Failure causes common enough to explain in plain words.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,6 +61,8 @@ fn cause_of_code(code: i32) -> Cause {
 }
 
 /// Classify from the text of an error chain (OS messages and HRESULTs as Windows prints them).
+/// Never returns `Cause::Offline`: local errors also say "timed out" (capture, recorder start),
+/// so only the update check, the one network call, uses `classify_network_text`.
 pub fn classify_text(chain: &str) -> Cause {
     let t = chain.to_ascii_lowercase();
     if t.contains("openclipboard") || t.contains("clipboard is busy") {
@@ -91,7 +94,7 @@ pub fn classify_text(chain: &str) -> Cause {
             }
         }
     }
-    const PHRASES: [(&str, Cause); 12] = [
+    const PHRASES: [(&str, Cause); 10] = [
         ("not enough space", Cause::DiskFull),
         ("disk is full", Cause::DiskFull),
         ("no space left", Cause::DiskFull),
@@ -102,22 +105,36 @@ pub fn classify_text(chain: &str) -> Cause {
         ("cannot find the path", Cause::NotFound),
         ("being used by another process", Cause::InUse),
         ("network path was not found", Cause::NetworkPath),
-        ("dns failed", Cause::Offline),
-        ("connection refused", Cause::Offline),
     ];
     for (phrase, cause) in PHRASES {
         if t.contains(phrase) {
             return cause;
         }
     }
-    if t.contains("timed out")
-        || t.contains("failed to lookup")
-        || t.contains("connection reset")
-        || t.contains("no such host")
-    {
-        return Cause::Offline;
-    }
     Cause::Unknown
+}
+
+/// `classify_text` for errors of a network request (the update check): connection and
+/// lookup failures and timeouts also read as `Cause::Offline`.
+pub fn classify_network_text(chain: &str) -> Cause {
+    let c = classify_text(chain);
+    if c != Cause::Unknown {
+        return c;
+    }
+    let t = chain.to_ascii_lowercase();
+    const OFFLINE: [&str; 6] = [
+        "dns failed",
+        "connection refused",
+        "timed out",
+        "failed to lookup",
+        "connection reset",
+        "no such host",
+    ];
+    if OFFLINE.iter().any(|p| t.contains(p)) {
+        Cause::Offline
+    } else {
+        Cause::Unknown
+    }
 }
 
 /// Classify an error: OS codes of `io::Error`s in the chain first, then the chain's text.
@@ -141,12 +158,23 @@ pub fn classify(e: &anyhow::Error) -> Cause {
     classify_text(&format!("{e:#}"))
 }
 
-/// The plain sentence for `cause`, or `fallback` followed by the log hint.
-fn sentence_or(cause: Cause, fallback: &str) -> String {
-    match cause.sentence() {
-        Some(s) => s.to_string(),
-        None => format!("{fallback} {LOG_HINT}"),
+/// The plain sentence for `cause`, or `fallback`; then `tail` (if any); then, only when the
+/// cause is unknown, the log hint, so it always ends the body.
+fn compose(cause: Cause, fallback: &str, tail: &str) -> String {
+    let mut out = cause.sentence().unwrap_or(fallback).to_string();
+    if !tail.is_empty() {
+        out.push(' ');
+        out.push_str(tail);
     }
+    if cause.sentence().is_none() {
+        out.push(' ');
+        out.push_str(LOG_HINT);
+    }
+    out
+}
+
+fn sentence_or(cause: Cause, fallback: &str) -> String {
+    compose(cause, fallback, "")
 }
 
 /// Plain text for `e` without logging (callers that already logged).
@@ -169,6 +197,24 @@ pub fn report(what: &str, e: &anyhow::Error, fallback: &str) -> String {
 pub fn report_str(what: &str, e: &str, fallback: &str) -> String {
     log::warn!("{what}: {e}");
     explain_str(e, fallback)
+}
+
+/// `report` with a closing sentence (what StinkShot did about it) placed before the log hint.
+pub fn report_with(what: &str, e: &anyhow::Error, fallback: &str, tail: &str) -> String {
+    log::warn!("{what}: {e:#}");
+    compose(classify(e), fallback, tail)
+}
+
+/// `report_with` for string errors.
+pub fn report_str_with(what: &str, e: &str, fallback: &str, tail: &str) -> String {
+    log::warn!("{what}: {e}");
+    compose(classify_text(e), fallback, tail)
+}
+
+/// `report_str` for errors of a network request: offline causes are recognised.
+pub fn report_network_str(what: &str, e: &str, fallback: &str) -> String {
+    log::warn!("{what}: {e}");
+    sentence_or(classify_network_text(e), fallback)
 }
 
 #[cfg(test)]
@@ -205,10 +251,44 @@ mod tests {
             Cause::AccessDenied
         );
         assert_eq!(
-            classify_text("https://code.example: Dns Failed: resolve"),
+            classify_network_text("https://code.example: Dns Failed: resolve"),
+            Cause::Offline
+        );
+        assert_eq!(
+            classify_network_text("io: connection timed out"),
             Cause::Offline
         );
         assert_eq!(classify_text("decoder returned garbage"), Cause::Unknown);
+    }
+
+    #[test]
+    fn local_timeouts_are_not_offline() {
+        for e in [
+            "recording initialisation timed out",
+            "timed out waiting for a window frame (is the window minimized?)",
+            "Windows.Graphics.Capture timed out",
+            "audio initialisation timed out",
+            "https://code.example: Dns Failed: resolve",
+            "connection reset by peer",
+        ] {
+            assert_eq!(classify_text(e), Cause::Unknown, "{e}");
+        }
+        let s = explain_str("recording initialisation timed out", "Fallback.");
+        assert!(s.starts_with("Fallback."));
+        assert!(!s.contains("internet"));
+    }
+
+    #[test]
+    fn log_hint_ends_combined_bodies() {
+        let e = anyhow::anyhow!("weird");
+        let s = report_with("t", &e, "It failed.", "Kept what was recorded.");
+        assert_eq!(s, format!("It failed. Kept what was recorded. {LOG_HINT}"));
+        let e = anyhow::Error::new(std::io::Error::from_raw_os_error(112));
+        let s = report_with("t", &e, "It failed.", "Kept what was recorded.");
+        assert!(s.starts_with("The disk is full."));
+        assert!(s.ends_with("Kept what was recorded."));
+        let s = report_str_with("t", "weird", "It failed.", "");
+        assert_eq!(s, format!("It failed. {LOG_HINT}"));
     }
 
     #[test]

@@ -48,7 +48,7 @@ use stinkshot_record::{Corner, RecordOptions, Recorder, WebcamOptions};
 
 use crate::capture_ops;
 use crate::cli::{self, CliAction};
-use crate::errors::{self, report, report_str};
+use crate::errors::{self, report, report_str, report_str_with, report_with};
 use crate::history_ui::HistoryWindow;
 use crate::hotkeys::Hotkeys;
 use crate::overlay::Overlay;
@@ -74,6 +74,9 @@ const MAX_TOASTS: usize = 6;
 const QUIT_GRACE: Duration = Duration::from_secs(30);
 /// How long after a tray click a double click may still cancel the overlay it opened.
 const TRAY_DOUBLE_CLICK_GRACE: Duration = Duration::from_millis(900);
+/// After a double click is handled, tray single clicks are ignored this long: the button-up of
+/// the second click can still reach the tray icon once the overlay under it is gone.
+const TRAY_CLICK_QUIET: Duration = Duration::from_millis(700);
 /// Overlay hint-bar notices (instead of toasts over the frozen screen).
 const WINDOW_CAPTURE_FALLBACK: &str =
     "Windows could not capture that window. Try again, or use Region capture.";
@@ -358,6 +361,8 @@ struct Shell {
     window_capture_pending: bool,
     /// The overlay was opened by a tray click at this time (double-click detection).
     tray_overlay_at: Option<Instant>,
+    /// Tray single clicks are ignored until then (`TRAY_CLICK_QUIET`).
+    tray_click_quiet_until: Option<Instant>,
     /// Hint-bar notice for the next overlay that opens.
     next_overlay_notice: Option<&'static str>,
     next_overlay_tray: bool,
@@ -534,6 +539,7 @@ impl Shell {
             queued_annotate: None,
             window_capture_pending: false,
             tray_overlay_at: None,
+            tray_click_quiet_until: None,
             next_overlay_notice: None,
             next_overlay_tray: false,
             rec: Rec::Idle,
@@ -750,6 +756,13 @@ impl Shell {
             }
             Command::CheckForUpdates => self.maybe_check_updates(true),
             Command::Quit => self.quit(),
+            Command::TrayClick
+                if self
+                    .tray_click_quiet_until
+                    .is_some_and(|t| Instant::now() < t) =>
+            {
+                log::debug!("tray click ignored: end of a double click");
+            }
             Command::TrayClick => {
                 let had_overlay = self.overlay.is_some();
                 self.next_overlay_tray = true;
@@ -999,6 +1012,7 @@ impl Shell {
             self.touch();
         }
         self.tray_overlay_at = None;
+        self.tray_click_quiet_until = Some(Instant::now() + TRAY_CLICK_QUIET);
         self.open_history();
     }
 
@@ -1272,6 +1286,38 @@ impl Shell {
         workers::export_recording(&self.env(), source, start, end, as_gif, as_mp4);
     }
 
+    /// After an export that wrote nothing: put the trim window back in its idle state (reopening
+    /// it if the user had closed it) so the raw recording can be saved again. False when the
+    /// raw file is gone or cannot be read.
+    fn keep_trim_for_retry(&mut self) -> bool {
+        let Rec::Trim {
+            source,
+            done_issued,
+            gif,
+        } = &mut self.rec
+        else {
+            return false;
+        };
+        if !source.exists() {
+            return false;
+        }
+        *done_issued = false;
+        if let Some(t) = &mut self.trim {
+            t.s.set_progress(None);
+            return true;
+        }
+        match stinkshot_record::probe(source) {
+            Ok(info) => {
+                self.trim = Some(Slot::new(TrimWindow::new(source.clone(), info, *gif)));
+                true
+            }
+            Err(e) => {
+                log::warn!("reopen trim window for {}: {e:#}", source.display());
+                false
+            }
+        }
+    }
+
     fn tick_recording(&mut self) {
         // Countdown -> start.
         if let Rec::Countdown(p) = &self.rec {
@@ -1308,16 +1354,13 @@ impl Shell {
             wake::wake_after(Duration::from_millis(200));
         }
         if let Some(err) = stop_with_error {
-            let why = report_str(
+            let body = report_str_with(
                 "recorder reported an error",
                 &err,
                 "The recorder hit a problem.",
+                "Stopping and keeping what was recorded.",
             );
-            self.notify(
-                "Recording Problem",
-                format!("{why} Stopping and keeping what was recorded."),
-                true,
-            );
+            self.notify("Recording Problem", body, true);
             self.record_stop();
         }
         // Trim window closed without a choice: keep the untrimmed recording.
@@ -1379,14 +1422,14 @@ impl Shell {
                     }
                     Err(e) => {
                         let body = report_str("window capture", &e, WINDOW_CAPTURE_FALLBACK);
-                        self.notify("Window Capture Failed", body, true)
+                        self.notify("Could Not Capture the Window", body, true)
                     }
                 }
             }
             WorkerMsg::WindowCaptureFailed(e) => {
                 self.window_capture_pending = false;
                 let body = report_str("window capture", &e, WINDOW_CAPTURE_FALLBACK);
-                self.notify("Window Capture Failed", body, true);
+                self.notify("Could Not Capture the Window", body, true);
             }
             WorkerMsg::OpenAnnotate {
                 base,
@@ -1398,7 +1441,7 @@ impl Shell {
                 // An Edit click must not freeze the screen under a scroll capture or a
                 // recording, nor replace an open overlay. Say so instead of dropping it.
                 if let Some(reason) = self.annotate_block_reason() {
-                    self.notify("Can't Edit Yet", reason, false);
+                    self.notify("Cannot Edit Yet", reason, false);
                     return;
                 }
                 if let Some((frozen, windows)) = self.freeze() {
@@ -1469,7 +1512,7 @@ impl Shell {
                             &e,
                             "Nothing could be captured from that area. Try again with the page scrolled to the top.",
                         );
-                        self.notify("Scrolling Capture Failed", body, true)
+                        self.notify("Could Not Finish Scrolling Capture", body, true)
                     }
                 }
             }
@@ -1570,17 +1613,36 @@ impl Shell {
 
     fn exported(&mut self, x: workers::Exported) {
         self.exporting = false;
+        self.touch();
+        // Nothing written: the raw recording is still on disk, so keep (or reopen) the trim
+        // window and let Save be retried rather than strand the file.
+        if let Some(err) = &x.error
+            && x.items.is_empty()
+            && self.keep_trim_for_retry()
+        {
+            let body = report_str_with(
+                "export",
+                err,
+                "The recording could not be exported.",
+                "The trim window is still open, so you can try Save again.",
+            );
+            self.notify("Could Not Export the Recording", body, true);
+            return;
+        }
         self.trim = None;
         self.rec = Rec::Idle;
-        self.touch();
         if let Some(err) = &x.error {
-            let why = report_str("export", err, "Try saving the recording again.");
             let body = if x.items.is_empty() {
-                format!("The recording could not be exported. {why}")
+                report_str("export", err, "The recording could not be exported.")
             } else {
-                format!("Part of the export failed; what was saved is in History. {why}")
+                report_str_with(
+                    "export",
+                    err,
+                    "Part of the export failed.",
+                    "What was saved is in History.",
+                )
             };
-            self.notify("Export Problem", body, true);
+            self.notify("Could Not Export the Recording", body, true);
         }
         let Some((id, path, kind)) = x.items.first().cloned() else {
             return;
@@ -1731,7 +1793,7 @@ impl Shell {
                 }
             }
             Err(e) => {
-                let body = report_str(
+                let body = errors::report_network_str(
                     "update check",
                     &e,
                     "The update server did not answer. Try again later.",
@@ -1753,16 +1815,13 @@ impl Shell {
         self.shared.config_dirty = false;
         let new = self.shared.config.clone();
         if let Err(e) = new.save() {
-            let why = report(
+            let body = report_with(
                 "saving config",
                 &e,
                 "The settings file could not be written.",
+                "Your changes apply until StinkShot restarts.",
             );
-            self.notify(
-                "Could Not Save Settings",
-                format!("{why} Your changes apply until StinkShot restarts."),
-                true,
-            );
+            self.notify("Could Not Save Settings", body, true);
         }
         let old = std::mem::replace(&mut self.applied, new.clone());
 
@@ -1795,16 +1854,13 @@ impl Shell {
                     self.invalidate_history();
                 }
                 Err(e) => {
-                    let why = report(
+                    let body = report_with(
                         &format!("open history folder {}", dir.display()),
                         &e,
                         "StinkShot could not use that folder.",
+                        "History stays in the previous folder.",
                     );
-                    self.notify(
-                        "Could Not Open That History Folder",
-                        format!("{why} History stays in the previous folder."),
-                        true,
-                    );
+                    self.notify("Could Not Open That History Folder", body, true);
                     self.shared.config.history.folder = old.history.folder.clone();
                     self.applied.history.folder = old.history.folder.clone();
                     self.shared.config_dirty = true;

@@ -61,6 +61,10 @@ impl Overlay {
         if matches!(self.drag, Drag::Ignore) {
             if !inp.down || inp.released {
                 self.drag = Drag::None;
+                if std::mem::take(&mut self.tray_double_pending) {
+                    self.cancel(shared);
+                    shared.outbox.push(Command::TrayDoubleClick);
+                }
             }
             return;
         }
@@ -88,8 +92,9 @@ impl Overlay {
                     (p.0.floor() as i32, p.1.floor() as i32),
                 )
             {
-                self.cancel(shared);
-                shared.outbox.push(Command::OpenHistory);
+                // Swallow the press and act on the release (see `tray_double_pending`).
+                self.tray_double_pending = true;
+                self.drag = Drag::Ignore;
                 return;
             }
             if inp.pressed {

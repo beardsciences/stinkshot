@@ -88,7 +88,8 @@ pub enum Command {
     OpenUrl(String),
     /// Tray icon single left click: region capture, started immediately.
     TrayClick,
-    /// Tray icon double click: History. Drops the overlay the first click just opened.
+    /// Tray icon double click: History. Drops the overlay the first click just opened. Also
+    /// sent by that overlay when the second click lands on it instead of the icon.
     TrayDoubleClick,
 }
 

@@ -1,4 +1,4 @@
-//! File logger at `%APPDATA%\StinkShot\stinkshot.log`, rotated to `stinkshot.log.1` at 5 MB.
+//! File logger at `%APPDATA%\StinkShot\stinkshot.log` (`logger::path`, profile-aware), rotated to `stinkshot.log.1` at 5 MB.
 //! In debug builds with a console, warnings and errors are mirrored to stderr.
 
 use std::fs::{File, OpenOptions};
@@ -81,6 +81,11 @@ impl Log for FileLogger {
     }
 }
 
+/// The log file of the current profile (Settings > About > Open Log).
+pub fn path() -> PathBuf {
+    stinkshot_core::config::Config::dir().join("stinkshot.log")
+}
+
 /// Install the logger and a panic hook that records panics. Safe to call once; failures
 /// (read-only profile, ...) leave logging disabled rather than aborting the app.
 pub fn init() {
@@ -89,7 +94,7 @@ pub fn init() {
         eprintln!("stinkshot: cannot create {}: {e}", dir.display());
         return;
     }
-    let path = dir.join("stinkshot.log");
+    let path = path();
     let written = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
     let file = match OpenOptions::new().create(true).append(true).open(&path) {
         Ok(f) => f,

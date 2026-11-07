@@ -40,7 +40,7 @@ feedback a regular user hits, **L** polish.
 | 23 | M | Overlay, new region after annotating | Clicking outside the selection once annotations exist is silently ignored (by design, to not orphan them). Users think the overlay froze. | Show a short hint ("Esc to Discard and Start Over") on that click. | Fixed: that click now shows "Annotations Keep This Region: Press Esc to Discard and Start Over" in the hint bar for a few seconds. |
 | 24 | M | Toast after a failed copy | When the clipboard copy fails the toast has Edit, Pin, Copy Text, Folder but no Copy Image, so retrying means opening History. | Add a Copy action (or swap Copy Text for Copy when the copy failed). | Fixed: capture toasts have Edit, Copy, Pin, Copy Text; recordings Play, Copy (copies the file). Show in Folder moved to an icon button beside Dismiss so the row keeps four 84 pt buttons. |
 | 25 | M | Trim window close (X) | Closing the trim window asks "Discard This Recording?", but the app-shell notes say closing keeps the untrimmed MP4. Users who close to "save as is" must choose Discard or Keep Editing; neither saves. | Third button "Save Untrimmed" in that modal, or make X save the MP4 as the notes describe. | Fixed: X or Esc asks "Save This Recording?" with Keep Editing, Discard (goes through the existing confirm) and Save Untrimmed (whole recording in the format it was started for, MP4 or GIF, into History with the usual toast). app-shell notes updated. |
-| 26 | M | Error bodies everywhere | Most failure toasts still show `format!("{e:#}")` chains (file paths, HRESULTs). | Map the common ones (disk full, access denied, path too long) to plain sentences like #6. | Fixed: `errors.rs` maps disk full, access denied, path too long, not found, file in use, network path, busy clipboard and offline to plain sentences with advice; anything else gets the call site's sentence plus "Details are in the StinkShot log." Every Notify / inline error in crates/app goes through it; chains are logged with `{e:#}`. |
+| 26 | M | Error bodies everywhere | Most failure toasts still show `format!("{e:#}")` chains (file paths, HRESULTs). | Map the common ones (disk full, access denied, path too long) to plain sentences like #6. | Fixed: `errors.rs` maps disk full, access denied, path too long, not found, file in use, network path, busy clipboard and offline to plain sentences with advice; anything else gets the call site's sentence plus the log hint (see the third pass below). Every Notify / inline error in crates/app goes through it; chains are logged with `{e:#}`. |
 | 27 | M | Overlay discoverability | Tool letters and Ctrl+P/Ctrl+T are only in tooltips; Flameshot shows a help overlay. | "?" or F1 shows a cheat sheet over the frozen screen. | Fixed: F1 or ? toggles a cheat sheet (Select, Tools, Edit, Finish) built from `overlay/keys.rs`, the same table `read_keys` uses; tests tie toolbar tooltips and chord labels to it. Hint bar ends with "? Shortcuts". |
 | 28 | L | Tray left click | Left click waits 300 ms (double-click detection) before the overlay starts, which feels laggy next to PrtSc. | Start the freeze immediately and cancel it on the double click, or make left click open the menu like Greenshot. | Fixed: a single click starts the overlay immediately (no 300 ms wait). A double click opens History and drops the overlay the first click opened, whether the second click reaches the tray icon (`Command::TrayDoubleClick`) or lands on the new overlay at the icon's spot within 500 ms. |
 | 29 | L | Overlay wheel snapping | Wheel-cycling to the parent element has no label, so it is unclear which element is highlighted. | Show the element's control type / name next to the size chip. | Fixed: after wheel-cycling, a chip at the highlight reads e.g. `Pane “Files” · Level 2 of 4` (UIA control type + name; `uia::SnapResult.labels`, additive). |
@@ -70,3 +70,37 @@ All open findings fixed (notes in the table). Verification:
 - `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all`.
 - Live checks in the `ux2` profile are listed in the return summary of that pass; overlay,
   toasts and HUDs are excluded from capture, so their visuals were checked from code.
+
+## Third pass (Nov 6 2026): review of the 22-32 fixes
+
+- Offline wording: `errors::classify_text` no longer returns `Offline`; only the update check
+  uses `classify_network_text` / `report_network_str`. Local timeouts (recorder start, window
+  capture, audio/webcam init) get their call site's sentence instead of "check your internet
+  connection".
+- Log hint: `LOG_HINT` reads "Details are in the log (Settings > About > Open Log)." and
+  Settings > About has a Log row whose Open Log button selects `stinkshot.log` (profile-aware,
+  `logger::path`) in Explorer. `report_with` / `report_str_with` put the call site's closing
+  sentence before the hint, so the hint always ends the body.
+- Tray double click on the overlay: the overlay swallows the press and opens History on the
+  release (`tray_double_pending`), and the shell ignores `TrayClick` for 700 ms after any
+  handled double click (`tray_click_quiet_until`), so the button-up cannot start a second
+  overlay over History.
+- Copy from a toast or History: a failure in the clipboard step (context `CLIPBOARD_MARK`) reads
+  as a clipboard problem, not "The file could not be read".
+- Export that wrote nothing keeps (or reopens) the trim window so Save can be retried; the toast
+  says so. Partial failures say what was saved is in History.
+- Cheat sheet: `keys::sheet(select_only)`; Copy Text / record / scrolling overlays show only
+  Select plus Finish ("Enter: Use This Region", Esc, F1 or ?). Edit lists Ctrl+Shift+Z, Del or
+  Backspace and Shift+Drag (straight line, square or circle). Columns are sized to their text
+  and wrap to 2x2 (or one column) when the monitor's logical width is too small
+  (`ui::sheet_columns`).
+- Settings > Hotkeys rows show a short error (`hotkeys::ErrorKind::row_text`) without the key,
+  action or Settings path, skip the duplicate text when "Also used by" is shown, and
+  `error_for` no longer prefix-matches "Alt+P" against "Alt+PrtSc".
+- Error titles use "Could Not ...": Could Not Capture the Window, Could Not Finish Scrolling
+  Capture, Could Not Save the File, Could Not Open Save As, Could Not Export the Recording,
+  Could Not Read History, Could Not Find That Item, Could Not Recognize Text, Cannot Edit Yet.
+  "Recording Problem" stays: the recording is stopped and kept, so it is a warning.
+- Toast Copy tooltip: "Copy the Image to the Clipboard" / "Copy the File to the Clipboard".
+- "Could Not Find That Item" body: "It may have been moved or deleted." (History has no
+  refresh control).

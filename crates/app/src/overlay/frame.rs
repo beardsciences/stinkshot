@@ -438,7 +438,8 @@ impl Overlay {
                     (ref_mon.x as f32 + ref_mon.w as f32 / 2.0) * k,
                     (ref_mon.y as f32 + ref_mon.h as f32 / 2.0) * k,
                 ),
-                &keys::sheet(),
+                ref_mon.w as f32 * k,
+                &keys::sheet(matches!(self.kind, Kind::Select(_))),
                 pal,
                 accent,
             );

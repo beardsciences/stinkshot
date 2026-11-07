@@ -81,7 +81,8 @@ fn conflicts_with(h: &Hotkeys, me: HotkeyField) -> Vec<HotkeyField> {
 }
 
 /// Registration error the shell reported for this hotkey string, if any. Matches either the
-/// raw string or its friendly form at the start of the message ("Ctrl+Shift+KeyS: in use").
+/// raw string or its friendly form as the whole first word of the message ("Ctrl+Q (Window)
+/// ..."), so "Alt+P" does not match an error about "Alt+PrtSc".
 fn error_for<'a>(errors: &'a [String], hotkey: &str) -> Option<&'a str> {
     let t = hotkey.trim();
     if t.is_empty() {
@@ -89,9 +90,13 @@ fn error_for<'a>(errors: &'a [String], hotkey: &str) -> Option<&'a str> {
     }
     let friendly = display(t).to_lowercase();
     let raw = t.to_lowercase();
+    let leads_with = |el: &str, key: &str| {
+        el.strip_prefix(key)
+            .is_some_and(|rest| !rest.starts_with(|c: char| c.is_alphanumeric() || c == '+'))
+    };
     errors.iter().map(String::as_str).find(|e| {
         let el = e.to_lowercase();
-        el.starts_with(&raw) || el.starts_with(&friendly)
+        leads_with(&el, &raw) || leads_with(&el, &friendly)
     })
 }
 
@@ -814,8 +819,14 @@ impl SettingsWindow {
                         .join(", ")
                 ));
             }
-            if let Some(e) = error_for(&self.hotkey_errors, &current) {
-                desc.push_str(&format!("  {e}"));
+            // Short form: the row already names the action, shows the key and sits in
+            // Settings > Hotkeys; "Also used by" above already covers a duplicate.
+            if let Some(kind) =
+                error_for(&self.hotkey_errors, &current).and_then(crate::hotkeys::ErrorKind::of)
+                && (kind != crate::hotkeys::ErrorKind::Duplicate || dupes.is_empty())
+            {
+                desc.push_str("  ");
+                desc.push_str(kind.row_text());
             }
             let capturing = self.capturing == Some(field);
             let mut clear = false;
@@ -1627,6 +1638,30 @@ impl SettingsWindow {
         if copied {
             ui.ctx().request_repaint_after(Duration::from_millis(500));
         }
+        let mut open_log = false;
+        widgets::setting_row(
+            ui,
+            "Log",
+            "Error details are written to stinkshot.log. Include it when reporting a problem.",
+            |ui| {
+                if widgets::button(ui, "Open Log").clicked() {
+                    open_log = true;
+                }
+            },
+        );
+        if open_log
+            && let Err(e) = stinkshot_platform::system::reveal_in_explorer(&crate::logger::path())
+        {
+            shared.outbox.push(Command::Notify {
+                title: "Could Not Open the Log".into(),
+                // No LOG_HINT here: it would point back at this button.
+                body: {
+                    log::warn!("open log: {e:#}");
+                    "Windows could not show the log file. Try again in a moment.".into()
+                },
+                error: true,
+            });
+        }
         widgets::setting_row(
             ui,
             "Privacy",
@@ -1698,6 +1733,10 @@ mod tests {
         );
         assert_eq!(error_for(&errors, "Control+KeyT"), None);
         assert_eq!(error_for(&errors, ""), None);
+        // A shorter key is not a prefix match of a longer one.
+        let errors = vec!["Alt+PrtSc (Window) is already used by another program.".to_string()];
+        assert_eq!(error_for(&errors, "Alt+P"), None);
+        assert!(error_for(&errors, "Alt+PrintScreen").is_some());
     }
 
     #[test]

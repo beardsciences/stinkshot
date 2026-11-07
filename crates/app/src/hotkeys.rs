@@ -19,18 +19,25 @@ fn bindings(cfg: &stinkshot_core::config::Hotkeys) -> [(Action, &str); 8] {
     Action::ALL.map(|a| (a, a.hotkey(cfg).as_str()))
 }
 
-/// Hotkey problem texts. Each starts with the key's display form so Settings can attach it
-/// to the matching row (`settings_ui::error_for`), and each says what to do.
+/// Phrases that identify each hotkey problem in its long text (`ErrorKind::of`).
+const INVALID: &str = "is not a valid key combination";
+const DUPLICATE: &str = "is set for both";
+const IN_USE: &str = "is already used by another program";
+const NOT_REGISTERED: &str = "could not be registered with Windows";
+
+/// Hotkey problem texts (long form, for the startup toast and the summary box in Settings).
+/// Each starts with the key's display form so Settings can attach it to the matching row
+/// (`settings_ui::error_for`), and each says what to do.
 fn parse_error_text(key: &str, action: Action) -> String {
     format!(
-        "{key} ({}) is not a valid key combination. Record it again in Settings > Hotkeys.",
+        "{key} ({}) {INVALID}. Record it again in Settings > Hotkeys.",
         action.label()
     )
 }
 
 fn duplicate_text(key: &str, action: Action, other: Action) -> String {
     format!(
-        "{key} is set for both {} and {}; only {} works. Change one of them in Settings > Hotkeys.",
+        "{key} {DUPLICATE} {} and {}; only {} works. Change one of them in Settings > Hotkeys.",
         other.label(),
         action.label(),
         other.label()
@@ -40,14 +47,48 @@ fn duplicate_text(key: &str, action: Action, other: Action) -> String {
 fn register_error_text(key: &str, action: Action, in_use: bool) -> String {
     if in_use {
         format!(
-            "{key} ({}) is already used by another program. Pick a different key in Settings > Hotkeys.",
+            "{key} ({}) {IN_USE}. Pick a different key in Settings > Hotkeys.",
             action.label()
         )
     } else {
         format!(
-            "{key} ({}) could not be registered with Windows. Pick a different key in Settings > Hotkeys.",
+            "{key} ({}) {NOT_REGISTERED}. Pick a different key in Settings > Hotkeys.",
             action.label()
         )
+    }
+}
+
+/// Which hotkey problem a long error text describes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErrorKind {
+    Invalid,
+    Duplicate,
+    InUse,
+    NotRegistered,
+}
+
+impl ErrorKind {
+    pub fn of(text: &str) -> Option<ErrorKind> {
+        [
+            (INVALID, ErrorKind::Invalid),
+            (DUPLICATE, ErrorKind::Duplicate),
+            (IN_USE, ErrorKind::InUse),
+            (NOT_REGISTERED, ErrorKind::NotRegistered),
+        ]
+        .into_iter()
+        .find(|(p, _)| text.contains(p))
+        .map(|(_, k)| k)
+    }
+
+    /// Short form for the hotkey's own row in Settings > Hotkeys: no key, action name or
+    /// Settings path, which the row already shows.
+    pub fn row_text(self) -> &'static str {
+        match self {
+            ErrorKind::Invalid => "Not a valid key combination. Record it again.",
+            ErrorKind::Duplicate => "Also set for another action, so only one of them works.",
+            ErrorKind::InUse => "Already used by another program. Pick a different key.",
+            ErrorKind::NotRegistered => "Windows could not register it. Pick a different key.",
+        }
     }
 }
 
@@ -374,6 +415,40 @@ mod tests {
             assert!(t.starts_with("Ctrl+Q"), "{t}");
             assert!(t.contains("Settings > Hotkeys"), "{t}");
             assert!(t.contains("Window") || t.contains("Region"), "{t}");
+        }
+    }
+
+    #[test]
+    fn row_texts_drop_the_key_action_and_path() {
+        let cases = [
+            (
+                parse_error_text("Ctrl+Q", Action::Window),
+                ErrorKind::Invalid,
+            ),
+            (
+                duplicate_text("Ctrl+Q", Action::Window, Action::Region),
+                ErrorKind::Duplicate,
+            ),
+            (
+                register_error_text("Ctrl+Q", Action::Window, true),
+                ErrorKind::InUse,
+            ),
+            (
+                register_error_text("Ctrl+Q", Action::Window, false),
+                ErrorKind::NotRegistered,
+            ),
+        ];
+        for (long, kind) in cases {
+            assert_eq!(ErrorKind::of(&long), Some(kind), "{long}");
+            let row = kind.row_text();
+            assert!(
+                !row.contains("Ctrl+Q") && !row.contains("Settings"),
+                "{row}"
+            );
+            let names_action = row
+                .split_whitespace()
+                .any(|w| w == "Window" || w == "Region");
+            assert!(!names_action, "{row}");
         }
     }
 

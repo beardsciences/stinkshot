@@ -233,9 +233,15 @@ pub fn clipboard_text_error(e: &anyhow::Error) -> String {
 /// Marker error for "no OCR engine" inside item jobs (mapped to `NO_OCR_HELP`).
 const NO_OCR_MARK: &str = "no OCR language is installed";
 
-/// Copy failures of history items: a busy clipboard, or the file is gone / unreadable.
+/// Context added to the clipboard step of item copies, so a failure there is not reported as
+/// an unreadable file.
+const CLIPBOARD_MARK: &str = "put it on the clipboard";
+
+/// Copy failures of history items: the clipboard step failed (busy or refused), or the file is
+/// gone / unreadable.
 fn item_copy_error(e: &anyhow::Error) -> String {
-    if errors::classify(e) == errors::Cause::ClipboardBusy {
+    let on_clipboard = e.chain().any(|c| c.to_string() == CLIPBOARD_MARK);
+    if on_clipboard || errors::classify(e) == errors::Cause::ClipboardBusy {
         clipboard_text_error(e)
     } else {
         report(
@@ -394,7 +400,7 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
                         saved_as = Some(target);
                     }
                     Err(e) => env.notify(
-                        "Could Not Save File",
+                        "Could Not Save the File",
                         report(
                             "save as",
                             &e,
@@ -405,7 +411,7 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
                 },
                 Ok(None) => {}
                 Err(e) => env.notify(
-                    "Save As Failed",
+                    "Could Not Open Save As",
                     report(
                         "save dialog",
                         &e,
@@ -441,7 +447,7 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
                         }
                     }
                     Err(e) => env.notify(
-                        "Text Recognition Failed",
+                        "Could Not Recognize Text",
                         report(
                             "ocr on finish",
                             &e,
@@ -523,7 +529,7 @@ pub fn ocr_image(env: &Env, img: Rgba) {
                 }
             }
             Err(e) => env.notify(
-                "Text Recognition Failed",
+                "Could Not Recognize Text",
                 report(
                     "ocr region",
                     &e,
@@ -880,11 +886,12 @@ pub fn copy_item_image(env: &Env, id: ItemId) {
             match meta.kind {
                 ItemKind::Image => {
                     let img = Rgba::load(&meta.path)?;
-                    clipboard::set_file_and_image(&meta.path, Some(&img))?;
+                    clipboard::set_file_and_image(&meta.path, Some(&img))
+                        .context(CLIPBOARD_MARK)?;
                     Ok("Image Copied")
                 }
                 _ => {
-                    clipboard::set_file_and_image(&meta.path, None)?;
+                    clipboard::set_file_and_image(&meta.path, None).context(CLIPBOARD_MARK)?;
                     Ok("File Copied")
                 }
             }
@@ -919,7 +926,7 @@ pub fn copy_item_text(env: &Env, id: ItemId) {
             if text.trim().is_empty() {
                 return Ok(None);
             }
-            clipboard::set_text(text.trim())?;
+            clipboard::set_text(text.trim()).context(CLIPBOARD_MARK)?;
             Ok(Some(text))
         };
         match run() {
@@ -1068,8 +1075,8 @@ fn with_item_job(
             }
         }
         Ok(None) => env.notify(
-            "Item Not Found",
-            "It may have been deleted. Refresh History to see what is left.",
+            "Could Not Find That Item",
+            "It may have been moved or deleted.",
             true,
         ),
         Err(e) => {
@@ -1078,7 +1085,7 @@ fn with_item_job(
                 &e,
                 "The history index could not be read. Restart StinkShot and try again.",
             );
-            env.notify("History Error", body, true)
+            env.notify("Could Not Read History", body, true)
         }
     });
 }
@@ -1304,5 +1311,10 @@ mod ux_tests {
         assert!(item_copy_error(&other).contains("moved or deleted"));
         let gone = anyhow::Error::new(std::io::Error::from_raw_os_error(2));
         assert!(!item_copy_error(&gone).contains("os error"));
+        // A refused clipboard is not an unreadable file.
+        let refused = anyhow::anyhow!("GlobalLock failed").context(CLIPBOARD_MARK);
+        let m = item_copy_error(&refused);
+        assert!(m.contains("clipboard"), "{m}");
+        assert!(!m.contains("could not be read"), "{m}");
     }
 }

@@ -3,7 +3,8 @@
 //! mutate overlay state directly; they push `UiAction`s that the overlay applies.
 
 use egui::{
-    Align2, Area, Color32, Context, Frame, Id, Margin, Order, Pos2, Rect, RichText, Sense, Vec2,
+    Align2, Area, Color32, Context, FontId, Frame, Id, Margin, Order, Pos2, Rect, RichText, Sense,
+    Vec2,
 };
 
 use super::paint::color32;
@@ -633,27 +634,77 @@ pub fn element_chip(ctx: &Context, pos: Pos2, text: &str, pal: &Palette) {
         });
 }
 
-/// F1 / ? cheat sheet: every overlay shortcut in four columns, centered on the monitor.
+/// Columns per row for groups of the given widths: all in one row when they fit in `max_w`,
+/// else half per row (2x2 for four groups), else one per row.
+pub fn sheet_columns(widths: &[f32], gap: f32, max_w: f32) -> usize {
+    let n = widths.len().max(1);
+    let fits = |cols: usize| {
+        widths.chunks(cols).all(|row| {
+            row.iter().sum::<f32>() + gap * (row.len().saturating_sub(1)) as f32 <= max_w
+        })
+    };
+    let half = n.div_ceil(2);
+    if fits(n) {
+        n
+    } else if half < n && fits(half) {
+        half
+    } else {
+        1
+    }
+}
+
+/// F1 / ? cheat sheet: the overlay's shortcuts in columns sized to their text, centered on the
+/// monitor. Four columns wrap to two rows when the monitor (`max_w` logical px) is too narrow.
 pub fn shortcut_sheet(
     ctx: &Context,
     center: Pos2,
+    max_w: f32,
     groups: &super::keys::Sheet,
     pal: &Palette,
     accent: Color32,
 ) {
-    const KEY_W: f32 = 92.0;
-    const COL_W: f32 = 236.0;
+    const KEY_GAP: f32 = 10.0;
+    const COL_GAP: f32 = 18.0;
+    const MARGIN_X: i8 = 22;
+    let key_font = theme::semibold(12.0);
+    let what_font = FontId::proportional(12.0);
     Area::new(Id::unique("stinkshot-ov-shortcuts"))
         .order(Order::Tooltip)
         .fixed_pos(center)
         .pivot(Align2::CENTER_CENTER)
         .interactable(false)
         .show(ctx, |ui| {
+            // Column widths from the text itself: (key column, whole column) per group.
+            let measure = |t: &str, f: &FontId| {
+                ui.painter()
+                    .layout_no_wrap(t.to_owned(), f.clone(), pal.text)
+                    .size()
+                    .x
+                    .ceil()
+            };
+            let cols: Vec<(f32, f32)> = groups
+                .iter()
+                .map(|(title, rows)| {
+                    let key_w = rows
+                        .iter()
+                        .map(|(k, _)| measure(k, &key_font))
+                        .fold(0.0_f32, f32::max);
+                    let what_w = rows
+                        .iter()
+                        .map(|(_, w)| measure(w, &what_font))
+                        .fold(0.0_f32, f32::max);
+                    let title_w = measure(title, &theme::semibold(13.0));
+                    (key_w, (key_w + KEY_GAP + what_w).max(title_w))
+                })
+                .collect();
+            let widths: Vec<f32> = cols.iter().map(|c| c.1).collect();
+            let room = max_w - 32.0 - 2.0 * MARGIN_X as f32;
+            let per_row = sheet_columns(&widths, COL_GAP, room);
             Frame::NONE
                 .fill(pal.flyout.gamma_multiply(0.97))
                 .stroke(egui::Stroke::new(1.0, pal.stroke))
                 .corner_radius(10)
-                .inner_margin(Margin::symmetric(22, 18))
+                .inner_margin(Margin::symmetric(MARGIN_X, 18))
                 .shadow(egui::epaint::Shadow {
                     offset: [0, 8],
                     blur: 24,
@@ -677,42 +728,50 @@ pub fn shortcut_sheet(
                         );
                     });
                     ui.add_space(8.0);
-                    ui.horizontal_top(|ui| {
-                        ui.spacing_mut().item_spacing = Vec2::new(18.0, 0.0);
-                        for (title, rows) in groups {
-                            ui.vertical(|ui| {
-                                ui.set_width(COL_W);
-                                ui.spacing_mut().item_spacing = Vec2::new(0.0, 5.0);
-                                ui.label(
-                                    RichText::new(*title)
-                                        .font(theme::semibold(13.0))
-                                        .color(accent_fg),
-                                );
-                                ui.add_space(2.0);
-                                for (keys, what) in rows {
-                                    ui.horizontal(|ui| {
-                                        ui.spacing_mut().item_spacing.x = 8.0;
-                                        let (r, _) = ui.allocate_exact_size(
-                                            Vec2::new(KEY_W, 16.0),
-                                            Sense::hover(),
-                                        );
-                                        ui.painter().text(
-                                            r.left_center(),
-                                            Align2::LEFT_CENTER,
-                                            keys,
-                                            theme::semibold(12.0),
-                                            pal.text,
-                                        );
-                                        ui.label(
-                                            RichText::new(*what)
-                                                .size(12.0)
-                                                .color(pal.text_secondary),
-                                        );
-                                    });
-                                }
-                            });
+                    let indexed: Vec<usize> = (0..groups.len()).collect();
+                    for (row_i, row) in indexed.chunks(per_row).enumerate() {
+                        if row_i > 0 {
+                            ui.add_space(12.0);
                         }
-                    });
+                        ui.horizontal_top(|ui| {
+                            ui.spacing_mut().item_spacing = Vec2::new(COL_GAP, 0.0);
+                            for &gi in row {
+                                let (title, rows) = &groups[gi];
+                                let (key_w, col_w) = cols[gi];
+                                ui.vertical(|ui| {
+                                    ui.set_width(col_w);
+                                    ui.spacing_mut().item_spacing = Vec2::new(0.0, 5.0);
+                                    ui.label(
+                                        RichText::new(*title)
+                                            .font(theme::semibold(13.0))
+                                            .color(accent_fg),
+                                    );
+                                    ui.add_space(2.0);
+                                    for (keys, what) in rows {
+                                        ui.horizontal(|ui| {
+                                            ui.spacing_mut().item_spacing.x = KEY_GAP;
+                                            let (r, _) = ui.allocate_exact_size(
+                                                Vec2::new(key_w, 16.0),
+                                                Sense::hover(),
+                                            );
+                                            ui.painter().text(
+                                                r.left_center(),
+                                                Align2::LEFT_CENTER,
+                                                keys,
+                                                key_font.clone(),
+                                                pal.text,
+                                            );
+                                            ui.label(
+                                                RichText::new(*what)
+                                                    .font(what_font.clone())
+                                                    .color(pal.text_secondary),
+                                            );
+                                        });
+                                    }
+                                });
+                            }
+                        });
+                    }
                 });
         });
 }
@@ -734,4 +793,23 @@ pub fn busy_pill(ctx: &Context, center: Pos2, pal: &Palette) {
                     ui.label(RichText::new("Finishing...").size(13.0).color(pal.text));
                 });
         });
+}
+
+#[cfg(test)]
+mod sheet_tests {
+    use super::sheet_columns;
+
+    #[test]
+    fn sheet_wraps_to_two_rows_on_narrow_monitors() {
+        let w = [236.0, 236.0, 236.0, 236.0];
+        // 1920 px at 100 %: one row.
+        assert_eq!(sheet_columns(&w, 18.0, 1920.0 - 76.0), 4);
+        // 1280 px at 125 % or 1920 px at 200 %: 2x2.
+        assert_eq!(sheet_columns(&w, 18.0, 1024.0 - 76.0), 2);
+        assert_eq!(sheet_columns(&w, 18.0, 960.0 - 76.0), 2);
+        // Absurdly narrow: one column.
+        assert_eq!(sheet_columns(&w, 18.0, 300.0), 1);
+        // The region-only sheet has two groups.
+        assert_eq!(sheet_columns(&w[..2], 18.0, 960.0 - 76.0), 2);
+    }
 }

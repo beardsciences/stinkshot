@@ -101,8 +101,8 @@ impl ToastAction {
     fn tooltip(self, recording: bool) -> &'static str {
         match self {
             ToastAction::Edit => "Open in the Editor",
-            ToastAction::Copy if recording => "Copy the File Again",
-            ToastAction::Copy => "Copy the Image Again",
+            ToastAction::Copy if recording => "Copy the File to the Clipboard",
+            ToastAction::Copy => "Copy the Image to the Clipboard",
             ToastAction::Pin => "Pin to Screen",
             ToastAction::CopyText => "Copy Recognized Text",
             ToastAction::Folder => "Show in Folder",

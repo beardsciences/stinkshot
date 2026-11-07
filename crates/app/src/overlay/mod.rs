@@ -244,6 +244,9 @@ pub struct Overlay {
     hex_flash: Option<HexFlash>,
     /// Opened by a tray icon click (see `OverlayRequest::from_tray_click`).
     from_tray_click: bool,
+    /// The press of a tray double click landed here; History opens on its release, so the
+    /// button-up cannot fall through to the tray icon once the overlay is gone.
+    tray_double_pending: bool,
     opened_at: Instant,
 }
 
@@ -407,6 +410,7 @@ impl Overlay {
             help_open: false,
             hex_flash: None,
             from_tray_click,
+            tray_double_pending: false,
             opened_at: Instant::now(),
         };
 
