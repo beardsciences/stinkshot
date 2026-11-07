@@ -336,6 +336,15 @@ pub struct HudToggles {
     pub overlays: bool,
 }
 
+/// Tooltip for a HUD toggle; a source that was not opened says where to turn it on.
+fn hud_toggle_tip(name: &str, on: bool, available: bool) -> String {
+    if !available {
+        format!("{name} Is Off in Settings > Recording")
+    } else {
+        format!("{name} {}", if on { "On" } else { "Off" })
+    }
+}
+
 const HUD_W: f32 = 352.0;
 const HUD_H: f32 = 72.0;
 const HUD_PAD: f32 = 5.0;
@@ -345,6 +354,11 @@ const HUD_GAP: f32 = 4.0;
 pub struct RecordHud {
     summary: String,
     toggles: HudToggles,
+    /// Sources the recorder opened at start. A source that was off in Settings cannot be
+    /// switched on mid-recording, so its toggle is disabled instead of pretending.
+    available: HudToggles,
+    /// Display form of the record hotkey ("Ctrl+Shift+R"), shown on the Stop tooltip.
+    stop_key: String,
     changed: bool,
     status: Option<Status>,
     scale: f32,
@@ -360,11 +374,24 @@ impl RecordHud {
         Self {
             summary,
             toggles,
+            available: HudToggles {
+                mic: true,
+                system: true,
+                webcam: true,
+                overlays: true,
+            },
+            stop_key: String::new(),
             changed: false,
             status: None,
             scale: area.scale,
             rect,
         }
+    }
+
+    /// Which toggles can do anything (see `available`) and the hotkey that stops recording.
+    pub fn set_context(&mut self, available: HudToggles, stop_key: String) {
+        self.available = available;
+        self.stop_key = stop_key;
     }
 
     pub fn update_status(&mut self, status: Status) {
@@ -419,6 +446,12 @@ impl Surface for RecordHud {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
         let mut toggles = self.toggles;
+        let available = self.available;
+        let stop_tip = if self.stop_key.is_empty() {
+            "Stop and Trim".to_string()
+        } else {
+            format!("Stop and Trim ({})", self.stop_key)
+        };
         let mut outbox: Vec<Command> = Vec::new();
         let summary = self.summary.clone();
 
@@ -491,16 +524,39 @@ impl Surface for RecordHud {
             x += HUD_BTN + HUD_GAP;
 
             // Toggles.
-            let items: [(Icon, &str, &mut bool); 4] = [
-                (Icon::Mic, "Microphone", &mut toggles.mic),
-                (Icon::Speaker, "System Audio", &mut toggles.system),
-                (Icon::Webcam, "Webcam", &mut toggles.webcam),
-                (Icon::Clicks, "Show Clicks and Keys", &mut toggles.overlays),
+            let items: [(Icon, &str, bool, &mut bool); 4] = [
+                (Icon::Mic, "Microphone", available.mic, &mut toggles.mic),
+                (
+                    Icon::Speaker,
+                    "System Audio",
+                    available.system,
+                    &mut toggles.system,
+                ),
+                (
+                    Icon::Webcam,
+                    "Webcam",
+                    available.webcam,
+                    &mut toggles.webcam,
+                ),
+                (
+                    Icon::Clicks,
+                    "Show Clicks and Keys",
+                    available.overlays,
+                    &mut toggles.overlays,
+                ),
             ];
-            for (icon, name, on) in items {
+            for (icon, name, can, on) in items {
                 let r = btn(x);
-                let tip = format!("{name} {}", if *on { "on" } else { "off" });
-                let resp = place(ui, r, |ui| theme::widgets::icon_button(ui, icon, &tip, *on));
+                let tip = hud_toggle_tip(name, *on, can);
+                let resp = place(ui, r, |ui| {
+                    ui.add_enabled_ui(can, |ui| theme::widgets::icon_button(ui, icon, &tip, *on))
+                        .inner
+                });
+                let resp = if can {
+                    resp
+                } else {
+                    resp.on_disabled_hover_text(&tip)
+                };
                 if !*on {
                     let c = r.center();
                     ui.painter().line_segment(
@@ -527,6 +583,7 @@ impl Surface for RecordHud {
                 p,
                 accent,
             )
+            .on_hover_text(&stop_tip)
             .clicked()
             {
                 outbox.push(Command::RecordStop);
@@ -1460,6 +1517,13 @@ impl Surface for ScrollHud {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn hud_toggle_tips() {
+        assert_eq!(hud_toggle_tip("Microphone", true, true), "Microphone On");
+        assert_eq!(hud_toggle_tip("Webcam", false, true), "Webcam Off");
+        assert!(hud_toggle_tip("Microphone", false, false).contains("Settings > Recording"));
+    }
     use super::*;
 
     #[test]
@@ -1554,6 +1618,8 @@ mod tests {
         let mut hud = RecordHud {
             summary: String::new(),
             toggles: t,
+            available: t,
+            stop_key: String::new(),
             changed: false,
             status: None,
             scale: 1.0,

@@ -191,6 +191,16 @@ pub fn item_title(m: &ItemMeta) -> String {
     }
 }
 
+/// Empty-library body. Never "Press Not Set" when the region hotkey is cleared.
+fn empty_hint(region_hotkey_display: &str) -> String {
+    let tail = "Everything you capture is saved here, with searchable text.";
+    if region_hotkey_display.is_empty() || region_hotkey_display == "Not Set" {
+        format!("Use the button below or the StinkShot tray icon to capture a region. {tail}")
+    } else {
+        format!("Press {region_hotkey_display} to capture a region. {tail}")
+    }
+}
+
 /// "Today 9:14", "Yesterday 16:02", "Nov 3", "Nov 3 2025".
 pub fn friendly_date(created: DateTime<Local>, now: DateTime<Local>) -> String {
     let days = now
@@ -819,6 +829,7 @@ impl Surface for HistoryWindow {
 
         // Keyboard (not while typing in the search box or a dialog).
         let typing = ctx.egui_wants_keyboard_input();
+        let mut close_by_esc = false;
         let mut want_act: Option<(Act, ItemId)> = None;
         if self.confirm_delete.is_none() {
             let (cmd_f, esc) = ctx.input(|i| {
@@ -874,6 +885,9 @@ impl Surface for HistoryWindow {
                 } else if !self.search.is_empty() {
                     self.search.clear();
                     self.debounce.push(String::new(), now_i);
+                } else if !typing {
+                    // Nothing left to clear: Esc closes the window like other Windows tools.
+                    close_by_esc = true;
                 }
             }
         }
@@ -1268,7 +1282,10 @@ impl Surface for HistoryWindow {
                 top += 24.0;
             }
             if !ocr_available {
-                let msg = "No OCR language is installed, so search only covers window titles and app names. Add one in Windows Settings under Time and language, then Language and region.";
+                let msg = format!(
+                    "Search only covers window titles and app names. {}",
+                    crate::workers::NO_OCR_HELP
+                );
                 let g = ui.painter().layout(
                     msg.to_string(),
                     uc::font(12.0),
@@ -1328,9 +1345,7 @@ impl Surface for HistoryWindow {
                     (
                         Icon::History,
                         "No Captures Yet".to_string(),
-                        format!(
-                            "Press {hotkey_hint} to capture a region. Everything you capture is saved here, with searchable text."
-                        ),
+                        empty_hint(&hotkey_hint),
                     )
                 } else {
                     (
@@ -1706,7 +1721,7 @@ impl Surface for HistoryWindow {
                             let extra = if starred { "It is starred. " } else { "" };
                             ui.label(
                                 RichText::new(format!(
-                                    "{extra}The file is removed from disk and cannot be restored."
+                                    "{extra}The file moves to the Recycle Bin. Enter deletes, Esc keeps it."
                                 ))
                                 .size(12.0)
                                 .color(p.text_tertiary),
@@ -1744,7 +1759,8 @@ impl Surface for HistoryWindow {
                             (cancel, del)
                         });
                     let (cancel, del) = modal.inner;
-                    if del {
+                    let enter = ctx.input(|i| i.key_pressed(Key::Enter));
+                    if del || enter {
                         self.confirm_delete = None;
                         self.confirm_delete_now(shared, id);
                     } else if cancel || modal.should_close() {
@@ -1754,7 +1770,7 @@ impl Surface for HistoryWindow {
             }
         }
 
-        if ctx.input(|i| i.viewport().close_requested()) {
+        if close_by_esc || ctx.input(|i| i.viewport().close_requested()) {
             SurfaceStatus::Close
         } else {
             SurfaceStatus::Open
@@ -2003,6 +2019,11 @@ mod tests {
 
     #[test]
     fn titles_and_apps_are_prettified() {
+        assert_eq!(empty_hint("PrtSc"), {
+            "Press PrtSc to capture a region. Everything you capture is saved here, with searchable text."
+        });
+        assert!(!empty_hint("Not Set").contains("Press"));
+        assert!(!empty_hint("").contains("Press"));
         assert_eq!(pretty_app("firefox"), "Firefox");
         assert_eq!(pretty_app("Code.exe"), "Code");
         assert_eq!(pretty_app(""), "Unknown");

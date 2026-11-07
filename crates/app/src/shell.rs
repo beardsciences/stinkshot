@@ -113,7 +113,10 @@ pub fn run() -> anyhow::Result<()> {
         std::process::exit(1);
     };
 
-    match run_app(initial, guard) {
+    // A plain launch (not `--tray`, no subcommand) that started a fresh instance: the user
+    // clicked the exe and would otherwise see nothing at all.
+    let welcome = initial.is_none() && !forward_args.is_empty();
+    match run_app(initial, welcome, guard) {
         Ok(()) => Ok(()),
         Err(e) => {
             log::error!("fatal: {e:#}");
@@ -129,10 +132,23 @@ struct Boot {
     history: Arc<History>,
     ocr: Option<Arc<dyn OcrEngine>>,
     initial: Option<Command>,
+    welcome: bool,
     guard: InstanceGuard,
 }
 
-fn run_app(initial: Option<Command>, guard: InstanceGuard) -> anyhow::Result<()> {
+/// Body of the "StinkShot Is Running" toast shown when the user starts the app by hand.
+fn welcome_body(region_hotkey: &str) -> String {
+    let key = crate::hotkeys::display(region_hotkey);
+    if key.is_empty() {
+        "Capture from the StinkShot tray icon. Start StinkShot again to open History.".into()
+    } else {
+        format!(
+            "Press {key} to capture a region, or use the tray icon. Start StinkShot again to open History."
+        )
+    }
+}
+
+fn run_app(initial: Option<Command>, welcome: bool, guard: InstanceGuard) -> anyhow::Result<()> {
     let config = Config::load();
     let fonts = Arc::new(Fonts::load_system().context("load system fonts")?);
     let history_dir = config.history_folder();
@@ -162,6 +178,7 @@ fn run_app(initial: Option<Command>, guard: InstanceGuard) -> anyhow::Result<()>
         history,
         ocr,
         initial,
+        welcome,
         guard,
     };
     let options = eframe::NativeOptions {
@@ -337,6 +354,8 @@ struct Shell {
     last_theme_check: Instant,
     update_release: Option<Release>,
     update_inflight: bool,
+    /// The check in flight was asked for by the user (Check Now): always report the outcome.
+    update_forced: bool,
     update_retry_at: Instant,
     last_housekeeping: Instant,
     root_setup_tries: u32,
@@ -375,6 +394,25 @@ fn fmt_duration(d: Duration) -> String {
     }
 }
 
+/// HUD summary line. A GIF has no audio and is written at the GIF frame rate, so it must not
+/// claim H.264, the MP4 frame rate or audio sources.
+fn record_summary(rc: &stinkshot_core::config::Recording, gif: bool) -> String {
+    if gif {
+        return format!(
+            "GIF \u{b7} {} FPS \u{b7} Up to {} px Wide \u{b7} No Audio",
+            rc.gif_fps.max(1),
+            rc.gif_max_width
+        );
+    }
+    let audio = match (rc.microphone, rc.system_audio) {
+        (true, true) => "Mic + System",
+        (true, false) => "Mic",
+        (false, true) => "System Audio",
+        (false, false) => "No Audio",
+    };
+    format!("MP4 \u{b7} H.264 \u{b7} {} FPS \u{b7} {}", rc.fps, audio)
+}
+
 fn fmt_bytes(b: u64) -> String {
     const MB: f64 = 1024.0 * 1024.0;
     if b as f64 >= MB {
@@ -395,6 +433,7 @@ impl Shell {
             history,
             ocr,
             initial,
+            welcome,
             guard,
         } = boot;
         let resolved_theme = resolve_theme(&config);
@@ -486,6 +525,7 @@ impl Shell {
             last_theme_check: Instant::now(),
             update_release: None,
             update_inflight: false,
+            update_forced: false,
             update_retry_at: Instant::now(),
             last_housekeeping: Instant::now(),
             root_setup_tries: 0,
@@ -516,6 +556,9 @@ impl Shell {
         }
         if let Some(cmd) = initial {
             shell.pending.push_back(cmd);
+        } else if welcome {
+            let body = welcome_body(&shell.shared.config.hotkeys.region);
+            shell.notify("StinkShot Is Running", body, false);
         }
         shell.maybe_check_updates(false);
         shell.ctx.request_repaint();
@@ -618,11 +661,7 @@ impl Shell {
             }
             Command::OcrRegion => {
                 if self.shared.ocr.is_none() {
-                    self.notify(
-                        "No OCR Language Installed",
-                        "Add a language in Windows Settings > Time & language > Language & region.",
-                        true,
-                    );
+                    self.notify(workers::NO_OCR_TITLE, workers::NO_OCR_HELP, true);
                 } else {
                     self.begin_overlay(OverlayMode::SelectRegion(RegionPurpose::Ocr));
                 }
@@ -1079,19 +1118,7 @@ impl Shell {
     }
 
     fn record_summary(&self, gif: bool) -> String {
-        let rc = &self.shared.config.recording;
-        let audio = match (rc.microphone, rc.system_audio) {
-            (true, true) => "Mic + System",
-            (true, false) => "Mic",
-            (false, true) => "System Audio",
-            (false, false) => "No Audio",
-        };
-        format!(
-            "{} \u{b7} H.264 \u{b7} {} FPS \u{b7} {}",
-            if gif { "GIF" } else { "MP4" },
-            rc.fps,
-            audio
-        )
+        record_summary(&self.shared.config.recording, gif)
     }
 
     fn record_stop(&mut self) {
@@ -1398,8 +1425,20 @@ impl Shell {
                     overlays: rc.show_clicks || rc.show_keys,
                 };
                 let summary = self.record_summary(pending.gif);
+                let stop_key = crate::hotkeys::display(if pending.gif {
+                    &self.shared.config.hotkeys.record_gif
+                } else {
+                    &self.shared.config.hotkeys.record_mp4
+                });
                 self.record_frame = Some(Slot::new(RecordFrame::new(pending.rect)));
-                self.record_hud = Some(Slot::new(RecordHud::new(pending.rect, summary, toggles)));
+                let mut hud = RecordHud::new(pending.rect, summary, toggles);
+                // Sources off at start were never opened; the HUD must not offer them.
+                let available = HudToggles {
+                    overlays: true,
+                    ..toggles
+                };
+                hud.set_context(available, stop_key);
+                self.record_hud = Some(Slot::new(hud));
                 self.rec = Rec::Active {
                     rec: Box::new(rec),
                     pending,
@@ -1431,14 +1470,14 @@ impl Shell {
         }
         let gif_only = x.items.iter().all(|(_, _, k)| *k == ItemKind::Gif);
         let title = if x.items.len() > 1 {
-            "MP4 and GIF saved".to_string()
+            "MP4 and GIF Saved".to_string()
         } else if gif_only {
-            "GIF saved".to_string()
+            "GIF Saved".to_string()
         } else {
             "Recording Saved".to_string()
         };
         let body = format!(
-            "{} \u{b7} {} x {} \u{b7} {}",
+            "{} \u{b7} {} \u{d7} {} \u{b7} {}",
             fmt_duration(x.duration),
             x.width,
             x.height,
@@ -1496,7 +1535,7 @@ impl Shell {
             };
             (
                 title,
-                format!("{} x {} \u{b7} {}", s.width, s.height, detail),
+                format!("{} \u{d7} {} \u{b7} {}", s.width, s.height, detail),
             )
         };
         self.push_toast(ToastKind::Capture {
@@ -1532,11 +1571,13 @@ impl Shell {
             return;
         }
         self.update_inflight = true;
+        self.update_forced = force;
         workers::check_updates(self.worker_tx.clone());
     }
 
     fn update_checked(&mut self, result: Result<Option<Release>, String>) {
         self.update_inflight = false;
+        let forced = std::mem::take(&mut self.update_forced);
         match result {
             Ok(release) => {
                 self.shared.config.privacy.last_update_check = Some(chrono::Utc::now());
@@ -1547,9 +1588,9 @@ impl Shell {
                         .as_ref()
                         .map(|u| u.tag != r.tag)
                         .unwrap_or(true);
-                    if first {
+                    if first || forced {
                         self.notify(
-                            &format!("StinkShot {} is available", r.tag),
+                            &format!("StinkShot {} Is Available", r.tag),
                             "Open the tray menu to see the release page.",
                             false,
                         );
@@ -1558,10 +1599,22 @@ impl Shell {
                         t.set_update(Some(&r));
                     }
                     self.update_release = Some(r);
+                } else if forced {
+                    self.notify(
+                        "StinkShot Is Up to Date",
+                        format!(
+                            "Version {} is the latest release.",
+                            env!("CARGO_PKG_VERSION")
+                        ),
+                        false,
+                    );
                 }
             }
             Err(e) => {
                 log::info!("update check failed: {e}");
+                if forced {
+                    self.notify("Could Not Check for Updates", e, true);
+                }
                 self.update_retry_at = Instant::now() + Duration::from_secs(3600);
             }
         }
@@ -1818,5 +1871,26 @@ mod tests {
         assert_eq!(fmt_duration(Duration::from_secs(3725)), "1:02:05");
         assert_eq!(fmt_bytes(512), "1 KB");
         assert_eq!(fmt_bytes(5 * 1024 * 1024), "5.0 MB");
+    }
+
+    #[test]
+    fn gif_summary_does_not_claim_h264_or_audio() {
+        let rc = stinkshot_core::config::Recording::default();
+        let gif = record_summary(&rc, true);
+        assert!(gif.starts_with("GIF"));
+        assert!(!gif.contains("H.264"));
+        assert!(gif.contains(&format!("{} FPS", rc.gif_fps)));
+        assert!(gif.contains("No Audio"));
+        let mp4 = record_summary(&rc, false);
+        assert!(mp4.contains("H.264"));
+        assert!(mp4.contains(&format!("{} FPS", rc.fps)));
+    }
+
+    #[test]
+    fn welcome_names_the_region_hotkey() {
+        assert!(welcome_body("PrintScreen").contains("Press PrtSc"));
+        let none = welcome_body("");
+        assert!(!none.contains("Press"));
+        assert!(none.contains("tray icon"));
     }
 }

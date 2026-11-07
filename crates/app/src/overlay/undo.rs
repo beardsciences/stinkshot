@@ -29,7 +29,6 @@ impl UndoStack {
         self.future.clear();
     }
 
-    #[cfg(test)]
     pub fn can_undo(&self) -> bool {
         !self.past.is_empty()
     }

@@ -180,7 +180,8 @@ impl Pin {
         let (tx, rx) = channel();
         let img = Arc::clone(&self.image);
         let ok = uc::spawn_worker("pin-copy", move || {
-            let r = stinkshot_platform::clipboard::set_image(&img).map_err(|e| e.to_string());
+            let r = stinkshot_platform::clipboard::set_image(&img)
+                .map_err(|e| crate::workers::clipboard_text_error(&e));
             let _ = tx.send(r);
         });
         if ok {

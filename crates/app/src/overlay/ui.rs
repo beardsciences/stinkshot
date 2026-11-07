@@ -180,8 +180,15 @@ pub fn tool_bar(
     }
 }
 
-/// Action bar: OCR, Pin, Save, Cancel, then the accent Copy button.
-pub fn action_bar(ctx: &Context, pos: Pos2, pal: &Palette, out: &mut Vec<UiAction>) -> Rect {
+/// Action bar: OCR, Pin, Save, Cancel, then the accent Copy button. `ocr` = an OCR language
+/// is installed (otherwise Copy Text is disabled and says why).
+pub fn action_bar(
+    ctx: &Context,
+    pos: Pos2,
+    pal: &Palette,
+    ocr: bool,
+    out: &mut Vec<UiAction>,
+) -> Rect {
     let resp = Area::new(Id::unique("stinkshot-ov-actions"))
         .order(Order::Foreground)
         .fixed_pos(pos)
@@ -189,9 +196,17 @@ pub fn action_bar(ctx: &Context, pos: Pos2, pal: &Palette, out: &mut Vec<UiActio
             bar_frame(pal).show(ui, |ui| {
                 ui.spacing_mut().item_spacing = Vec2::new(2.0, 0.0);
                 ui.horizontal(|ui| {
-                    if theme::widgets::icon_button(ui, Icon::Ocr, "Copy Text (Ctrl+T)", false)
-                        .clicked()
-                    {
+                    let ocr_tip = if ocr {
+                        "Copy Text (Ctrl+T)"
+                    } else {
+                        "Copy Text Needs an OCR Language in Windows Settings"
+                    };
+                    let r = ui
+                        .add_enabled_ui(ocr, |ui| {
+                            theme::widgets::icon_button(ui, Icon::Ocr, ocr_tip, false)
+                        })
+                        .inner;
+                    if r.on_disabled_hover_text(ocr_tip).clicked() {
                         out.push(UiAction::Finish(FinishAction::CopyText));
                     }
                     if theme::widgets::icon_button(ui, Icon::Pin, "Pin to Screen (Ctrl+P)", false)
@@ -544,7 +559,7 @@ pub fn loupe_plate(
                             );
                             ui.label(RichText::new(hex).size(12.0).color(pal.text).monospace());
                             ui.label(
-                                RichText::new("C to copy")
+                                RichText::new("C to Copy")
                                     .size(12.0)
                                     .color(pal.text_tertiary),
                             );

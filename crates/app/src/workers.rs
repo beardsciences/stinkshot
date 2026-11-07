@@ -201,6 +201,32 @@ fn job_inner(
     });
 }
 
+/// Toast title and body when Windows has no OCR language. One wording for every surface.
+pub const NO_OCR_TITLE: &str = "No OCR Language Installed";
+pub const NO_OCR_HELP: &str = "Add a language with text recognition in Windows Settings > Time & language > Language & region.";
+
+/// Clipboard failures in words a user can act on. A busy clipboard (another app holding it
+/// open, common with clipboard managers and remote desktop) is the usual cause.
+pub fn clipboard_error(e: &anyhow::Error) -> String {
+    let chain = format!("{e:#}");
+    if chain.contains("OpenClipboard") {
+        "Another app is using the clipboard. The capture is saved in History; copy it from there in a moment.".to_string()
+    } else {
+        format!("Windows refused the clipboard ({chain}). The capture is saved in History.")
+    }
+}
+
+/// Like `clipboard_error` for copies that can simply be retried (text, history items); other
+/// failures keep their own message.
+pub fn clipboard_text_error(e: &anyhow::Error) -> String {
+    let chain = format!("{e:#}");
+    if chain.contains("OpenClipboard") {
+        "Another app is using the clipboard. Try again in a moment.".to_string()
+    } else {
+        chain
+    }
+}
+
 static LAST_SAVE_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 // ------------------------------------------------------------------------------ capture
@@ -317,7 +343,7 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
                 Ok(()) => copied_image = true,
                 Err(e) => {
                     log::error!("clipboard copy failed: {e:#}");
-                    env.notify("Could Not Copy to Clipboard", format!("{e:#}"), true);
+                    env.notify("Could Not Copy to Clipboard", clipboard_error(&e), true);
                 }
             }
         }
@@ -352,11 +378,7 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
         let mut copied_text = None;
         if action == FinishAction::CopyText {
             match &env.ocr {
-                None => env.notify(
-                    "No OCR Language Installed",
-                    "Add a language in Windows Settings > Time & language.",
-                    true,
-                ),
+                None => env.notify(NO_OCR_TITLE, NO_OCR_HELP, true),
                 Some(engine) => match engine.recognize(&flattened) {
                     Ok(r) => {
                         let text = r.text.trim().to_string();
@@ -369,7 +391,11 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
                         } else {
                             match clipboard::set_text(&text) {
                                 Ok(()) => copied_text = Some(text),
-                                Err(e) => env.notify("Could Not Copy Text", format!("{e:#}"), true),
+                                Err(e) => env.notify(
+                                    "Could Not Copy Text",
+                                    clipboard_text_error(&e),
+                                    true,
+                                ),
                             }
                         }
                     }
@@ -432,11 +458,7 @@ pub fn capture_window(env: &Env, frozen: Frozen, windows: Vec<WinInfo>, win: Win
 pub fn ocr_image(env: &Env, img: Rgba) {
     job(env, "ocr-region", move |env| {
         let Some(engine) = &env.ocr else {
-            env.notify(
-                "No OCR Language Installed",
-                "Add a language in Windows Settings > Time & language.",
-                true,
-            );
+            env.notify(NO_OCR_TITLE, NO_OCR_HELP, true);
             return;
         };
         match engine.recognize(&img) {
@@ -448,7 +470,7 @@ pub fn ocr_image(env: &Env, img: Rgba) {
                 }
                 match clipboard::set_text(&text) {
                     Ok(()) => env.notify("Text Copied", preview(&text, 140), false),
-                    Err(e) => env.notify("Could Not Copy Text", format!("{e:#}"), true),
+                    Err(e) => env.notify("Could Not Copy Text", clipboard_text_error(&e), true),
                 }
             }
             Err(e) => env.notify("Text Recognition Failed", format!("{e:#}"), true),
@@ -812,7 +834,7 @@ pub fn copy_item_image(env: &Env, id: ItemId) {
         };
         match run() {
             Ok(title) => env.notify(title, "Ready to paste.", false),
-            Err(e) => env.notify("Could Not Copy", format!("{e:#}"), true),
+            Err(e) => env.notify("Could Not Copy", clipboard_text_error(&e), true),
         }
     });
 }
@@ -853,7 +875,7 @@ pub fn copy_item_text(env: &Env, id: ItemId) {
                 "This item has no recognizable text.",
                 false,
             ),
-            Err(e) => env.notify("Could Not Copy Text", format!("{e:#}"), true),
+            Err(e) => env.notify("Could Not Copy Text", clipboard_text_error(&e), true),
         }
     });
 }
@@ -924,6 +946,20 @@ pub fn edit_item(env: &Env, id: ItemId) {
 
 pub fn delete_item(env: &Env, id: ItemId) {
     job(env, "delete-item", move |env| {
+        // Recycle Bin first so a mistaken delete can be undone from Explorer; the index row
+        // and the re-edit sidecars go with `History::delete`.
+        if let Ok(Some(meta)) = env.history.get(id)
+            && let Err(e) = crate::sysutil::recycle(&meta.path)
+        {
+            log::warn!("recycle failed: {e:#}");
+            env.notify(
+                "Could Not Delete",
+                format!("Windows could not move it to the Recycle Bin. {e:#}"),
+                true,
+            );
+            env.send(WorkerMsg::HistoryChanged);
+            return;
+        }
         if let Err(e) = env.history.delete(id) {
             env.notify("Could Not Delete", format!("{e:#}"), true);
         }
@@ -1145,5 +1181,21 @@ mod tests {
         assert_eq!(preview("a  b\n c", 20), "a b c");
         assert_eq!(preview("abcdefghij", 5), "abcde...");
         assert_eq!(preview("short", 5), "short");
+    }
+}
+
+#[cfg(test)]
+mod ux_tests {
+    use super::*;
+
+    #[test]
+    fn busy_clipboard_reads_as_plain_words() {
+        let e = anyhow::anyhow!("OpenClipboard failed: Access is denied. (0x80070005)");
+        let m = clipboard_error(&e);
+        assert!(m.starts_with("Another app is using the clipboard"));
+        assert!(!m.contains("0x8007"));
+        assert!(!clipboard_text_error(&e).contains("OpenClipboard"));
+        let other = anyhow::anyhow!("item no longer exists");
+        assert_eq!(clipboard_text_error(&other), "item no longer exists");
     }
 }

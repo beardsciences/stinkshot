@@ -65,3 +65,37 @@ pub fn system_dpi() -> u32 {
     let d = unsafe { GetDpiForSystem() };
     if d == 0 { 96 } else { d }
 }
+
+/// Move a file to the Recycle Bin (no UI, no confirmation). Errors if the shell refused or
+/// the file is still there afterwards.
+pub fn recycle(path: &std::path::Path) -> anyhow::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::UI::Shell::{
+        FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, SHFILEOPSTRUCTW,
+        SHFileOperationW,
+    };
+    if !path.exists() {
+        return Ok(());
+    }
+    // pFrom is a list of NUL-terminated paths ending with an extra NUL.
+    let mut from: Vec<u16> = path.as_os_str().encode_wide().collect();
+    from.extend([0, 0]);
+    let mut op = SHFILEOPSTRUCTW {
+        wFunc: FO_DELETE,
+        pFrom: PCWSTR(from.as_ptr()),
+        fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT).0 as u16,
+        ..Default::default()
+    };
+    // SAFETY: `from` is double-NUL terminated and outlives the call; no other pointers set.
+    let rc = unsafe { SHFileOperationW(&mut op) };
+    if rc != 0 || op.fAnyOperationsAborted.as_bool() {
+        anyhow::bail!(
+            "could not move {} to the Recycle Bin (code {rc})",
+            path.display()
+        );
+    }
+    if path.exists() {
+        anyhow::bail!("{} is still there after recycling", path.display());
+    }
+    Ok(())
+}
