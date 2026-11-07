@@ -28,6 +28,8 @@ tray-icon.workspace = true
 global-hotkey.workspace = true
 clap.workspace = true
 ureq.workspace = true
+# PNG frames of the About animation's disk cache (already in the tree via eframe and core).
+image.workspace = true
 
 [target.'cfg(windows)'.dependencies.windows]
 workspace = true
@@ -36,6 +38,7 @@ features = [
     "Win32_System_Com",
     "Win32_System_Console",
     "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
@@ -48,7 +51,6 @@ embed-resource = "3.0.12"
 stinkshot-logo.workspace = true
 
 [dev-dependencies]
-image.workspace = true
 gif.workspace = true
 
 # examples/scroll_harness.rs draws its test window with GDI.

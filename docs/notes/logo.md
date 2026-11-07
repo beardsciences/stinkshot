@@ -306,3 +306,89 @@ gas puffs along its base and two wavy stink lines. Concepts B (on a dark app til
 ## Nov 7 2026: particles removed
 
 The user asked to drop the particle rings and trails around the About orb: the orb's own motion is enough. The app no longer draws motes; `stinkshot_logo::motes`/`trails` remain in the logo crate, unused by the app.
+
+## Nov 7 2026: the About orb moves at once
+
+**Report.** "The animated logo freezes before loading in 3-5 seconds after the page is
+reached." The orb showed a still frame until all 96 loop frames had rendered, which took
+5.2-5.4 s on this machine (12 logical cores, 1.25x scaling, 230 px at 2x2 supersampling).
+
+**What changed** (`crates/app/src/logo_anim.rs`, `stinkshot_logo::Prepared`):
+
+- **Playback order, not loop order.** The worker picks its next frame from the playhead:
+  the first frame from the playhead on that is not yet at full quality. Each frame is
+  split over all worker threads by rows (`Prepared::row`, rows handed out one at a time),
+  so one frame lands every 60-90 ms instead of eight landing together every 0.4 s.
+- **Previews.** While the page is on screen and the next frame to show is missing, a 1x
+  supersampled preview of it is rendered first (about 18 ms on 12 threads, against about
+  90 ms for 2x2). Full-quality frames replace previews as they arrive and overtake the
+  playhead within a few frames (full frames arrive at 11-16/s, playback needs 8/s, 16/s
+  while hovered). At 1.5x scaling and up there are no previews (the frames are 1x already).
+- **The playhead only moves onto frames that exist** and holds on the last one, so it
+  never crossfades toward a frame from elsewhere in the loop. The still frame is now loop
+  frame 6 (t = 0.0625, was 0.06) and playback starts there, so the still frame flows into
+  the motion.
+- Coarse-to-fine (bit-reversed) order was considered and not used: crossfading frames
+  0.5-4 s apart ghosts the spinning lumps, and the previews already give motion within
+  2-3 UI frames.
+- **Disk cache.** The finished loop is written to
+  `%LOCALAPPDATA%\Stinkshot<profile>\cache\about-orb-<size>-<hash>.bin`: a header (magic,
+  frame count, size, supersampling) and one PNG per frame (fast deflate) of the
+  premultiplied pixels, so a load is bit-exact. The hash covers `stinkshot_logo::
+  source_hash()` (FNV-1a of the renderer's `lib.rs`, so any renderer edit invalidates it),
+  the size, the supersampling, the frame count and a format number. 230 px: 2.87 MB. It
+  is written atomically (temp file, rename) at low priority; the folder is pruned to
+  48 MB, oldest first. A damaged or undecodable file is deleted and the loop re-rendered.
+  Loading decodes in playback order from the playhead on the worker threads.
+  `STINKSHOT_LOGO_CACHE=off` disables it.
+- **Prewarm.** The Settings window calls `logo_anim::prewarm` every frame: it starts the
+  worker in the background (on the next frame, so that opening Settings straight onto
+  About starts it in the foreground instead). The shell calls `prewarm_cache` once, 30 s
+  after startup (pushed back while an overlay or a recording is active), which renders
+  the loop only when the cache has no copy for the system DPI. The reaper frees the frames
+  60 s after the last show or prewarm, but never while the worker is still running, so a
+  started render always reaches the cache.
+- **Priority.** Worker threads run at `THREAD_PRIORITY_BELOW_NORMAL` while the page is on
+  screen (all cores but one, at most 8) and `THREAD_PRIORITY_LOWEST` in the background
+  (half the cores, at most 4); the reaper drops a still-running worker to the background
+  within 10 s of the page going away. Every helper thread sets its own priority (a new
+  Windows thread starts at normal).
+
+**Measured** (debug build of the app crate, renderer and `image` optimized as usual,
+`cargo run -p stinkshot --example about_anim -- dark <s> [cold] [prewarm] top`; the example
+now shows a blank page for 1 s first, so these are times from the header's first frame in
+a window that is already up, like switching to the About page):
+
+| Case | First image | First motion | Every frame full quality |
+|---|---|---|---|
+| Before (window open to motion; still frame) | 70-142 ms | 5.1-6.4 s | same |
+| Cold cache | 18-40 ms | 31-50 ms | 5.6-7.7 s (previews meanwhile) |
+| Warm cache | 18-73 ms | 19-69 ms | 32-386 ms (load 20-340 ms) |
+| Prewarmed by Settings (2 s), cold | 0.1 ms | 12-20 ms | 5.5 s |
+| Prewarmed, warm | 0.1 ms | 12 ms | at once |
+
+- One cold run under heavy load from other processes: first image 121 ms, first motion
+  186 ms.
+- UI thread while the cold loop renders on 8 workers: frame interval mean 16.65-16.75 ms,
+  p99 21.9-22.8 ms, max 24-26 ms, the same as after rendering (p99 21-26 ms). No
+  starvation. `show()` CPU: mean 3.3-3.6 ms while frames arrive (the UI thread shares
+  the cores), 2.3 ms with a warm cache and nothing rendering, against 2.2-2.4 ms before.
+  It is still mostly the per-pixel blend in an unoptimised debug build.
+- Startup prewarm in a dev-profile app run: 96 frames at LOWEST priority on 4 threads
+  took 64 s on the busy machine, then 1.07 s to encode and write the cache. Opening
+  Settings afterwards loaded the cache in the background in 35 ms (log lines in the
+  dev profile's `stinkshot.log`).
+- Frame intervals of about 1 s in some runs are the covered-window path: `covered()`
+  compares the foreground window's rectangle only, so a topmost example window over a
+  maximised foreground window counts as covered. Settings is never topmost.
+
+**Not verified**
+
+- The About page inside the running app (it needs a click on the About section; no
+  synthetic input was sent). The Settings prewarm and startup prewarm were verified from
+  the log in a dev-profile run.
+- 1.5x scaling and up (1x supersampling, no previews) and multi-monitor DPI changes.
+- Release-build numbers.
+- Reduced motion with this change (the still is now loop frame 6 and needs only that
+  frame).
+
