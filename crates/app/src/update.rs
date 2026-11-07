@@ -24,11 +24,17 @@ pub fn check() -> anyhow::Result<Option<Release>> {
         .user_agent(format!("Stinkshot/{}", env!("CARGO_PKG_VERSION")))
         .build()
         .into();
-    let mut resp = agent
+    let mut resp = match agent
         .get(RELEASES_API)
         .header("Accept", "application/json")
         .call()
-        .context("update check request failed")?;
+    {
+        Ok(r) => r,
+        // Forgejo answers 404 when the repository has no published release yet: nothing
+        // newer exists, so this is a successful "up to date", not a failure to retry.
+        Err(ureq::Error::StatusCode(404)) => return Ok(None),
+        Err(e) => return Err(anyhow::Error::new(e).context("update check request failed")),
+    };
     let body: serde_json::Value = resp
         .body_mut()
         .read_json()
