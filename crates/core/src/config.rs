@@ -148,11 +148,11 @@ impl Default for Hotkeys {
             region: "PrintScreen".into(),
             window: "Alt+PrintScreen".into(),
             fullscreen: "Control+PrintScreen".into(),
-            scrolling: "Control+Shift+KeyS".into(),
-            ocr: "Control+Shift+KeyT".into(),
+            scrolling: "Control+Alt+KeyS".into(),
+            ocr: "Control+Alt+KeyT".into(),
             repeat_last_region: "Shift+PrintScreen".into(),
-            record_mp4: "Control+Shift+KeyR".into(),
-            record_gif: "Control+Shift+KeyG".into(),
+            record_mp4: "Control+Alt+KeyR".into(),
+            record_gif: "Control+Alt+KeyG".into(),
         }
     }
 }
@@ -223,8 +223,8 @@ impl Default for HistoryCfg {
         Self {
             folder: String::new(),
             ocr_index: true,
-            keep_days: 90,
-            max_gb: 5.0,
+            keep_days: 0,
+            max_gb: 0.0,
             keep_editable: true,
         }
     }

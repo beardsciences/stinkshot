@@ -42,10 +42,10 @@ These are the defaults. All can be changed in Settings.
 | Window capture | Alt+PrintScreen |
 | Full screen | Ctrl+PrintScreen |
 | Repeat last region | Shift+PrintScreen |
-| Scrolling capture | Ctrl+Shift+S |
-| OCR region | Ctrl+Shift+T |
-| Record MP4 | Ctrl+Shift+R |
-| Record GIF | Ctrl+Shift+G |
+| Scrolling capture | Ctrl+Alt+S |
+| OCR region | Ctrl+Alt+T |
+| Record MP4 | Ctrl+Alt+R |
+| Record GIF | Ctrl+Alt+G |
 
 Taking over PrintScreen from Windows is a setting and is restored when you turn it off.
 
