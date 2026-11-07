@@ -1372,7 +1372,7 @@ impl Surface for HistoryWindow {
                         ui,
                         "empty_capture",
                         b,
-                        "Capture a region",
+                        "Capture a Region",
                         uc::BtnKind::Accent,
                         true,
                         p,
