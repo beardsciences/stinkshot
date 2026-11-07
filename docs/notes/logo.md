@@ -301,3 +301,8 @@ frames are 230 px with 2x2 supersampling. Numbers are from
 v1 was a glossy analytic-ray-traced cartoon cloud: soft-max ellipsoid lobes, flattened
 gas puffs along its base and two wavy stink lines. Concepts B (on a dark app tile) and C
 (with a camera lens) were rejected earlier. It is in git history up to cc7be57.
+
+
+## Nov 7 2026: particles removed
+
+The user asked to drop the particle rings and trails around the About orb: the orb's own motion is enough. The app no longer draws motes; `stinkshot_logo::motes`/`trails` remain in the logo crate, unused by the app.

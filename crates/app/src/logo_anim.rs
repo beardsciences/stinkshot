@@ -1,8 +1,6 @@
 //! The animated logo at the top of the About page: the gel orb spinning with its lumps
 //! sliding and breathing (one seamless loop every 12 s, 6 s while hovered), a faint bloom
-//! and pulse on dark themes, and a particle field of glowing motes on two tilted rings plus
-//! a few rising drifters, which pass behind and in front of the orb. Ring motes in front
-//! of the orb trail a short fading streak, so the rings read as spinning.
+//! and pulse on dark themes. No particles: the user preferred the orb's own motion alone.
 //!
 //! The orb is ray marched by `stinkshot-logo`, which is far too slow for 60 fps on the CPU,
 //! so the loop is pre-rendered once into `FRAMES` frames on worker threads (a still frame
@@ -10,11 +8,10 @@
 //! neighbouring frames. The two frames are blended on the CPU into one image and uploaded
 //! to a single GPU texture (two overlaid textures add up alpha at the soft edges and the
 //! shadow, which pulsed); the CPU frames are dropped a minute after the page was last
-//! shown. Particles are drawn live with the egui painter. Nothing animates (and no repaint
+//! shown. Nothing animates (and no repaint
 //! is requested) unless `show` is called, i.e. while the About page is visible, and not
 //! while the window is minimized or covered. With Windows animations off
-//! (SPI_GETCLIENTAREAANIMATION) the orb is a still frame, the motes are static and faint,
-//! and there is no bloom.
+//! (SPI_GETCLIENTAREAANIMATION) the orb is a still frame and there is no bloom.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -24,7 +21,7 @@ use egui::{
     Align2, Color32, ColorImage, FontId, Mesh, Pos2, Rect, Sense, Shape, TextureHandle,
     TextureOptions, Ui, pos2, vec2,
 };
-use stinkshot_logo::{ABOUT_HALF, Mote, Opts, mote_alpha, mote_layers};
+use stinkshot_logo::{ABOUT_HALF, Opts};
 
 /// Crossfade steps between neighbouring frames (the blend is redone only when the step
 /// changes).
@@ -45,9 +42,6 @@ pub const HEIGHT: f32 = 192.0;
 const HEADER_TEXT: f32 = 80.0;
 /// The tagline under the version.
 const TAGLINE: &str = "Local-first screenshots and screen recording for Windows";
-/// Particle layer opacity, animated and reduced-motion.
-const LAYER: f32 = 0.8;
-const LAYER_STATIC: f32 = 0.3;
 /// CPU frames are freed this long after the page was last shown.
 const KEEP: Duration = Duration::from_secs(60);
 
@@ -87,7 +81,6 @@ struct Anim {
     /// The orb texture and what it holds: (frame, blend step), frame `usize::MAX` = still.
     tex: Option<TextureHandle>,
     tex_key: (usize, u32),
-    sprite: Option<(TextureHandle, TextureHandle)>,
     phase: f64,
     rate: f64,
     last_time: Option<f64>,
@@ -111,7 +104,6 @@ impl Default for Anim {
             started_for: None,
             tex: None,
             tex_key: (usize::MAX - 1, 0),
-            sprite: None,
             hidden: false,
             hidden_at: None,
             phase: 0.0,
@@ -231,35 +223,10 @@ pub fn show(ui: &mut Ui) {
     }
 
     let painter = ui.painter_at(rect.expand(8.0));
-    a.ensure_sprites(&ctx);
-    let motes = stinkshot_logo::motes(if reduced { 3.0 } else { now }, ABOUT_HALF);
-    let layer = if reduced { LAYER_STATIC } else { LAYER };
-
-    // Which frames are on screen, and the orb's coverage under a point (front motes on
-    // light themes change colour over the orb).
     let f = a.phase * FRAMES as f64;
     let i0 = f.floor() as usize % FRAMES;
-    let shown = a.frames.lock().ok().and_then(|fr| {
-        if ready {
-            fr.loop_frames.get(i0).cloned().flatten()
-        } else {
-            fr.still.clone()
-        }
-    });
-    let coverage = |x: f32, y: f32| -> f32 {
-        let Some(img) = &shown else {
-            return 0.0;
-        };
-        let (w, h) = (img.size[0], img.size[1]);
-        let (px, py) = ((x * w as f32) as isize, (y * h as f32) as isize);
-        if px < 0 || py < 0 || px >= w as isize || py >= h as isize {
-            return 0.0;
-        }
-        img.pixels[py as usize * w + px as usize].a() as f32 / 255.0
-    };
 
-    // Behind the orb: back motes, then bloom.
-    paint_motes(&painter, &a, view, &motes, false, dark, layer, &coverage);
+    // Behind the orb: a soft bloom on dark themes.
     if dark && !reduced {
         radial(
             &painter,
@@ -296,13 +263,6 @@ pub fn show(ui: &mut Ui) {
             );
         }
     }
-
-    // In front: the ring trails, then the front motes.
-    if !reduced {
-        let trails = stinkshot_logo::trails(now, ABOUT_HALF);
-        paint_motes(&painter, &a, view, &trails, true, dark, layer, &coverage);
-    }
-    paint_motes(&painter, &a, view, &motes, true, dark, layer, &coverage);
 
     // No repaints while nobody can see them: minimized, or unfocused under a window that
     // covers this one. Restoring or uncovering the window repaints it anyway (the OS sends
@@ -433,14 +393,6 @@ impl Anim {
         }
         self.tex_key = key;
         self.tex.as_ref().map(|t| t.id())
-    }
-
-    fn ensure_sprites(&mut self, ctx: &egui::Context) {
-        if self.sprite.is_none() {
-            let full = ctx.load_texture("about-mote", sprite(1.0), TextureOptions::LINEAR);
-            let half = ctx.load_texture("about-mote-front", sprite(0.5), TextureOptions::LINEAR);
-            self.sprite = Some((full, half));
-        }
     }
 }
 
@@ -593,63 +545,6 @@ fn spawn_reaper(h: Handle) {
         });
     if let Err(e) = spawned {
         log::debug!("about logo: no reaper thread: {e}");
-    }
-}
-
-/// A white mote sprite (core disc plus halo, premultiplied), covering 6 core radii.
-fn sprite(halo: f32) -> ColorImage {
-    const N: usize = 64;
-    let r = N as f32 / 12.0;
-    let mut px = vec![0u8; N * N * 4];
-    for y in 0..N {
-        for x in 0..N {
-            let d = ((x as f32 + 0.5 - N as f32 / 2.0).powi(2)
-                + (y as f32 + 0.5 - N as f32 / 2.0).powi(2))
-            .sqrt();
-            let a = (mote_alpha(d, r, halo) * 255.0).round() as u8;
-            px[(y * N + x) * 4..(y * N + x) * 4 + 4].copy_from_slice(&[a, a, a, a]);
-        }
-    }
-    ColorImage::from_rgba_premultiplied([N, N], &px)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn paint_motes(
-    painter: &egui::Painter,
-    a: &Anim,
-    view: Rect,
-    motes: &[Mote],
-    front: bool,
-    dark: bool,
-    layer: f32,
-    coverage: &dyn Fn(f32, f32) -> f32,
-) {
-    let Some((full, half)) = &a.sprite else {
-        return;
-    };
-    let tex = if front { half.id() } else { full.id() };
-    let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-    for m in motes.iter().filter(|m| (m.z >= 0.0) == front) {
-        let center = view.min + vec2(m.x, m.y) * VIEW;
-        let r = m.r * 6.0;
-        let rect = Rect::from_center_size(center, vec2(r * 2.0, r * 2.0));
-        for (c, alpha, add) in mote_layers(m, dark, coverage(m.x, m.y), layer) {
-            if alpha <= 0.003 {
-                continue;
-            }
-            let tint = if add {
-                // Premultiplied with zero alpha: additive.
-                Color32::from_rgba_premultiplied(
-                    (c[0] as f32 * alpha) as u8,
-                    (c[1] as f32 * alpha) as u8,
-                    (c[2] as f32 * alpha) as u8,
-                    0,
-                )
-            } else {
-                Color32::from_rgba_unmultiplied(c[0], c[1], c[2], (alpha * 255.0) as u8)
-            };
-            painter.image(tex, rect, uv, tint);
-        }
     }
 }
 
