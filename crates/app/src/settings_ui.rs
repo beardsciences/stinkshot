@@ -1701,9 +1701,9 @@ mod tests {
 
     #[test]
     fn conflict_detection_is_order_and_case_insensitive() {
-        // Window shares its combination with scrolling ("Control+Shift+KeyS").
+        // Window shares its combination with scrolling ("Control+Alt+KeyS").
         let h = Hotkeys {
-            window: "shift+control+keys".into(),
+            window: "alt+control+keys".into(),
             ..Hotkeys::default()
         };
         assert_eq!(
