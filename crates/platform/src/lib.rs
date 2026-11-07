@@ -15,6 +15,7 @@ pub mod input;
 pub mod monitors;
 pub mod occlusion;
 pub mod ocr;
+pub mod snip;
 pub mod system;
 pub mod uia;
 mod util;

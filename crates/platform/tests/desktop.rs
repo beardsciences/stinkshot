@@ -646,3 +646,216 @@ fn window_util_on_own_window() {
     // SAFETY: destroying the window created above.
     unsafe { DestroyWindow(HWND(hwnd.0)).expect("destroy") };
 }
+
+/// Install the Replace Snipping Tool hook and inject Win+Shift+S into this test's own
+/// foreground window. Guarded so it cannot disturb a user at the PC: it waits until the
+/// keyboard and mouse have been idle for 2 s with no key held, injects only while its own
+/// window is the foreground window and under the cursor, and releases the keys as soon as the
+/// chord is routed. If the hook failed, the Snipping Tool would open, so the assertions say so.
+#[test]
+#[ignore = "injects Win+Shift+S into its own foreground window"]
+fn snip_hook_swallows_and_routes_win_shift_s() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use stinkshot_platform::snip::{SnipChord, SnipHook};
+    use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, GetLastInputInfo, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS,
+        KEYBDINPUT, KEYEVENTF_KEYUP, LASTINPUTINFO, SendInput, VIRTUAL_KEY,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DefWindowProcW, DispatchMessageW, GA_ROOT, GetAncestor, GetCursorPos, GetForegroundWindow,
+        MSG, PM_REMOVE, PeekMessageW, RegisterClassW, TranslateMessage, WM_KEYDOWN, WM_KEYUP,
+        WNDCLASSW, WS_EX_TOPMOST, WindowFromPoint,
+    };
+
+    static S_DOWN: AtomicU32 = AtomicU32::new(0);
+    static S_UP: AtomicU32 = AtomicU32::new(0);
+    static WIN_UP: AtomicU32 = AtomicU32::new(0);
+    unsafe extern "system" fn proc_(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+        match (m, wp.0) {
+            (WM_KEYDOWN, 0x53) => {
+                S_DOWN.fetch_add(1, Ordering::SeqCst);
+            }
+            (WM_KEYUP, 0x53) => {
+                S_UP.fetch_add(1, Ordering::SeqCst);
+            }
+            (WM_KEYUP, 0x5B) => {
+                WIN_UP.fetch_add(1, Ordering::SeqCst);
+            }
+            _ => {}
+        }
+        // SAFETY: default processing.
+        unsafe { DefWindowProcW(h, m, wp, lp) }
+    }
+    fn pump() {
+        let mut msg = MSG::default();
+        // SAFETY: standard message pumping on this thread.
+        unsafe {
+            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+    }
+    /// Tick of the last user input (changes on any keyboard or mouse input).
+    fn last_input() -> u32 {
+        let mut li = LASTINPUTINFO {
+            cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+            dwTime: 0,
+        };
+        // SAFETY: out struct with cbSize set.
+        let _ = unsafe { GetLastInputInfo(&mut li) };
+        li.dwTime
+    }
+    fn any_key_held() -> bool {
+        // SAFETY: trivial queries. Skips the mouse buttons and the toggle-only keys.
+        (0x08..0xFF).any(|vk| unsafe { GetAsyncKeyState(vk) } as u16 & 0x8000 != 0)
+    }
+    fn key(vk: u16, up: bool) -> INPUT {
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VIRTUAL_KEY(vk),
+                    wScan: 0,
+                    dwFlags: if up {
+                        KEYEVENTF_KEYUP
+                    } else {
+                        KEYBD_EVENT_FLAGS(0)
+                    },
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }
+    }
+
+    dpi::init();
+    // 1. Wait (up to 30 s) for the user to be idle with nothing held.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut seen = last_input();
+    let mut quiet_since = Instant::now();
+    loop {
+        let now = last_input();
+        if now != seen || any_key_held() {
+            seen = now;
+            quiet_since = Instant::now();
+        } else if quiet_since.elapsed() >= Duration::from_secs(2) {
+            break;
+        }
+        if Instant::now() > deadline {
+            println!("SKIPPED: the keyboard or mouse was in use; nothing was injected");
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // 2. Own topmost window under the cursor, made foreground.
+    // SAFETY: class registration and window creation on this thread.
+    let hwnd = unsafe {
+        let wc = WNDCLASSW {
+            lpfnWndProc: Some(proc_),
+            lpszClassName: w!("StinkShotSnipHookTest"),
+            ..Default::default()
+        };
+        RegisterClassW(&wc);
+        let mut cur = POINT::default();
+        let _ = GetCursorPos(&mut cur);
+        CreateWindowExW(
+            WS_EX_TOPMOST,
+            w!("StinkShotSnipHookTest"),
+            w!("Stinkshot Snip Hook Test"),
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+            cur.x - 160,
+            cur.y - 120,
+            320,
+            240,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("create window")
+    };
+    window_util::force_foreground(hwnd.0 as isize);
+    pump();
+    std::thread::sleep(Duration::from_millis(150));
+    pump();
+    let ours = || {
+        // SAFETY: plain window queries.
+        unsafe {
+            let mut cur = POINT::default();
+            let _ = GetCursorPos(&mut cur);
+            let under = GetAncestor(WindowFromPoint(cur), GA_ROOT);
+            GetForegroundWindow() == hwnd && under == hwnd
+        }
+    };
+    let destroy = || {
+        // SAFETY: destroying the window created above.
+        unsafe {
+            let _ = DestroyWindow(hwnd);
+        }
+    };
+    if !ours() || last_input() != seen || any_key_held() {
+        destroy();
+        println!(
+            "SKIPPED: the test window was not foreground under the cursor; nothing was injected"
+        );
+        return;
+    }
+
+    // 3. Hook, inject the chord downs, wait for the route, release at once.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let hook = SnipHook::install(tx).expect("install snip hook");
+    let send = |inputs: &[INPUT]| {
+        // SAFETY: the INPUT array outlives the call.
+        unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) }
+    };
+    let downs = [key(0x5B, false), key(0xA0, false), key(0x53, false)];
+    let ups = [key(0x53, true), key(0xA0, true), key(0x5B, true)];
+    let t0 = Instant::now();
+    let sent = send(&downs);
+    let mut routed = Vec::new();
+    while t0.elapsed() < Duration::from_millis(1500) && routed.is_empty() {
+        pump();
+        if let Ok(c) = rx.recv_timeout(Duration::from_millis(5)) {
+            routed.push(c);
+        }
+    }
+    let latency = t0.elapsed();
+    let sent_up = send(&ups);
+    let t1 = Instant::now();
+    while t1.elapsed() < Duration::from_millis(400) {
+        pump();
+        while let Ok(c) = rx.try_recv() {
+            routed.push(c);
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let still_fg = ours();
+    drop(hook);
+    destroy();
+    pump();
+    // SAFETY: trivial queries.
+    let stuck: Vec<i32> = [0x5B, 0x10, 0x53]
+        .into_iter()
+        .filter(|vk| unsafe { GetAsyncKeyState(*vk) } as u16 & 0x8000 != 0)
+        .collect();
+    println!(
+        "sent {sent}+{sent_up} events, routed {routed:?} after {latency:?}, S down/up seen by window {}/{}, Win up seen {}, window still foreground {still_fg}, stuck keys {stuck:x?}",
+        S_DOWN.load(Ordering::SeqCst),
+        S_UP.load(Ordering::SeqCst),
+        WIN_UP.load(Ordering::SeqCst),
+    );
+    assert_eq!(sent, 3);
+    assert_eq!(sent_up, 3);
+    assert_eq!(routed, vec![SnipChord::Region], "chord routed exactly once");
+    assert_eq!(S_DOWN.load(Ordering::SeqCst), 0, "S down was swallowed");
+    assert_eq!(S_UP.load(Ordering::SeqCst), 0, "S up was swallowed");
+    assert_eq!(WIN_UP.load(Ordering::SeqCst), 1, "Win up passed through");
+    assert!(stuck.is_empty(), "no key left down");
+    assert!(
+        still_fg,
+        "nothing (Start, Snipping Tool) took the foreground"
+    );
+}

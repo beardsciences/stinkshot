@@ -24,6 +24,7 @@ select and annotate in place, and saves every capture to a plain folder you can 
   3-2-1 countdown, trim before saving.
 - History: plain image files plus a small index, background OCR, full-text search, filters by app,
   window title and date, retention by age or size (starred items are kept).
+- Optional Snipping Tool replacement: Win+Shift+S, Win+Shift+R and PrtSc open Stinkshot.
 - Fluent look with dark and light themes, tray icon, portable single exe.
 
 ## Privacy
@@ -50,6 +51,16 @@ These are the defaults. All can be changed in Settings.
 | Record GIF | Ctrl+Alt+G |
 
 Taking over PrintScreen from Windows is a setting and is restored when you turn it off.
+
+### Replace Snipping Tool
+
+Settings > Hotkeys > Replace Snipping Tool (off by default) makes Stinkshot answer the Snipping
+Tool shortcuts: Win+Shift+S opens region capture, Win+Shift+R starts Record MP4, and PrtSc is taken
+over too. Only those exact key presses are intercepted; nothing else you type is touched. To undo
+it, turn the setting off (or quit Stinkshot): the shortcuts go back to the Snipping Tool and the
+PrintScreen setting is restored. The Snip tile in Quick Settings, the pen button and apps that open
+the `ms-screenclip:` link still start the Snipping Tool, because Windows offers no supported way
+to redirect them.
 
 ## CLI
 

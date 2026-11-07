@@ -77,6 +77,8 @@ All `todo!()` bodies in `crates/core` are implemented. `cargo test -p stinkshot-
 - `Config` and `Privacy` now `#[derive(Default)]` instead of hand-written impls (same values).
 - `config::Capture::open_editor_after_capture` (default false; `#[serde(default)]` on the
   table, so older configs load with it off).
+- `config::Hotkeys::replace_snipping_tool` (default false, Nov 7 2026; older configs load
+  with it off). See `docs/notes/snipping-tool.md`.
 - Editor polish (Nov 7 2026), all additive with serde defaults:
   - `ShapeKind::Arrow` gains `ctrl: Option<PtF>` (quadratic control point, curved arrow),
     `double: bool` (head at both ends) and `head: ArrowHead` (`Notched` default, `Triangle`,

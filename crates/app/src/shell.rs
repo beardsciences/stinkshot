@@ -1151,6 +1151,7 @@ impl Shell {
         }
         let mut w = SettingsWindow::new(&self.shared);
         w.set_hotkey_errors(self.hotkey_errors.clone());
+        w.set_snip_status(self.hotkeys.snip_status());
         if let Some(sec) = section {
             w.show_section(sec);
         }
@@ -1965,6 +1966,7 @@ impl Shell {
             self.hotkey_errors = self.hotkeys.reload(&new.hotkeys);
             if let Some(s) = &mut self.settings {
                 s.s.set_hotkey_errors(self.hotkey_errors.clone());
+                s.s.set_snip_status(self.hotkeys.snip_status());
             }
             if let Some(t) = &mut self.tray {
                 t.update_labels(&new);

@@ -1,5 +1,12 @@
 //! Global hotkeys via `global-hotkey`. Parses `config.hotkeys` strings; PrintScreen
-//! variants require `system::take_over_printscreen(true)` when `take_over_printscreen`.
+//! variants require `system::take_over_printscreen(true)` when `take_over_printscreen`
+//! (or `replace_snipping_tool`) is on.
+//!
+//! Replace Snipping Tool (`replace_snipping_tool`) also installs
+//! `stinkshot_platform::snip::SnipHook`, which swallows Win+Shift+S and Win+Shift+R and
+//! routes them here (docs/notes/snipping-tool.md). A binding of one of those chords to a
+//! Stinkshot action is not registered with Windows while the hook is on; the hook routes the
+//! chord to that action instead, so nothing fires twice.
 //!
 //! The manager owns a hidden window on the thread that created it (the UI thread), so
 //! hotkey messages arrive through the winit event loop. A bridge thread forwards them to a
@@ -11,6 +18,7 @@ use std::sync::{Mutex, OnceLock};
 
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
+use stinkshot_platform::snip::{SnipChord, SnipHook};
 
 use crate::actions::Action;
 use crate::state::Command;
@@ -92,6 +100,47 @@ impl ErrorKind {
     }
 }
 
+/// State of Replace Snipping Tool, for the status line in Settings > Hotkeys.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SnipStatus {
+    Off,
+    Active,
+    /// The hook could not be installed; the text says why and what to do.
+    Unavailable(String),
+}
+
+/// The action a Snipping Tool chord runs when no Stinkshot hotkey is bound to it.
+fn default_snip_action(chord: SnipChord) -> Action {
+    match chord {
+        SnipChord::Region => Action::Region,
+        SnipChord::Record => Action::RecordMp4,
+    }
+}
+
+/// Which action each Snipping Tool chord runs: the action bound to that exact chord in
+/// `cfg`, if any, otherwise the default (Region, Record MP4).
+pub fn snip_routes(cfg: &stinkshot_core::config::Hotkeys) -> [(SnipChord, Action); 2] {
+    SnipChord::ALL.map(|chord| {
+        let bound = bindings(cfg)
+            .into_iter()
+            .find(|(_, text)| same_hotkey(text, chord.hotkey_string()))
+            .map(|(a, _)| a);
+        (chord, bound.unwrap_or(default_snip_action(chord)))
+    })
+}
+
+/// Same combination, compared by the parsed `global-hotkey` id.
+fn same_hotkey(a: &str, b: &str) -> bool {
+    let (a, b) = (a.trim(), b.trim());
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    match (a.parse::<HotKey>(), b.parse::<HotKey>()) {
+        (Ok(x), Ok(y)) => x.id() == y.id(),
+        _ => false,
+    }
+}
+
 pub struct Hotkeys {
     manager: Option<GlobalHotKeyManager>,
     registered: Vec<HotKey>,
@@ -99,6 +148,11 @@ pub struct Hotkeys {
     suspended: bool,
     took_over_printscreen: bool,
     rx: Receiver<u32>,
+    snip: Option<SnipHook>,
+    snip_status: SnipStatus,
+    snip_routes: [(SnipChord, Action); 2],
+    snip_tx: Sender<SnipChord>,
+    snip_rx: Receiver<SnipChord>,
 }
 
 /// The global-hotkey receiver is process-wide, so exactly one bridge thread exists.
@@ -150,6 +204,7 @@ impl Hotkeys {
                 None
             }
         };
+        let (snip_tx, snip_rx) = channel();
         let mut hk = Hotkeys {
             manager,
             registered: Vec::new(),
@@ -157,6 +212,11 @@ impl Hotkeys {
             suspended: false,
             took_over_printscreen: false,
             rx,
+            snip: None,
+            snip_status: SnipStatus::Off,
+            snip_routes: snip_routes(cfg),
+            snip_tx,
+            snip_rx,
         };
         errors.extend(hk.reload(cfg));
         (hk, errors)
@@ -170,7 +230,13 @@ impl Hotkeys {
         let uses_printscreen = bindings(cfg)
             .iter()
             .any(|(_, s)| s.to_ascii_lowercase().contains("printscreen"));
-        let want_takeover = cfg.take_over_printscreen && uses_printscreen;
+        let replace = cfg.replace_snipping_tool;
+        // Replace Snipping Tool implies the PrintScreen takeover. Without a PrintScreen
+        // binding the takeover would only hand the key back to the legacy clipboard copy, so
+        // it stays off then (Settings says so).
+        let want_takeover = (cfg.take_over_printscreen || replace) && uses_printscreen;
+        self.set_snip_hook(replace);
+        self.snip_routes = snip_routes(cfg);
         if want_takeover || self.took_over_printscreen {
             match stinkshot_platform::system::take_over_printscreen(want_takeover) {
                 Ok(_) => self.took_over_printscreen = want_takeover,
@@ -205,6 +271,16 @@ impl Hotkeys {
                 errors.push(duplicate_text(&display(text), action, *other));
                 continue;
             }
+            if self.snip.is_some()
+                && SnipChord::ALL
+                    .iter()
+                    .any(|c| same_hotkey(text, c.hotkey_string()))
+            {
+                // The hook swallows this chord before Windows could deliver it as a hotkey
+                // and routes it to `action` itself (`snip_routes`).
+                claimed.insert(hotkey.id(), action);
+                continue;
+            }
             match manager.register(hotkey) {
                 Ok(()) => {
                     claimed.insert(hotkey.id(), action);
@@ -235,6 +311,58 @@ impl Hotkeys {
         self.actions.clear();
     }
 
+    /// Install or remove the Snipping Tool hook.
+    fn set_snip_hook(&mut self, on: bool) {
+        if !on {
+            if self.snip.take().is_some() {
+                log::info!("Snipping Tool shortcuts handed back to Windows");
+            }
+            self.snip_status = SnipStatus::Off;
+            return;
+        }
+        if self.snip.is_some() {
+            return;
+        }
+        // The hook thread sends here; a forwarder wakes the UI. It ends when the hook's
+        // sender goes away with the hook thread.
+        let (hook_tx, hook_rx) = channel::<SnipChord>();
+        let out = self.snip_tx.clone();
+        match SnipHook::install(hook_tx) {
+            Ok(h) => {
+                let spawned = std::thread::Builder::new()
+                    .name("snip-bridge".into())
+                    .spawn(move || {
+                        while let Ok(c) = hook_rx.recv() {
+                            if out.send(c).is_err() {
+                                break;
+                            }
+                            crate::wake::wake();
+                        }
+                    });
+                if let Err(e) = spawned {
+                    log::error!("cannot start Snipping Tool bridge thread: {e}");
+                    self.snip_status = SnipStatus::Unavailable(
+                        "Stinkshot could not start its shortcut listener. Restart Stinkshot and try again.".into(),
+                    );
+                    return;
+                }
+                log::info!("Snipping Tool shortcuts routed to Stinkshot");
+                self.snip = Some(h);
+                self.snip_status = SnipStatus::Active;
+            }
+            Err(e) => {
+                log::warn!("Snipping Tool hook failed: {e:#}");
+                self.snip_status = SnipStatus::Unavailable(
+                    "Windows did not let Stinkshot listen for Win+Shift+S and Win+Shift+R, so they still open the Snipping Tool. Turn the option off and on again, or restart Stinkshot.".into(),
+                );
+            }
+        }
+    }
+
+    pub fn snip_status(&self) -> SnipStatus {
+        self.snip_status.clone()
+    }
+
     pub fn poll(&mut self) -> Vec<Command> {
         let mut out = Vec::new();
         while let Ok(id) = self.rx.try_recv() {
@@ -242,6 +370,15 @@ impl Hotkeys {
                 continue;
             }
             if let Some(action) = self.actions.get(&id) {
+                out.push(action.command());
+            }
+        }
+        while let Ok(chord) = self.snip_rx.try_recv() {
+            if self.suspended || self.snip.is_none() {
+                continue;
+            }
+            if let Some((_, action)) = self.snip_routes.iter().find(|(c, _)| *c == chord) {
+                log::debug!("{} routed to {}", chord.display(), action.label());
                 out.push(action.command());
             }
         }
@@ -287,6 +424,7 @@ impl Hotkeys {
     /// Unregister everything and give PrintScreen back to Windows. Call on quit.
     pub fn shutdown(&mut self) {
         self.unregister_all();
+        self.set_snip_hook(false);
         if self.took_over_printscreen {
             if let Err(e) = stinkshot_platform::system::take_over_printscreen(false) {
                 log::warn!("could not restore PrintScreen setting: {e:#}");
@@ -450,6 +588,50 @@ mod tests {
                 .any(|w| w == "Window" || w == "Region");
             assert!(!names_action, "{row}");
         }
+    }
+
+    #[test]
+    fn snip_chord_strings_parse_and_match_recorded_form() {
+        for c in SnipChord::ALL {
+            assert!(c.hotkey_string().parse::<HotKey>().is_ok(), "{c:?}");
+        }
+        // What Settings records for Win+Shift+S (ui_hotkey::build_hotkey order).
+        assert!(same_hotkey(
+            "Shift+Super+KeyS",
+            SnipChord::Region.hotkey_string()
+        ));
+        assert!(same_hotkey(
+            "Meta+Shift+KeyR",
+            SnipChord::Record.hotkey_string()
+        ));
+        assert!(!same_hotkey(
+            "Shift+KeyS",
+            SnipChord::Region.hotkey_string()
+        ));
+        assert!(!same_hotkey("", SnipChord::Region.hotkey_string()));
+        assert_eq!(display(SnipChord::Region.hotkey_string()), "Shift+Win+S");
+    }
+
+    #[test]
+    fn snip_routes_default_and_follow_bindings() {
+        let mut cfg = stinkshot_core::config::Hotkeys::default();
+        assert_eq!(
+            snip_routes(&cfg),
+            [
+                (SnipChord::Region, Action::Region),
+                (SnipChord::Record, Action::RecordMp4)
+            ]
+        );
+        // A Stinkshot action bound to the chord gets it (and is not registered twice).
+        cfg.ocr = "Shift+Super+KeyS".into();
+        cfg.record_gif = "Super+Shift+KeyR".into();
+        assert_eq!(
+            snip_routes(&cfg),
+            [
+                (SnipChord::Region, Action::Ocr),
+                (SnipChord::Record, Action::RecordGif)
+            ]
+        );
     }
 
     #[test]

@@ -25,7 +25,9 @@ Files: `crates/app/src/{main,shell,cli,tray,hotkeys,update,theme,state}.rs`, new
   untouched overlay the first click opened; a second click that lands on that overlay at the
   icon's spot within 500 ms does the same from inside the overlay).
 - **hotkeys**: global-hotkey, bridge thread wakes the UI, conflict and parse errors reported,
-  PrintScreen takeover handled in `reload`/`shutdown`.
+  PrintScreen takeover handled in `reload`/`shutdown`. Replace Snipping Tool installs the`
+  platform `SnipHook` and routes Win+Shift+S / Win+Shift+R (`snip_routes`,`
+  docs/notes/snipping-tool.md).
 - **cli**: clap; headless `full|window --out`, `ocr --file`; other subcommands forward over
   IPC. Release builds attach to the parent console so stdout/--help work.
 - **update**: ureq GET (10 s timeout), `parse_release`, `is_newer`. Only network code.
