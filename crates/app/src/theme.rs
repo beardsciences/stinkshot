@@ -238,6 +238,17 @@ pub fn install(
         defs.families
             .insert(FontFamily::Name(SEMIBOLD.into()), semi);
         ctx.set_fonts(defs);
+        // CJK, Hangul and emoji: the same system fallback faces core renders with, loaded
+        // the first time egui meets a character the UI font lacks.
+        let core_fonts = fonts.clone();
+        ctx.add_font_provider(std::sync::Arc::new(
+            move |req: &egui::FallbackRequest<'_>| -> Option<egui::FontInsert> {
+                let c = req.cluster.chars().next()?;
+                let fb = core_fonts.fallback_for_char(c)?;
+                let data = FontData::from_blob(std::sync::Arc::new(fb.data), fb.index);
+                Some(egui::FontInsert::new(fb.name, data, Vec::new()))
+            },
+        ));
         ctx.data_mut(|d| d.insert_temp(fonts_id, true));
     }
 
@@ -683,6 +694,12 @@ pub enum Icon {
     Eyedropper,
     /// Two regions side by side (multi-region capture).
     Regions,
+    /// Measure tool.
+    Ruler,
+    /// Scan Codes and Text panel.
+    Qr,
+    /// Beautify panel.
+    Frame,
 }
 
 /// Icon vector data (24x24 design grid, stroke 1.8) and the painter that draws it.
@@ -781,6 +798,22 @@ mod icons {
                      L14.4 2.8L16.8 3.8L16.2 6.4L17.6 7.8L20.2 7.2L21.2 9.6L18.9 11.0z",
                 ),
                 Circle(12.0, 12.0, 3.0),
+            ],
+            Icon::Ruler => &[Path(
+                "M3 16L16 3L21 8L8 21z M7 12L9 14 M10 9L12 11 M13 6L15 8",
+            )],
+            Icon::Qr => &[
+                Rect(4.0, 4.0, 6.0, 6.0, 1.0),
+                Rect(14.0, 4.0, 6.0, 6.0, 1.0),
+                Rect(4.0, 14.0, 6.0, 6.0, 1.0),
+                FillRect(14.0, 14.0, 2.5, 2.5, 0.0),
+                FillRect(17.5, 17.5, 2.5, 2.5, 0.0),
+                FillRect(17.5, 14.0, 2.5, 2.5, 0.0),
+                FillRect(14.0, 17.5, 2.5, 2.5, 0.0),
+            ],
+            Icon::Frame => &[
+                SoftRect(3.0, 3.0, 18.0, 18.0, 3.0),
+                Rect(7.5, 7.5, 9.0, 9.0, 1.5),
             ],
         }
     }

@@ -15,19 +15,21 @@ pub enum Action {
     Scrolling,
     Ocr,
     RepeatLast,
+    PickColor,
     RecordMp4,
     RecordGif,
 }
 
 impl Action {
     /// Menu / Settings order.
-    pub const ALL: [Action; 8] = [
+    pub const ALL: [Action; 9] = [
         Action::Region,
         Action::Window,
         Action::Fullscreen,
         Action::Scrolling,
         Action::Ocr,
         Action::RepeatLast,
+        Action::PickColor,
         Action::RecordMp4,
         Action::RecordGif,
     ];
@@ -41,6 +43,7 @@ impl Action {
             Action::Scrolling => "Scrolling",
             Action::Ocr => "Copy Text (OCR)",
             Action::RepeatLast => "Repeat Last Region",
+            Action::PickColor => "Pick Color",
             Action::RecordMp4 => "Record MP4",
             Action::RecordGif => "Record GIF",
         }
@@ -55,6 +58,7 @@ impl Action {
             Action::Scrolling => "Select a region, Stinkshot scrolls and stitches it.",
             Action::Ocr => "Select a region and copy the recognized text.",
             Action::RepeatLast => "Capture the previous region again without selecting.",
+            Action::PickColor => "Click any pixel to copy its color as hex, RGB or HSL.",
             Action::RecordMp4 => "Select a region and record with hardware encoding.",
             Action::RecordGif => "Select a region and record a size-optimized GIF.",
         }
@@ -69,6 +73,7 @@ impl Action {
             Action::Scrolling => "scroll",
             Action::Ocr => "ocr",
             Action::RepeatLast => "repeat",
+            Action::PickColor => "pick_color",
             Action::RecordMp4 => "rec_mp4",
             Action::RecordGif => "rec_gif",
         }
@@ -90,6 +95,7 @@ impl Action {
             Action::Scrolling => Command::CaptureScrolling,
             Action::Ocr => Command::OcrRegion,
             Action::RepeatLast => Command::RepeatLastRegion,
+            Action::PickColor => Command::PickColor,
             Action::RecordMp4 => Command::RecordMp4,
             Action::RecordGif => Command::RecordGif,
         }
@@ -103,6 +109,7 @@ impl Action {
             Action::Scrolling => &h.scrolling,
             Action::Ocr => &h.ocr,
             Action::RepeatLast => &h.repeat_last_region,
+            Action::PickColor => &h.pick_color,
             Action::RecordMp4 => &h.record_mp4,
             Action::RecordGif => &h.record_gif,
         }
@@ -116,6 +123,7 @@ impl Action {
             Action::Scrolling => &mut h.scrolling,
             Action::Ocr => &mut h.ocr,
             Action::RepeatLast => &mut h.repeat_last_region,
+            Action::PickColor => &mut h.pick_color,
             Action::RecordMp4 => &mut h.record_mp4,
             Action::RecordGif => &mut h.record_gif,
         }

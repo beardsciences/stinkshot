@@ -504,26 +504,41 @@ impl Overlay {
         doc.base_height = base.height;
         let rect = hover::local_to_virtual(sel, self.bounds);
 
-        if doc.shapes.is_empty() {
-            let flat = (*base).clone();
-            self.complete(shared, action, base, doc, flat, rect);
-            return;
-        }
-        // The worker's image is exactly the flattened output when it shows this document.
-        if self.render_ok
+        // Beautify frames image exports (never Copy Text), on the worker below.
+        let frame = (self.beautify.enabled && action != FinishAction::CopyText)
+            .then(|| self.beautify.clone());
+        let ready: Option<Rgba> = if doc.shapes.is_empty() {
+            Some((*base).clone())
+        } else if self.render_ok
             && let Some(flat) = self.renderer.as_ref().and_then(|r| r.image_for(&doc))
             && flat.width == base.width
             && flat.height == base.height
         {
-            self.complete(shared, action, base, doc, flat, rect);
-            return;
-        }
+            // The worker's image is exactly the flattened output when it shows this document.
+            Some(flat)
+        } else {
+            None
+        };
+        let ready = match (ready, &frame) {
+            (Some(flat), None) => {
+                self.complete(shared, action, base, doc, flat, rect);
+                return;
+            }
+            (r, _) => r,
+        };
         let (tx, rx) = channel();
         let (b, d, fonts, ctx2) = (base.clone(), doc.clone(), self.fonts.clone(), ctx.clone());
         let spawned = std::thread::Builder::new()
             .name("overlay-finish".into())
             .spawn(move || {
-                let r = render::flatten(&b, &d, &fonts);
+                let flat = match ready {
+                    Some(f) => Some(f),
+                    None => render::flatten(&b, &d, &fonts),
+                };
+                let r = match (flat, frame) {
+                    (Some(f), Some(fr)) => Some(stinkshot_core::beautify::apply(&f, &fr)),
+                    (f, _) => f,
+                };
                 let _ = tx.send(r);
                 ctx2.request_repaint();
             });
@@ -580,6 +595,7 @@ impl Overlay {
         rect: PxRect,
     ) {
         self.persist_prefs(shared);
+        self.persist_beautify(shared);
         let sel = self.sel.unwrap_or_default();
         let (mode, editing, source) = match &self.annotate_meta {
             Some((m, e, s)) => (*m, *e, s.clone()),
@@ -708,8 +724,19 @@ impl Overlay {
                     self.popup = if self.popup == Some(p) { None } else { Some(p) };
                 }
                 UiAction::Grip(ev) => self.grip(ctx, ev),
-                UiAction::FindSensitive => self.toggle_smart_redact(ctx, shared),
+                UiAction::FindSensitive => {
+                    self.scan = None;
+                    if self.beautify_open {
+                        self.close_beautify(shared);
+                    }
+                    self.toggle_smart_redact(ctx, shared)
+                }
                 UiAction::Smart(a) => self.apply_smart_action(shared, a),
+                UiAction::ToggleScan => self.toggle_scan(ctx, shared),
+                UiAction::Scan(a) => self.apply_scan_action(a),
+                UiAction::ToggleBeautify => self.toggle_beautify(shared),
+                UiAction::Beautify(a) => self.apply_beautify_action(shared, a),
+                UiAction::Picker(a) => self.apply_picker_action(shared, a),
             }
         }
     }

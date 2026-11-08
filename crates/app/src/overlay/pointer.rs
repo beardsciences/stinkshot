@@ -171,6 +171,18 @@ impl Overlay {
                 self.drag = Drag::Ignore;
                 return;
             }
+            if self.picker_mode() {
+                // Pick Color: no regions or snapping, a click copies the pixel.
+                ctx.set_cursor_icon(CursorIcon::Crosshair);
+                if inp.pressed
+                    && let Some(p) = inp.pos
+                {
+                    let c = self.sample_at(p);
+                    self.pick_and_close(shared, c);
+                    self.drag = Drag::Ignore;
+                }
+                return;
+            }
             if inp.pressed {
                 if let Some(p) = inp.pos {
                     self.popup = None;
@@ -572,6 +584,12 @@ impl Overlay {
         };
 
         match self.tool {
+            Tool::Measure if inside || matches!(self.kind, Kind::Annotate) => {
+                self.selected.clear();
+                let a = self.ruler_point(p, inp.alt);
+                self.ruler = Some((a, a));
+                self.drag = Drag::Measure { a };
+            }
             Tool::Select => {
                 if let Some(id) = shapes::hit_test(&self.doc, img, tol, &measure) {
                     let mut toggled = false;
@@ -713,6 +731,17 @@ impl Overlay {
         let drag = std::mem::replace(&mut self.drag, Drag::None);
         match drag {
             Drag::None | Drag::Ignore | Drag::Pan { .. } => {}
+            Drag::Measure { a } => {
+                let mut b = self.ruler_point(p, inp.alt);
+                if inp.shift {
+                    b = self.clamp_image(super::measure::constrain(a, b));
+                }
+                self.ruler = Some((a, b));
+                ctx.set_cursor_icon(CursorIcon::Crosshair);
+                if !inp.released && inp.down {
+                    self.drag = Drag::Measure { a };
+                }
+            }
             Drag::TextSelect => {
                 let img = self.to_image(p);
                 if let Some(i) = self.caret_at(img)

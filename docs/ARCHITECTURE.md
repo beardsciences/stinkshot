@@ -72,7 +72,8 @@ The public items in each crate's stub files are the contract. They compile today
   (pin), Ctrl+T (copy text), Ctrl+R (Find Sensitive Info, docs/notes/smart-redact.md),
   Ctrl+Z/Ctrl+Y, Del, tool shortcuts A arrow, L line, R rect,
   E ellipse, P pen, H highlighter, T text, N step, B blur, X pixelate, K redact box,
-  M magnifier, O callout, S spotlight, V select; 1-8 palette colors; [ ] stroke width;
+  M magnifier, O callout, S spotlight, U measure, V select; 1-8 palette colors; [ ] stroke width;
+  Q codes and text (QR / barcodes, Copy as Table), F beautify, C copy color (picker format);
   I eyedropper; Ctrl+D duplicate; Ctrl+C / Ctrl+V copy and paste shapes when shapes are
   selected (otherwise Ctrl+C copies the image; Enter always does); Ctrl+] / Ctrl+[ forward /
   backward, with Shift to front / back; Ctrl+B bold text; Ctrl+wheel, Ctrl+= / Ctrl+- zoom,

@@ -93,6 +93,8 @@ enum Sub {
     },
     /// Capture the last region again.
     Repeat,
+    /// Pick a color anywhere on screen and copy it (hex, RGB or HSL).
+    PickColor,
     /// Record the screen as MP4 (toggles: stops a running recording).
     Record,
     /// Record the screen as GIF (toggles: stops a running recording).
@@ -111,6 +113,7 @@ fn command_of(sub: &Sub) -> Command {
         Sub::Scroll => Command::CaptureScrolling,
         Sub::Ocr { .. } => Command::OcrRegion,
         Sub::Repeat => Command::RepeatLastRegion,
+        Sub::PickColor => Command::PickColor,
         Sub::Record => Command::RecordMp4,
         Sub::Gif => Command::RecordGif,
         Sub::History => Command::OpenHistory,
@@ -273,6 +276,10 @@ mod tests {
         assert!(matches!(
             command_from_args(&args(&["repeat"])),
             Some(Command::RepeatLastRegion)
+        ));
+        assert!(matches!(
+            command_from_args(&args(&["pick-color"])),
+            Some(Command::PickColor)
         ));
         assert!(matches!(
             command_from_args(&args(&["record"])),

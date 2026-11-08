@@ -507,3 +507,108 @@ In the scrolling-capture overlay the first highlight on a new element chain is t
 UIA `Document` in it (`hover::scroll_target_level`), so one click on a browser page selects the
 web page without the tab strip, address bar or window frame; the wheel still walks the chain.
 Not verified on a real browser (no input to other apps in this session).
+
+## Editor tools: codes, tables, color picker, measure, beautify, CJK (Nov 8 2026)
+
+Six features, all offline. No network code was added; nothing is uploaded or opened.
+
+### Codes and Text panel (Q, QR button in the action bar)
+
+`scan.rs`. On a worker: `stinkshot_core::codes::decode` (rxing, pure Rust zxing port; QR,
+Micro QR, Data Matrix, Aztec, PDF417, EAN / UPC, Code 128 / 39 / 93, ITF, Codabar, GS1
+DataBar), then OCR when a language is installed. The panel (same spot as Find Sensitive Info;
+the three panels are exclusive) lists each code with its format and text and a Copy button,
+"Copy Link" for http(s) text. Links are only copied, never opened. Found codes are outlined
+on the canvas. Below: a 3-line text preview, Copy Text, and Copy as Table (enabled when
+`stinkshot_core::table::detect` finds columns; tooltip "N Rows x M Columns, Tab-Separated"
+or "No columns found"). Copy shows "Copied" on the button for 1.5 s. Results drop when the
+selection changes (same rule as Find Sensitive Info). Esc closes.
+
+Decode time (dev profile, deps at opt-level 2, busy synthetic background): 800x600 208 ms
+with nothing found (includes the 2x retry pass), 112 ms with a QR; 1920x1080 186 / 322 ms;
+3840x2160 574 / 992 ms. Worker only, spinner meanwhile.
+
+### Copy as Table
+
+`stinkshot_core::table`: words are regrouped into rows by vertical overlap (Windows OCR splits
+one row into several "lines" at wide gaps), a gap over 1.1 x the text height starts a cell,
+columns are x ranges covered by most multi-cell rows (a spanning title row does not merge
+them), each cell goes to the first column it overlaps. Tabular = 2+ columns and 2+ rows using
+2+ of them, at least half of all rows. Output is TSV (tabs / newlines in cells become spaces).
+Tests: grid, right-aligned numbers with a missing cell, jitter and shuffled input, prose (not
+a table), one row (not a table), spanning title row, OCR lines split per cell.
+
+### Color picker
+
+- Standalone: `Action::PickColor` ("Pick Color", tray item, hotkey `[hotkeys] pick_color`,
+  empty by default so it never collides; set it in Settings > Hotkeys; CLI
+  `stinkshot.exe pick-color`) -> `Command::PickColor` -> overlay
+  `SelectRegion(RegionPurpose::PickColor)`. The screen is frozen and not dimmed, the loupe is
+  always on, no window / element snapping. Click (or Enter) copies the pixel in the chosen
+  format and closes; a "Color Copied" toast shows the value. Tab cycles Hex / RGB / HSL. A
+  panel under the hint bar has the format chips and up to 8 recent picks (click one: copied
+  again, closes). Esc cancels.
+- In every overlay, C now copies in the picker format (Hex by default, so unchanged unless
+  the user switched) and adds to the recent picks. The editor's eyedropper (I) is unchanged.
+- Config: `[editor] picker_format` ("hex" / "rgb" / "hsl"), `[editor] picker_recent`.
+  Formats in `stinkshot_core::color` (hex upper case as before, `rgb(30, 144, 255)`,
+  `hsl(210, 100%, 56%)`).
+
+### Measure tool (U, ruler in the tool bar)
+
+`measure.rs`. Drag inside the selection (anywhere on the picture in the editor): a ruler with
+end ticks and dashed legs, and a label "240 x 120 px · 268.3 px · 26.6°" plus a logical line
+"160 x 80 · 178.9 at 150%" when the monitor under the selection is not at 100 %. Units are
+image px, which are physical px of the capture (also in the scaled-down editor view). Ends
+snap to the strongest luminance edge (step >= 28) within 6 px on each axis, searching the
+second axis along the first axis' edge so box corners snap; Alt turns it off; Shift keeps 0 /
+45 / 90 degrees. Nothing is added to the doc; the ruler shows while the tool is active and
+clears when the region is re-based. Tests: length / angle, labels at 100 and 150 %, Shift
+constraint, edge snap on a synthetic box (edge to edge = box width), faint steps ignored.
+
+### Beautify (F, frame button in the action bar)
+
+`beautify_panel.rs` + `stinkshot_core::beautify`. Apply on Export toggle, a live preview
+(296 x 170, annotations included once the render worker has them), Background Gradient /
+Solid / Blurred with 6 preset swatches each (blurred = the capture scaled to cover, blurred
+and darkened), Padding 0-256 px, Corners 0-48 px, Shadow, Aspect Free / 16:9 / 1:1 / 4:5 (the
+canvas grows, nothing is cropped). Applied on the finishing worker to Copy, Save As, Pin and
+Quick exports, never to Copy Text; the history item keeps the unframed base + doc, so a
+re-edit is unframed and gets the frame again on export. Settings live in `[editor.beautify]`,
+saved when the panel closes, on finish and on cancel (not per slider frame). The frame
+button is highlighted while Beautify is on, tooltip "Beautify (F) · On".
+
+`beautify::apply` cost (dev profile, core at opt-level 2): 1920x1080 solid 27 ms, gradient
+26 ms, blurred 82 ms; 3840x2160 63 / 73 / 262 ms (first version 210-1012 ms; now LUT
+gradient, fixed-point bilinear, shadow only within reach and not under the opaque capture,
+opaque rows copied). The preview uses `beautify::preview_thumbnail` (3 x 3 sampled, cheap
+enough for the UI thread).
+
+### CJK and emoji text
+
+Core `Fonts` falls back per character (see core.md). egui gets the same faces through a
+`FontProvider` registered in `theme::install`, asked only for characters the UI font lacks,
+so the editor UI (and every other window) shows CJK / emoji as well. Since text annotations
+are typed straight onto the image with core's renderer, the caret, wrapping and output agree.
+The IME caveat above (CJK showing as boxes) is fixed.
+
+### Contract changes (additive)
+
+`state.rs`: `Command::PickColor`, `RegionPurpose::PickColor` (shell: freezes first, opens the
+overlay, `region_chosen` ignores it). `actions.rs`: `Action::PickColor` (Settings row and tray
+item come from `Action::ALL`; `hotkeys::bindings` and `settings_ui::HOTKEY_FIELDS` now size
+from `Action::ALL.len()`). `cli.rs`: `pick-color`. `theme.rs`: `Icon::Ruler`, `Icon::Qr`,
+`Icon::Frame`, and the font provider. `ui::action_bar` takes a `PanelState` instead of
+`smart_open`.
+
+### Not verified live
+
+No overlay was opened on the desktop (it covers every monitor while the user works, and is
+excluded from capture so screenshots would not show it). Verified by build, clippy, unit
+tests and rendered PNGs (mixed-script text, three Beautify variants). Manual checks: Q on a
+screenshot with a QR code (and a barcode, and a dark-mode inverted QR), Copy / Copy Link,
+Copy as Table from a spreadsheet screenshot pasted into Excel; Pick Color from the tray after
+binding a hotkey, Tab, recent picks after a restart; U across a button (edges snap, Alt off,
+Shift straight) on a 150 % monitor; F with each background and aspect, then Copy / Save /
+Pin, and a cancelled capture keeps the settings; type Chinese / Japanese / Korean / emoji with
+the IME in a text annotation and in the History search box.

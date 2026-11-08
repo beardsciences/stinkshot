@@ -23,7 +23,7 @@ use stinkshot_platform::snip::{SnipChord, SnipHook};
 use crate::actions::Action;
 use crate::state::Command;
 
-fn bindings(cfg: &stinkshot_core::config::Hotkeys) -> [(Action, &str); 8] {
+fn bindings(cfg: &stinkshot_core::config::Hotkeys) -> [(Action, &str); Action::ALL.len()] {
     Action::ALL.map(|a| (a, a.hotkey(cfg).as_str()))
 }
 
@@ -557,6 +557,10 @@ mod tests {
     fn default_hotkeys_parse() {
         let cfg = stinkshot_core::config::Hotkeys::default();
         for (action, text) in bindings(&cfg) {
+            // Unbound by default (Pick Color): nothing to register.
+            if text.is_empty() {
+                continue;
+            }
             let parsed: Result<HotKey, _> = text.parse();
             assert!(parsed.is_ok(), "{} ({text}) should parse", action.label());
         }

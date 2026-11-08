@@ -22,3 +22,8 @@ memmap2.workspace = true
 miniz_oxide.workspace = true
 crc32fast.workspace = true
 zopfli.workspace = true
+rxing.workspace = true
+
+[dev-dependencies]
+# Tests draw codes to decode them again.
+rxing = { workspace = true, features = ["encoders"] }

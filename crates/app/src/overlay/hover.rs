@@ -118,6 +118,7 @@ pub fn purpose_label(p: RegionPurpose) -> &'static str {
         RegionPurpose::Scrolling => "Select Area to Scroll-Capture",
         RegionPurpose::RecordMp4 => "Select Area to Record",
         RegionPurpose::RecordGif => "Select Area to Record as GIF",
+        RegionPurpose::PickColor => "Pick a Color",
     }
 }
 

@@ -52,6 +52,8 @@ pub struct Hotkeys {
     pub repeat_last_region: String,
     pub record_mp4: String,
     pub record_gif: String,
+    /// Standalone color picker (empty = no hotkey; also in the tray menu).
+    pub pick_color: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -95,6 +97,12 @@ pub struct Editor {
     /// Color and stroke width each editor tool last used, keyed by tool ("arrow", "rect",
     /// "redact", ...). Tools without an entry start from `color` / `stroke_width`.
     pub tool_styles: std::collections::BTreeMap<String, ToolStyle>,
+    /// Color picker copy format: "hex", "rgb" or "hsl".
+    pub picker_format: String,
+    /// Colors picked with the color picker (C in the overlay, Pick Color), newest first, hex.
+    pub picker_recent: Vec<String>,
+    /// Beautify frame for sharing (applied at export when enabled).
+    pub beautify: crate::beautify::Beautify,
 }
 
 /// A tool's remembered color (hex) and stroke width.
@@ -184,6 +192,7 @@ impl Default for Hotkeys {
             repeat_last_region: "Shift+PrintScreen".into(),
             record_mp4: "Control+Alt+KeyR".into(),
             record_gif: "Control+Alt+KeyG".into(),
+            pick_color: String::new(),
         }
     }
 }
@@ -229,6 +238,9 @@ impl Default for Editor {
             smart_redact_style: "box".into(),
             recent_colors: Vec::new(),
             tool_styles: Default::default(),
+            picker_format: "hex".into(),
+            picker_recent: Vec::new(),
+            beautify: Default::default(),
         }
     }
 }
@@ -520,6 +532,12 @@ mod tests {
                 width: 6.0,
             },
         );
+        cfg.editor.picker_format = "hsl".into();
+        cfg.editor.picker_recent = vec!["#abcdef".into()];
+        cfg.editor.beautify.enabled = true;
+        cfg.editor.beautify.aspect = crate::beautify::Aspect::Portrait;
+        cfg.editor.beautify.background = crate::beautify::BackgroundKind::Blurred;
+        cfg.hotkeys.pick_color = "Control+Alt+KeyC".into();
         cfg.history.max_gb = 2.5;
         cfg.privacy.check_for_updates = true;
         cfg.privacy.last_update_check = Some(chrono::Utc::now());
@@ -551,6 +569,10 @@ mod tests {
         assert_eq!(cfg.recording, Recording::default());
         // Editor memory added later: absent in old files, empty when loaded.
         assert!(cfg.editor.recent_colors.is_empty() && cfg.editor.tool_styles.is_empty());
+        assert_eq!(cfg.editor.picker_format, "hex");
+        assert!(cfg.editor.picker_recent.is_empty());
+        assert_eq!(cfg.editor.beautify, crate::beautify::Beautify::default());
+        assert!(cfg.hotkeys.pick_color.is_empty());
         let _ = std::fs::remove_dir_all(&d);
     }
 

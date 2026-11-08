@@ -39,6 +39,14 @@ pub enum UiAction {
     Smart(super::smart_redact::SmartAction),
     /// Eyedropper button (or I): pick a color from the image.
     Eyedropper,
+    /// Codes and Text button (or Q).
+    ToggleScan,
+    Scan(super::scan::ScanAction),
+    /// Beautify button (or F).
+    ToggleBeautify,
+    Beautify(super::beautify_panel::BeautifyAction),
+    /// Color picker panel (standalone Pick Color).
+    Picker(super::picker::PickerAction),
     /// A context bar option on the selected arrow or text.
     Shape(super::ops::ShapeOpt),
     /// The zoom chip: back to the fitted view.
@@ -79,6 +87,7 @@ pub const TOOL_GROUPS: [&[(Tool, Icon)]; 2] = [
         (Tool::Magnifier, Icon::Magnifier),
         (Tool::Callout, Icon::Callout),
         (Tool::Spotlight, Icon::Spotlight),
+        (Tool::Measure, Icon::Ruler),
     ],
 ];
 
@@ -277,7 +286,7 @@ pub fn tool_bar(
 }
 
 /// What the action bar shows.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct ActionBarState {
     /// An OCR language is installed (otherwise Find Sensitive Info and Copy Text are
     /// disabled and say why).
@@ -286,10 +295,16 @@ pub struct ActionBarState {
     pub smart_open: bool,
     /// The Add Regions toggle and whether it is on (screen overlay only).
     pub add_regions: Option<bool>,
+    /// The Codes and Text panel is showing.
+    pub scan: bool,
+    /// The Beautify panel is showing.
+    pub beautify: bool,
+    /// Beautify applies on export.
+    pub beautify_on: bool,
 }
 
-/// Action bar: Add Regions (screen overlay), Find Sensitive Info, OCR, Pin, Save, Cancel,
-/// then the accent Copy button.
+/// Action bar: Add Regions (screen overlay), Find Sensitive Info, Codes and Text, Beautify,
+/// OCR, Pin, Save, Cancel, then the accent Copy button.
 pub fn action_bar(
     ctx: &Context,
     pos: Pos2,
@@ -302,7 +317,9 @@ pub fn action_bar(
         ocr,
         smart_open,
         add_regions,
+        ..
     } = st;
+    let panels = st;
     let resp = Area::new(Id::unique("stinkshot-ov-actions"))
         .order(Order::Foreground)
         .fixed_pos(pos)
@@ -329,6 +346,25 @@ pub fn action_bar(
                         .inner;
                     if r.on_disabled_hover_text(&smart_tip).clicked() {
                         out.push(UiAction::FindSensitive);
+                    }
+                    let scan_tip = format!("Read Codes and Text ({})", super::keys::SCAN.label);
+                    if theme::widgets::icon_button(ui, Icon::Qr, &scan_tip, panels.scan).clicked() {
+                        out.push(UiAction::ToggleScan);
+                    }
+                    let frame_tip = format!(
+                        "Beautify ({}){}",
+                        super::keys::BEAUTIFY.label,
+                        if panels.beautify_on { " \u{b7} On" } else { "" }
+                    );
+                    if theme::widgets::icon_button(
+                        ui,
+                        Icon::Frame,
+                        &frame_tip,
+                        panels.beautify || panels.beautify_on,
+                    )
+                    .clicked()
+                    {
+                        out.push(UiAction::ToggleBeautify);
                     }
                     let ocr_tip = if ocr {
                         "Copy Text (Ctrl+T)"
