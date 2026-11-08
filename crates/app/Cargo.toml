@@ -27,6 +27,8 @@ egui.workspace = true
 tray-icon.workspace = true
 global-hotkey.workspace = true
 clap.workspace = true
+# Blocks on wgpu adapter and device requests in `gpu.rs` (already in the tree via eframe).
+pollster.workspace = true
 ureq.workspace = true
 # PNG frames of the About animation's disk cache (already in the tree via eframe and core).
 image.workspace = true
@@ -35,9 +37,12 @@ image.workspace = true
 workspace = true
 features = [
     "Win32_Foundation",
+    "Win32_Graphics_Dwm",
     "Win32_System_Com",
     "Win32_System_Console",
     "Win32_System_LibraryLoader",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",

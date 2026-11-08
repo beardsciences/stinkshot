@@ -185,7 +185,7 @@ pub enum SurfaceStatus {
 /// A window the shell shows as an egui immediate viewport.
 pub trait Surface {
     /// Unique and stable for the surface's lifetime. Also used as the OS window title
-    /// (so `window_util::find_own_window` can locate the HWND).
+    /// (so `sysutil::find_own_window` can locate the HWND).
     fn title(&self) -> String;
     fn viewport_builder(&self, shared: &Shared) -> egui::ViewportBuilder;
     /// Draw one frame. Runs inside the viewport's context.
@@ -194,5 +194,14 @@ pub trait Surface {
     /// tool-window, mica, exclude-from-capture, exact physical rect, etc.
     fn on_created(&mut self, hwnd: stinkshot_platform::Hwnd, shared: &Shared) {
         let _ = (hwnd, shared);
+    }
+    /// Called after every frame of this surface has been painted and presented. The overlay
+    /// uses it to uncloak its window once a frame at the final size is on it.
+    fn after_paint(&mut self) {}
+    /// Paint another frame right away, in the same shell pass, instead of waiting for the
+    /// next one (which can be tens of ms away). The overlay asks for it while it waits for a
+    /// second present before uncloaking.
+    fn wants_frame_now(&self) -> bool {
+        false
     }
 }

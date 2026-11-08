@@ -43,6 +43,7 @@ egui = "0.37"
 tray-icon = "0.26"
 global-hotkey = "0.9"
 clap = { version = "4", features = ["derive"] }
+pollster = "1"
 ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
 directories = "6"
 windows = "0.62"

@@ -99,6 +99,7 @@ const NOTICE_LAST_REGION_OFF_SCREEN: &str = "Last Region Is Off Screen: Select a
 
 pub fn run() -> anyhow::Result<()> {
     timing::mark_start();
+    let pre_main = timing::since_process_creation_ms();
     if std::env::args().len() > 1 {
         sysutil::attach_parent_console();
     }
@@ -106,7 +107,9 @@ pub fn run() -> anyhow::Result<()> {
     // Before any worker touches WinRT: cached factories must never outlive the MTA.
     stinkshot_platform::keep_mta_alive();
     logger::init();
-    timing::point(format_args!("logger ready"));
+    timing::point(format_args!(
+        "logger ready (process created {pre_main:.1} ms before main)"
+    ));
 
     let (initial, forward_args) = match cli::parse() {
         CliAction::Headless(job) => {
@@ -149,6 +152,9 @@ pub fn run() -> anyhow::Result<()> {
     // fonts, history, OCR and wgpu (about 1 s, more on a cold start) and give up after its 3 s
     // of retries. Commands queue in the channel until the shell's first frame drains them.
     let ipc_rx = start_ipc();
+    // The GPU device (driver load, about 0.5 s) is made on a worker while the tray, hotkeys,
+    // fonts and history come up on this thread.
+    let gpu = crate::gpu::start();
     // The first freeze would otherwise create the DXGI duplication session itself (device,
     // duplication and a GDI seed per output: 0.3 to 2 s). Do it now, beside eframe start-up.
     let _ = std::thread::Builder::new()
@@ -159,7 +165,7 @@ pub fn run() -> anyhow::Result<()> {
         });
     start_capture_rewarm();
     let welcome = initial.is_none() && !forward_args.is_empty();
-    match run_app(initial, welcome, guard, ipc_rx) {
+    match run_app(initial, welcome, guard, ipc_rx, gpu) {
         Ok(()) => Ok(()),
         Err(e) => {
             log::error!("fatal: {e:#}");
@@ -234,6 +240,9 @@ struct Boot {
     initial: Option<Command>,
     welcome: bool,
     guard: InstanceGuard,
+    tray: Option<Tray>,
+    hotkeys: Hotkeys,
+    hotkey_errors: Vec<String>,
 }
 
 /// Body of the "Stinkshot Is Running" toast shown when the user starts the app by hand.
@@ -253,9 +262,33 @@ fn run_app(
     welcome: bool,
     guard: InstanceGuard,
     ipc_rx: Receiver<Vec<String>>,
+    gpu: Option<std::thread::JoinHandle<Option<eframe::egui_wgpu::WgpuSetupExisting>>>,
 ) -> anyhow::Result<()> {
     let config = Config::load();
     timing::point(format_args!("config loaded"));
+
+    // OCR engine creation touches COM; do it on a scratch thread so the UI thread's apartment
+    // stays the one winit sets up. Joined after the GPU device.
+    let ocr_init = std::thread::Builder::new()
+        .name("ocr-init".into())
+        .spawn(|| WindowsOcr::new().map(|o| Arc::new(o) as Arc<dyn OcrEngine>))
+        .ok();
+
+    // Tray icon and global hotkeys before anything slow: the icon is what tells the user
+    // Stinkshot is up, and both only need the config. Their hidden windows live on this thread,
+    // so their messages (a click, a hotkey) wait in its queue until the event loop runs and
+    // are handled on the first frame, like IPC commands.
+    let tray = match Tray::new(&config) {
+        Ok(t) => Some(t),
+        Err(e) => {
+            log::error!("tray icon failed: {e:#}");
+            None
+        }
+    };
+    timing::point(format_args!("tray created"));
+    let (hotkeys, hotkey_errors) = Hotkeys::new(&config.hotkeys);
+    timing::point(format_args!("hotkeys registered"));
+
     let fonts = Arc::new(Fonts::load_system().context("load system fonts")?);
     timing::point(format_args!("fonts loaded"));
     let history_dir = config.history_folder();
@@ -265,22 +298,18 @@ fn run_app(
     );
     timing::point(format_args!("history opened"));
 
-    // OCR engine creation touches COM; do it on a scratch thread so the UI thread's apartment
-    // stays the one winit sets up.
-    let ocr: Option<Arc<dyn OcrEngine>> = std::thread::Builder::new()
-        .name("ocr-init".into())
-        .spawn(|| WindowsOcr::new().map(|o| Arc::new(o) as Arc<dyn OcrEngine>))
-        .ok()
-        .and_then(|h| h.join().ok())
-        .and_then(|r| match r {
+    let wgpu_options = crate::gpu::options(gpu);
+    timing::point(format_args!("gpu device joined"));
+    let ocr: Option<Arc<dyn OcrEngine>> =
+        ocr_init.and_then(|h| h.join().ok()).and_then(|r| match r {
             Ok(o) => Some(o),
             Err(e) => {
                 log::warn!("OCR unavailable: {e:#}");
                 None
             }
         });
-
     timing::point(format_args!("OCR engine ready"));
+
     let boot = Boot {
         ipc_rx,
         config,
@@ -290,10 +319,14 @@ fn run_app(
         initial,
         welcome,
         guard,
+        tray,
+        hotkeys,
+        hotkey_errors,
     };
     let options = eframe::NativeOptions {
         viewport: root_viewport(),
         renderer: eframe::Renderer::Wgpu,
+        wgpu_options,
         ..Default::default()
     };
     eframe::run_native(
@@ -367,13 +400,16 @@ fn drive(
         .viewport_builder(shared)
         .with_title(title.clone())
         .with_icon(crate::app_icon::window_icon());
-    let status = ctx.show_viewport_immediate(id, builder, |ctx, _class| surf.show(ctx, shared));
+    let mut status =
+        ctx.show_viewport_immediate(id, builder.clone(), |ctx, _class| surf.show(ctx, shared));
+    // The frame is presented by now (immediate viewports paint inside the call).
+    surf.after_paint();
     if let Some((hwnd, dpi)) = &mut st.icon {
         crate::app_icon::refresh_native(*hwnd, dpi);
     }
     if !st.created && st.tries < 90 {
         st.tries += 1;
-        match window_util::find_own_window(&title) {
+        match sysutil::find_own_window(&title) {
             Some(hwnd) => {
                 timing::point(format_args!(
                     "{title}: window created ({} frames)",
@@ -388,6 +424,13 @@ fn drive(
             }
             None => ctx.request_repaint(),
         }
+    }
+    let mut extra = 0;
+    while status == SurfaceStatus::Open && extra < 3 && surf.wants_frame_now() {
+        extra += 1;
+        status =
+            ctx.show_viewport_immediate(id, builder.clone(), |ctx, _class| surf.show(ctx, shared));
+        surf.after_paint();
     }
     status
 }
@@ -576,6 +619,9 @@ impl Shell {
             initial,
             welcome,
             guard,
+            tray,
+            hotkeys,
+            hotkey_errors,
         } = boot;
         let resolved_theme = resolve_theme(&config);
         theme::install(
@@ -584,15 +630,7 @@ impl Shell {
             resolved_theme.0,
             accent_color(resolved_theme.1),
         );
-
-        let tray = match Tray::new(&config) {
-            Ok(t) => Some(t),
-            Err(e) => {
-                log::error!("tray icon failed: {e:#}");
-                None
-            }
-        };
-        let (hotkeys, hotkey_errors) = Hotkeys::new(&config.hotkeys);
+        timing::point(format_args!("theme installed"));
 
         let (worker_tx, worker_rx) = channel();
         let bg_cfg = Arc::new(Mutex::new(BgConfig::from(
@@ -747,7 +785,7 @@ impl Shell {
     }
 
     fn focus_window(title: &str) {
-        if let Some(h) = window_util::find_own_window(title) {
+        if let Some(h) = sysutil::find_own_window(title) {
             window_util::force_foreground(h);
         }
     }
@@ -2058,7 +2096,7 @@ impl Shell {
             return;
         }
         self.root_setup_tries += 1;
-        if let Some(h) = window_util::find_own_window(ROOT_TITLE) {
+        if let Some(h) = sysutil::find_own_window(ROOT_TITLE) {
             let h: Hwnd = h;
             window_util::set_tool_window(h, true);
             window_util::exclude_from_capture(h, true);
@@ -2152,6 +2190,7 @@ impl Shell {
             .retain_mut(|p| drive(ctx, shared, &mut p.s, &mut p.st, false) == SurfaceStatus::Open);
         closed |= self.pins.len() != before;
         if closed {
+            timing::point(format_args!("surface closed"));
             // One more pass so egui destroys the windows of surfaces that just closed.
             self.touch();
         }

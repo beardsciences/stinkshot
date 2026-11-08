@@ -109,7 +109,10 @@ pub fn init() {
         written: Mutex::new(written),
     };
     if log::set_boxed_logger(Box::new(logger)).is_ok() {
-        log::set_max_level(if cfg!(debug_assertions) {
+        // `STINKSHOT_LOG=debug` turns on the debug lines (timing trace points) in release.
+        let debug = cfg!(debug_assertions)
+            || std::env::var("STINKSHOT_LOG").is_ok_and(|v| v.eq_ignore_ascii_case("debug"));
+        log::set_max_level(if debug {
             LevelFilter::Debug
         } else {
             LevelFilter::Info

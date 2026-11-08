@@ -16,6 +16,7 @@ mod capture_ops;
 mod cli;
 mod errors;
 mod filedialog;
+mod gpu;
 mod history_ui;
 mod hotkeys;
 mod icon_gen;
