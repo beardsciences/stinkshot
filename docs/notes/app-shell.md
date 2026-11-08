@@ -309,9 +309,12 @@ had the same median (220 ms settled) but 12 of 50 slow runs, see below.
 
 The idle target of 150 MB is not reachable from the app side alone: with the capture warm-up
 skipped the app idles at about 150 MB (DX12 device about 140 of it), and the warm session adds
-about 250 MB. Dropping it would bring back the 0.8-1.2 s cold first capture, and releasing it
-later frees only 35 MB. A smaller warm session (no full-size staging textures until a capture
-needs them, or no FP16 duplication kept between captures) is the capture track's call.
+about 250 MB. (Superseded: a smaller DX12 descriptor heap, smaller allocator blocks and a
+smaller warm session brought idle private bytes to 134 MB with the displays on; see "GPU device
+loss, memory and cold start".) Dropping it would bring back the 0.8-1.2 s cold first capture,
+and releasing it later frees only 35 MB. A smaller warm session (no full-size staging textures
+until a capture needs them, or no FP16 duplication kept between captures) is the capture
+track's call.
 
 ### The slow overlay mode (about 1 run in 5 in the benchmark) is process creation
 
@@ -351,15 +354,18 @@ keys and the Flameshot config afterwards; `make-results.py` builds `results.json
 
 Overlay ready, median / p90, 30 runs: main 220 / 547 (4 slow runs of 30), old build 238 / 254
 (1 of 30), ShareX 644 / 1028, Greenshot 382 / 400 (window message, no process start), Flameshot
-357 / 387 (its monitor picker). Launch to tray 786 -> 32 ms; idle private bytes 620 -> 164 MB;
-full-screen via the instance 1460 -> 168 ms, and the old build's instance capture was stale in
-3 of 3 checks.
+357 / 387 (its monitor picker). Launch to tray 786 -> 32 ms; full-screen via the instance
+1460 -> 168 ms, and the old build's instance capture was stale in 3 of 3 checks. Idle private
+bytes read 164 MB, but that was with the displays off (the warm session got no frames); the same
+b5409a9 build idled at 399 MB with the displays on (next section), so 164 MB was neither its
+real idle figure nor a lower bound for it.
 
 Not verified / open:
 
-- The displays were off for the whole run (nobody at the PC), so main took the GDI freeze path
-  and its warm session got no frames. Overlay ready and idle memory with the displays on were
-  not measured in this run; the earlier app-track figure was 400 MB idle private bytes.
+- The displays were off for the whole run, so main took the GDI freeze path and its warm
+  session got no frames. Overlay ready and idle memory with the displays on were not measured
+  in this run (399 MB idle private bytes with the displays on, measured in the next section;
+  the third benchmark run, below, has displays-on numbers for f334f45).
 - The slow overlay runs (0.5-0.95 s) are still there for CLI triggers; hotkey and tray
   triggers were not measured (no synthetic input).
 
@@ -496,3 +502,19 @@ client, "The slow overlay mode") is unchanged.
   only sees IPC commands).
 - An idle desktop where nothing at all changes between two captures takes the GDI seed after
   the shadows were released (slower, correct); how often that happens was not measured.
+
+## Benchmark third run (Nov 7 2026, 22:32-23:00)
+
+`docs/benchmark/` re-run for f334f45 against ShareX, Greenshot and Flameshot, all four
+interleaved in one batch, **displays on** for every step (console display state 1 in all 324
+five-second samples and before every step; `display-state.log` in the raw results). Harness
+`C:\dev\stinkshot-bench\harness-mem` (`run-final.ps1`, `make-results.py`); the second run's
+results moved to `C:\dev\stinkshot-bench\results-second-run`.
+
+Stinkshot: overlay ready 134 / 289 ms (median / p90, 4 slow runs of 30), launch to tray 34 ms
+median, cold launch to first overlay 593 ms (region at +30 ms) / 568 ms (region right after the
+tray), idle 120 MB working set / 134-135 MB private, peak private during an overlay 414 / 477
+MB, headless full-screen of the 4K monitor to PNG 156 / 465 ms. The idle figure matches the
+134.2 / 134.3 MB measured in the previous section. Competitors and caveats (CLI vs
+`WM_HOTKEY` triggers, Flameshot's monitor picker, capture scope, PNG size) are in the
+benchmark README.
