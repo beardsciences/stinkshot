@@ -83,6 +83,7 @@ impl Overlay {
 
     pub(super) fn handle_pointer(&mut self, ctx: &Context, shared: &mut Shared, inp: &Input) {
         let ppp = ctx.pixels_per_point();
+        self.snap_edges = shared.config.capture.snap_to_elements;
         if let Some(p) = inp.pos {
             self.last_pointer = Some(p);
         }
@@ -352,9 +353,16 @@ impl Overlay {
             self.snap_sig = sig;
             self.snap_level = 0;
             self.snap_wheel_used = false;
-            // Scrolling capture: start at the page (a browser's document element), so one
-            // click picks the web page without the tabs, address bar or window frame.
+            // Scrolling capture in a browser: start at the page (its document element), so
+            // one click picks the web page without the tabs, address bar or window frame.
+            // Elsewhere (Electron and WebView2 apps) the innermost element stays first.
+            let in_browser = uia.is_some_and(|h| {
+                self.windows
+                    .iter()
+                    .any(|w| w.hwnd == h && hover::is_browser(&w.process))
+            });
             if matches!(self.kind, Kind::Select(RegionPurpose::Scrolling))
+                && in_browser
                 && let Some(i) = hover::scroll_target_level(&labels)
             {
                 self.snap_level = i;

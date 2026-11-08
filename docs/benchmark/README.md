@@ -302,15 +302,40 @@ and 1 % smaller than Flameshot's; the file written at once is 10-12 % smaller th
 background pass took 6.3 s (4K) and 7.6-9.1 s (6400x2160) on one core with the PC in use
 (the app runs it at background priority).
 
-**Cold launch to first overlay** (`cold`, region about 40 ms after launch, 8 runs, median,
-displays off): f334f45 548-563 ms; now the frozen screen is on display after **204 ms** (a
-GDI window that takes the first drag and Esc, see the notes) and the full region overlay
-replaces it at 592 ms.
+**Targets.** Two of the track's three targets were missed: idle private bytes under 60 MB
+(not met, see Idle) and the full region overlay under 400 ms on a cold start (not met: only the
+GDI stand-in gets there). The PNG claims were re-checked independently and hold. Every
+latency and memory number below was taken with the displays off (GDI capture path); none of
+them is comparable yet with the Greenshot and Flameshot figures above, which were measured
+with the displays on. Re-run idle, overlay ready and cold start with the displays on before
+quoting them against other tools.
 
-**Idle** (60 s, 2 runs, displays off): private bytes 135.5 -> 124.7 MB (fonts memory-mapped);
-working set 124 -> 8 MB once the app has been idle for 60 s (handed back to Windows; private
-bytes unchanged, no measurable cost on the next overlay). The 60 MB target was not reached:
-the GPU driver alone keeps 68 MB committed even after both of Stinkshot's devices are
-released, so only a design that keeps the GPU out of the idle process could get there
-(frontier in the notes). Warm overlay ready unchanged (218 -> 228 ms median with GDI, within
-the noise).
+**Cold launch to first overlay** (8 runs, median, displays off), two cases:
+
+| Case | f334f45 (or the build before the change) | Now |
+|---|---|---|
+| `cold`: app started plain, `region` forwarded from a second process about 40 ms later | 548-563 ms (overlay) | frozen screen **204 ms**, full overlay 592 ms |
+| `colddirect`: `stinkshot region` is the launching process itself (the common real case) | 643 ms (perf-v4: nothing shown before the overlay) | frozen screen **207 ms**, full overlay 621 ms |
+
+The frozen screen is a GDI window that takes the first drag, click and Esc (see the notes);
+the full region overlay replaces it. The full overlay got slower on a cold start in the
+forwarded case (548-563 -> 592 ms); not under 400 ms in either case. `colddirect` was added
+to the harness on Nov 8 after review: until then only the forwarded case was measured, and
+the launching process's own command got no early freeze (fixed: 643 -> 207 ms to a frozen
+screen). A hotkey or PrintScreen press during start-up is still not pre-frozen.
+
+**Idle** (60 s, 2 runs, displays off):
+
+| Private bytes at idle | f334f45 | Now |
+|---|---|---|
+| Never used (start, wait 60 s) | 135.5 MB | 124.7 MB |
+| After one overlay | not measured | 154-157 MB |
+
+The never-used figure is the one the benchmark tables use; after the first overlay the app
+sits about 30 MB higher (egui and allocator state), above the 134 MB baseline the track meant
+to cut. A before figure measured the same way (after one overlay, f334f45) is still missing.
+Working set 124 -> 8 MB once the app has been idle for 60 s (handed back to Windows; private
+bytes unchanged, no measurable cost on the next overlay). The 60 MB target was not met: the
+GPU driver alone keeps 68 MB committed even after both of Stinkshot's devices are released,
+so only a design that keeps the GPU out of the idle process could get there (frontier in the
+notes). Warm overlay ready unchanged (218 -> 228 ms median with GDI, within the noise).

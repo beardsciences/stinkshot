@@ -30,7 +30,21 @@ pub struct Preview {
     thumb: Rgba,
     /// Thumbnail px per capture px.
     k: f32,
+    /// Size of the capture the frame is for (the fit is judged at full size).
+    full: (u32, u32),
     shown: Option<(Beautify, egui::TextureHandle)>,
+}
+
+/// One line under the Aspect chips when the frame does not fully fit (`beautify::fit`).
+pub fn fit_note(fit: beautify::Fit, aspect: Aspect) -> Option<String> {
+    match fit {
+        beautify::Fit::Full => None,
+        beautify::Fit::PaddingOnly => Some(format!(
+            "Too large for {}, so padding only.",
+            aspect.label()
+        )),
+        beautify::Fit::Unframed => Some("Too large to frame. Exported as is.".to_string()),
+    }
 }
 
 /// The settings scaled to a thumbnail (padding and corners shrink with it).
@@ -112,6 +126,7 @@ impl Overlay {
                     doc,
                     thumb,
                     k,
+                    full: (src.width, src.height),
                     shown: None,
                 });
             }
@@ -120,7 +135,18 @@ impl Overlay {
         if let Some(p) = self.beautify_preview.as_mut()
             && p.shown.as_ref().is_none_or(|(s, _)| *s != b)
         {
-            let img = beautify::apply(&p.thumb, &scaled(&b, p.k));
+            // The thumbnail shows what the export gets: the fit is judged at full size.
+            let mut at_thumb = scaled(&b, p.k);
+            match beautify::fit(p.full.0, p.full.1, &b) {
+                beautify::Fit::Full => {}
+                beautify::Fit::PaddingOnly => at_thumb.aspect = Aspect::Free,
+                beautify::Fit::Unframed => {
+                    at_thumb.aspect = Aspect::Free;
+                    at_thumb.padding = 0;
+                    at_thumb.shadow = false;
+                }
+            }
+            let img = beautify::apply(&p.thumb, &at_thumb);
             // Fit the framed thumbnail back into the preview box.
             let img = beautify::preview_thumbnail(&img, PREVIEW_W, PREVIEW_H);
             let ci = egui::ColorImage::from_rgba_unmultiplied(
@@ -130,6 +156,12 @@ impl Overlay {
             let tex = ctx.load_texture("beautify-preview", ci, egui::TextureOptions::LINEAR);
             p.shown = Some((b, tex));
         }
+    }
+
+    /// The panel's note about the frame not fitting, for the current capture and settings.
+    pub(super) fn beautify_note(&self) -> Option<String> {
+        let (w, h) = self.beautify_preview.as_ref()?.full;
+        fit_note(beautify::fit(w, h, &self.beautify), self.beautify.aspect)
     }
 
     pub(super) fn beautify_texture(&self) -> Option<egui::TextureHandle> {
@@ -181,12 +213,14 @@ fn hex4(s: &str) -> [u8; 4] {
         .unwrap_or([255, 255, 255, 255])
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn panel(
     ctx: &Context,
     pos: Pos2,
     pivot: Align2,
     b: &Beautify,
     preview: Option<&egui::TextureHandle>,
+    note: Option<&str>,
     pal: &Palette,
     out: &mut Vec<BeautifyAction>,
 ) {
@@ -249,7 +283,8 @@ pub fn panel(
                                 for (a, bb) in beautify::GRADIENTS {
                                     let sel = v.gradient_from.eq_ignore_ascii_case(a)
                                         && v.gradient_to.eq_ignore_ascii_case(bb);
-                                    if swatch(ui, hex4(a), hex4(bb), sel, "Gradient") {
+                                    let tip = format!("{a} to {bb}");
+                                    if swatch(ui, hex4(a), hex4(bb), sel, &tip) {
                                         v.gradient_from = a.into();
                                         v.gradient_to = bb.into();
                                     }
@@ -293,6 +328,9 @@ pub fn panel(
                             }
                         }
                     });
+                    if let Some(n) = note {
+                        ui.label(RichText::new(n).size(12.0).color(pal.text_secondary));
+                    }
                 });
             });
         });

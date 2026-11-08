@@ -107,17 +107,69 @@ impl Default for Beautify {
     }
 }
 
-/// Canvas size and where the capture sits on it.
-pub fn layout(w: u32, h: u32, b: &Beautify) -> (u32, u32, u32, u32) {
-    let p = b.padding.min(4096);
-    let (mut cw, mut ch) = (w + 2 * p, h + 2 * p);
-    if let Some(r) = b.aspect.ratio() {
-        if (cw as f32) / (ch as f32) < r {
-            cw = (ch as f32 * r).round() as u32;
-        } else {
-            ch = (cw as f32 / r).round() as u32;
-        }
+/// Largest framed canvas (pixels, 400 MB of RGBA). A tall scrolling capture in 16:9 or 1:1
+/// would otherwise need several GB.
+pub const MAX_CANVAS_PIXELS: u64 = 100_000_000;
+
+/// How much of the frame fits under `MAX_CANVAS_PIXELS`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fit {
+    /// Padding and aspect as set.
+    Full,
+    /// The aspect canvas is too large: padding only.
+    PaddingOnly,
+    /// Even the padded canvas is too large: the capture is exported unframed.
+    Unframed,
+}
+
+fn padded(w: u32, h: u32, b: &Beautify) -> (u64, u64) {
+    let p = u64::from(b.padding.min(4096));
+    (u64::from(w) + 2 * p, u64::from(h) + 2 * p)
+}
+
+fn aspect_canvas(cw: u64, ch: u64, r: f32) -> (u64, u64) {
+    if (cw as f32) / (ch as f32) < r {
+        ((ch as f64 * f64::from(r)).round() as u64, ch)
+    } else {
+        (cw, (cw as f64 / f64::from(r)).round() as u64)
     }
+}
+
+/// Whether the frame for a `w` x `h` capture fits the pixel budget.
+pub fn fit(w: u32, h: u32, b: &Beautify) -> Fit {
+    let (cw, ch) = padded(w, h, b);
+    if cw * ch > MAX_CANVAS_PIXELS {
+        return Fit::Unframed;
+    }
+    match b.aspect.ratio() {
+        Some(r) => {
+            let (aw, ah) = aspect_canvas(cw, ch, r);
+            if aw * ah > MAX_CANVAS_PIXELS {
+                Fit::PaddingOnly
+            } else {
+                Fit::Full
+            }
+        }
+        None => Fit::Full,
+    }
+}
+
+/// Canvas size and where the capture sits on it, within `MAX_CANVAS_PIXELS` (`fit`).
+pub fn layout(w: u32, h: u32, b: &Beautify) -> (u32, u32, u32, u32) {
+    let (mut cw, mut ch) = match fit(w, h, b) {
+        Fit::Unframed => return (w, h, 0, 0),
+        Fit::PaddingOnly => padded(w, h, b),
+        Fit::Full => {
+            let (cw, ch) = padded(w, h, b);
+            match b.aspect.ratio() {
+                Some(r) => aspect_canvas(cw, ch, r),
+                None => (cw, ch),
+            }
+        }
+    };
+    cw = cw.max(u64::from(w));
+    ch = ch.max(u64::from(h));
+    let (cw, ch) = (cw as u32, ch as u32);
     let (x, y) = ((cw - w) / 2, (ch - h) / 2);
     (cw, ch, x, y)
 }
@@ -359,7 +411,15 @@ pub fn apply(img: &Rgba, b: &Beautify) -> Rgba {
     if img.width == 0 || img.height == 0 {
         return img.clone();
     }
+    if fit(img.width, img.height, b) == Fit::Unframed {
+        return img.clone();
+    }
     let (cw, ch, x, y) = layout(img.width, img.height, b);
+    // A failed allocation would abort the process: check first, keep the capture unframed.
+    let bytes = cw as usize * ch as usize * 4;
+    if Vec::<u8>::new().try_reserve_exact(bytes).is_err() {
+        return img.clone();
+    }
     let mut canvas = match b.background {
         BackgroundKind::Solid => Rgba::filled(cw, ch, hex(&b.color, [255, 255, 255, 255])),
         BackgroundKind::Gradient => gradient(
@@ -408,6 +468,37 @@ mod tests {
 
     fn img(w: u32, h: u32) -> Rgba {
         Rgba::filled(w, h, [10, 200, 30, 255])
+    }
+
+    #[test]
+    fn a_tall_scrolling_capture_never_gets_a_huge_canvas() {
+        let mut b = Beautify {
+            padding: 64,
+            aspect: Aspect::Wide,
+            ..Default::default()
+        };
+        // 1920 x 30000 in 16:9 would be 53561 x 30128 (6.45 GB): padding only.
+        assert_eq!(fit(1920, 30000, &b), Fit::PaddingOnly);
+        let (cw, ch, x, y) = layout(1920, 30000, &b);
+        assert_eq!((cw, ch, x, y), (2048, 30128, 64, 64));
+        for a in [Aspect::Square, Aspect::Portrait] {
+            b.aspect = a;
+            let (cw, ch, _, _) = layout(1920, 30000, &b);
+            assert!(u64::from(cw) * u64::from(ch) <= MAX_CANVAS_PIXELS, "{a:?}");
+        }
+        // Too large even padded: unframed, unchanged.
+        b.aspect = Aspect::Free;
+        assert_eq!(fit(4000, 30000, &b), Fit::Unframed);
+        assert_eq!(layout(4000, 30000, &b), (4000, 30000, 0, 0));
+        let small = Rgba::filled(4, 30000, [1, 2, 3, 255]);
+        b.padding = 4096;
+        b.aspect = Aspect::Square;
+        let out = apply(&small, &b);
+        assert!(u64::from(out.width) * u64::from(out.height) <= MAX_CANVAS_PIXELS);
+        // A normal screenshot keeps its 16:9 canvas.
+        b.padding = 64;
+        b.aspect = Aspect::Wide;
+        assert_eq!(fit(1920, 1080, &b), Fit::Full);
     }
 
     #[test]

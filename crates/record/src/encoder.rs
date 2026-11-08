@@ -19,12 +19,20 @@ pub struct VideoParams {
 pub const AUDIO_RATE: u32 = 48_000;
 pub const AUDIO_CHANNELS: u32 = 2;
 pub const AUDIO_KBPS: u32 = 192;
+/// Highest frame rate recorded without a hardware encoder: the software MFT falls behind
+/// above it at full-screen sizes (and 4K at 120 FPS is beyond H.264 level 5.2).
+pub const MAX_SOFTWARE_FPS: u32 = 60;
 
 pub struct Encoder {
     writer: IMFSinkWriter,
     video_stream: u32,
     audio_stream: Option<u32>,
     pub encoder_name: String,
+    /// The frame rate the stream was opened with (`MAX_SOFTWARE_FPS` when a higher one
+    /// needed a hardware encoder that was not there).
+    pub fps: u32,
+    /// The MFT doing the work is a hardware encoder.
+    pub hardware: bool,
 }
 
 // The sink writer is free threaded; callers serialise access with a mutex anyway.
@@ -32,8 +40,34 @@ unsafe impl Send for Encoder {}
 unsafe impl Sync for Encoder {}
 
 impl Encoder {
-    /// Open a writer, trying the hardware encoder first and falling back to software.
+    /// Open a writer, trying the hardware encoder first and falling back to software. Above
+    /// `MAX_SOFTWARE_FPS` only a hardware encoder is used; without one (or when it refuses
+    /// the rate) the stream is opened at `MAX_SOFTWARE_FPS` instead (see `Encoder::fps`).
     pub fn create(path: &Path, vp: &VideoParams, audio: bool) -> Result<Encoder> {
+        if vp.fps > MAX_SOFTWARE_FPS {
+            match Self::create_with(path, vp, audio, true) {
+                Ok(e) if e.hardware => return Ok(e),
+                Ok(e) => log::warn!(
+                    "{} fps needs a hardware encoder, got {}; recording at {MAX_SOFTWARE_FPS} fps",
+                    vp.fps,
+                    e.encoder_name
+                ),
+                Err(e) => log::warn!(
+                    "hardware H.264 encoder refused {} fps ({e:#}); recording at {MAX_SOFTWARE_FPS} fps",
+                    vp.fps
+                ),
+            }
+            let _ = std::fs::remove_file(path);
+            let lower = VideoParams {
+                fps: MAX_SOFTWARE_FPS,
+                ..*vp
+            };
+            return Self::create_any(path, &lower, audio);
+        }
+        Self::create_any(path, vp, audio)
+    }
+
+    fn create_any(path: &Path, vp: &VideoParams, audio: bool) -> Result<Encoder> {
         match Self::create_with(path, vp, audio, true) {
             Ok(e) => Ok(e),
             Err(hw_err) => {
@@ -118,12 +152,21 @@ impl Encoder {
             };
 
             writer.BeginWriting().context("BeginWriting")?;
-            let encoder_name = describe_encoder(&writer, video_stream, hardware);
+            let (encoder_name, is_hw, level) = describe_encoder(&writer, video_stream, hardware);
+            log::info!(
+                "H.264 encoder {encoder_name}: {}x{} @ {} fps, level {}",
+                vp.width,
+                vp.height,
+                vp.fps,
+                level.map_or_else(|| "not reported".to_string(), |l| l.to_string())
+            );
             Ok(Encoder {
                 writer,
                 video_stream,
                 audio_stream,
                 encoder_name,
+                fps: vp.fps,
+                hardware: is_hw,
             })
         }
     }
@@ -150,30 +193,43 @@ impl Encoder {
     }
 }
 
-fn describe_encoder(writer: &IMFSinkWriter, stream: u32, requested_hw: bool) -> String {
+/// Display name of the stream's encoder MFT, whether it is a hardware encoder, and the
+/// H.264 level of its output type (eAVEncH264VLevel value, e.g. 51 for 5.1) when reported.
+fn describe_encoder(
+    writer: &IMFSinkWriter,
+    stream: u32,
+    requested_hw: bool,
+) -> (String, bool, Option<u32>) {
     unsafe {
         let mut raw: *mut core::ffi::c_void = std::ptr::null_mut();
         let got = writer.GetServiceForStream(stream, &GUID::zeroed(), &IMFTransform::IID, &mut raw);
         if got.is_ok() && !raw.is_null() {
             let mft = IMFTransform::from_raw(raw);
+            let level = mft
+                .GetOutputCurrentType(0)
+                .ok()
+                .and_then(|t| t.GetUINT32(&MF_MT_MPEG2_LEVEL).ok());
             if let Ok(attrs) = mft.GetAttributes() {
                 let name = attr_string(&attrs, &MFT_FRIENDLY_NAME_Attribute);
                 let hw_url = attr_string(&attrs, &MFT_ENUM_HARDWARE_URL_Attribute).is_some();
                 let is_async = attrs.GetUINT32(&MF_TRANSFORM_ASYNC).unwrap_or(0) == 1;
                 let hw = requested_hw && (hw_url || is_async);
                 let base = name.unwrap_or_else(|| "H.264 Encoder MFT".to_string());
-                return format!("{base} ({})", if hw { "hardware" } else { "software" });
+                let label = format!("{base} ({})", if hw { "hardware" } else { "software" });
+                return (label, hw, level);
             }
         }
     }
-    format!(
+    let label = format!(
         "H.264 Encoder MFT ({})",
         if requested_hw {
             "hardware requested"
         } else {
             "software"
         }
-    )
+    );
+    // Unknown: only a confirmed hardware MFT may run above MAX_SOFTWARE_FPS.
+    (label, false, None)
 }
 
 fn attr_string(attrs: &IMFAttributes, key: &GUID) -> Option<String> {

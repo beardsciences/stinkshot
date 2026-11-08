@@ -520,8 +520,9 @@ DataBar), then OCR when a language is installed. The panel (same spot as Find Se
 the three panels are exclusive) lists each code with its format and text and a Copy button,
 "Copy Link" for http(s) text. Links are only copied, never opened. Found codes are outlined
 on the canvas. Below: a 3-line text preview, Copy Text, and Copy as Table (enabled when
-`stinkshot_core::table::detect` finds columns; tooltip "N Rows x M Columns, Tab-Separated"
-or "No columns found"). Copy shows "Copied" on the button for 1.5 s. Results drop when the
+`stinkshot_core::table::detect` finds columns; tooltip "N rows x M columns, tab-separated"
+or "No columns found"). A failed OCR says "Could not read text. Try a larger selection."
+instead of "No text found." (`ScanResult::ocr_failed`, review fix). Copy shows "Copied" on the button for 1.5 s. Results drop when the
 selection changes (same rule as Find Sensitive Info). Esc closes.
 
 Decode time (dev profile, deps at opt-level 2, busy synthetic background): 800x600 208 ms
@@ -558,10 +559,15 @@ a table), one row (not a table), spanning title row, OCR lines split per cell.
 
 `measure.rs`. Drag inside the selection (anywhere on the picture in the editor): a ruler with
 end ticks and dashed legs, and a label "240 x 120 px · 268.3 px · 26.6°" plus a logical line
-"160 x 80 · 178.9 at 150%" when the monitor under the selection is not at 100 %. Units are
+"160 x 80 · 178.9 at 150%" when the capture's scale is not 100 %: on the frozen screen the
+monitor under the selection; in the editor the scale carried in `SourceInfo::scale` (window,
+full-screen and scrolling captures); a history Edit has no recorded scale, so no logical line
+(review fix: it used the monitor the editor was on). Units are
 image px, which are physical px of the capture (also in the scaled-down editor view). Ends
 snap to the strongest luminance edge (step >= 28) within 6 px on each axis, searching the
-second axis along the first axis' edge so box corners snap; Alt turns it off; Shift keeps 0 /
+second axis along the first axis' edge so box corners snap, when Settings > Capture > Snap to
+Elements is on; Alt flips it while held (hint "Alt  No Edge Snapping", or "Alt  Snap to Edges"
+with the setting off; review fix: the setting was ignored); Shift keeps 0 /
 45 / 90 degrees. Nothing is added to the doc; the ruler shows while the tool is active and
 clears when the region is re-based. Tests: length / angle, labels at 100 and 150 %, Shift
 constraint, edge snap on a synthetic box (edge to edge = box width), faint steps ignored.
@@ -573,8 +579,17 @@ constraint, edge snap on a synthetic box (edge to edge = box width), faint steps
 Solid / Blurred with 6 preset swatches each (blurred = the capture scaled to cover, blurred
 and darkened), Padding 0-256 px, Corners 0-48 px, Shadow, Aspect Free / 16:9 / 1:1 / 4:5 (the
 canvas grows, nothing is cropped). Applied on the finishing worker to Copy, Save As, Pin and
-Quick exports, never to Copy Text; the history item keeps the unframed base + doc, so a
-re-edit is unframed and gets the frame again on export. Settings live in `[editor.beautify]`,
+Quick exports, never to Copy Text. The history file is framed; its re-edit sidecar keeps
+the picture without the frame (fixed Nov 8: before, an unannotated capture, or any capture
+with Keep Editable Originals off, kept no sidecar, so a re-edit framed the frame and
+overwrote the file). With annotations and Keep Editable Originals on the sidecar is the base +
+doc as usual; otherwise it is the flattened, unframed picture with no annotations, which holds
+nothing the export does not show (redactions already burned in). So a re-edit is unframed
+and gets the frame again on export. The canvas is capped at 100 MP
+(`beautify::MAX_CANVAS_PIXELS`): past it the aspect is dropped (padding only, the panel says
+so in one line), and past it even padded the capture is exported unframed; the canvas
+allocation is checked first, so a tall scrolling capture can no longer abort the process
+(1920 x 30000 in 16:9 asked for 6.45 GB). Settings live in `[editor.beautify]`,
 saved when the panel closes, on finish and on cancel (not per slider frame). The frame
 button is highlighted while Beautify is on, tooltip "Beautify (F) · On".
 

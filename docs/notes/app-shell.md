@@ -495,6 +495,21 @@ The overlay p90 before includes 11 slow runs (0.5-1.2 s) during heavier backgrou
 median is what compares. The slow mode outside the instance (process creation of the forwarding
 client, "The slow overlay mode") is unchanged.
 
+### Review fixes (Nov 8)
+
+- Cold start: `prefreeze_while_gpu_starts` takes the launch's own command too, and it is
+  queued before anything forwarded. New harness command `colddirect N` (in
+  `harness-mem`, also in `run-final.ps1`): cold-launches `stinkshot region` directly. 8 runs,
+  displays off, median of runs 2-8: perf-v4 643 ms to the overlay with nothing before it;
+  perf-v5 (this fix) frozen screen 207 ms, full overlay 621 ms.
+- Quick overlay: a click is recorded (`QuickInput::clicked`) and taken over as the
+  highlighted window. `show` also checks the frozen image's height and byte length against
+  the bounds before filling the DIB sections.
+- `replace_if_unchanged` and the start-up clean-up: see "Smaller PNGs" above. Unit tests:
+  a held original cannot be deleted or renamed; parked originals are restored or dropped.
+- Benchmark README: the after-first-use idle figure, the missed targets and the
+  displays-off caveat are now stated next to the headline numbers.
+
 ### Not verified / open
 
 - The natural cause of the device loss (see above); the recovery was tested with the hook only.
@@ -647,14 +662,24 @@ What changed:
   2 s, re-reads the file, optimizes it (miniz level 10; zopfli, 1 iteration, for images up to
   1 MP) and writes `<name>.<pid>.stinkshot-tmp` beside it (flushed).
 - The swap happens only if the file still has the size and modification time it had when
-  saved and nobody else has it open (opened without read/write sharing during the check, then
-  an atomic POSIX rename over it); creation and modification times are kept. Moved,
+  saved and nobody else has it open. The original is held with no sharing at all (so it
+  cannot be opened, deleted or renamed meanwhile), parked under
+  `<name>.<pid>.stinkshot-old` through that handle, the temp file is renamed into the free
+  name without replacing anything (a file that appeared there wins), and the parked original
+  is deleted on close; if that rename fails the original is renamed back. Creation and
+  modification times are kept. (Until the Nov 8 review fix it was opened with delete sharing
+  and the temp file renamed over it, so a History delete or another program's rename-over save
+  in the check-to-swap window could be undone.) History delete and retention also take
+  `recompress::write_lock` now. Moved,
   re-edited or deleted: dropped. Open in another program: retried once after 20 s, then
   dropped. The new bytes must decode to the same pixels (`png_opt` checks). Stinkshot's own
   writes to capture files take `recompress::write_lock`, so a re-edit cannot land between
   the check and the swap.
-- Quitting does not wait for it; a temp file left by an exit or crash mid-write is deleted
-  when the next instance opens history. The history index's size is refreshed
+- Quitting does not wait for it. At the next start, temp files of earlier processes are
+  deleted and a parked original is put back (renamed back if its name is free, else deleted),
+  in the history folder and in every Save As folder a job wrote to: those folders are listed
+  in `recompress-folders.txt` in the profile folder (before the review fix only the history
+  folder was cleaned, so a Save As temp could stay in the user's folder for good). The history index's size is refreshed
   (`History::refresh_bytes`); OCR text and thumbnail stay.
 - The clipboard is not involved (it gets pixels, not the file). Separately, the clipboard's
   own PNG copy now uses the fast encoder and every payload is built before the clipboard is
@@ -673,9 +698,13 @@ under the cursor clear, crosshair cursor, topmost, excluded from capture. It tak
 input so nothing reaches the apps underneath: a drag draws a clear rectangle with the accent
 border; Esc cancels. When the region overlay is uncloaked the shell hands over
 (`settle_quick_overlay`, `Overlay::take_quick_input`): a drag still in progress continues
-in the overlay, a finished one becomes the selection, Esc cancels; a plain click is dropped.
-The quick overlay never stays longer than 10 s. Only region, scrolling and OCR commands that
-arrive while the GPU starts get it (window capture does not show the frozen screen).
+in the overlay, a finished one becomes the selection, Esc cancels, and a plain click takes
+the window it highlighted (the same rect, the whole visible window; before the review fix the
+click was dropped although the window was drawn as the hover target). The quick overlay never
+stays longer than 10 s. Region, scrolling and OCR commands get it, both the launching
+process's own command (`stinkshot region`, added in the review fix) and one forwarded while
+the GPU starts; window capture does not show the frozen screen. A hotkey or PrintScreen press
+during start-up is a window message that waits for the event loop, so it is not pre-frozen.
 
 ### Results
 

@@ -11,8 +11,13 @@
 ; the logo cache. Captures, history and config.toml are never touched.
 ;
 ; STINKSHOT_PROFILE (dev/test only) is honored like the app does: the Run value, the saved
-; PrintScreen value and the cache folder get the same "-<profile>" suffix, so a test install
-; never touches the real instance's state.
+; PrintScreen value and the cache folder get the same "-<profile>" suffix. The PrintScreen
+; setting itself is one Windows value shared by every profile, so a dev profile restores it
+; only when the release instance holds no takeover (MayRestoreGlobal).
+;
+; /DTestBuild=1 builds the smoke-test installer: its own AppId, name, folder and Start menu
+; shortcut, so installing and uninstalling it never touches a real install's Apps entry or
+; shortcut. Never publish it.
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -30,12 +35,24 @@
 ; Numeric x.y.z for VERSIONINFO: drop any "-beta.1" suffix.
 #define NumericVersion Copy(AppVersion, 1, Pos("-", AppVersion + "-") - 1)
 
+#ifdef TestBuild
+  #define AppTitle "Stinkshot Test"
+  #define SetupBase "Stinkshot-Test"
+#else
+  #define AppTitle "Stinkshot"
+  #define SetupBase "Stinkshot"
+#endif
+
 [Setup]
 ; Never change AppId: winget and upgrades find the installed copy by it ("{AppId}_is1").
+#ifdef TestBuild
+AppId={{8638BB59-F403-4458-8CD8-7B748885E811}
+#else
 AppId={{7F697D6C-4CDA-4A4F-8EEB-DA1D24AD69C4}
-AppName=Stinkshot
+#endif
+AppName={#AppTitle}
 AppVersion={#AppVersion}
-AppVerName=Stinkshot {#AppVersion}
+AppVerName={#AppTitle} {#AppVersion}
 AppPublisher=Stinkshot contributors
 AppPublisherURL=https://code.mccullough.dev/beard/stinkshot
 AppSupportURL=https://code.mccullough.dev/beard/stinkshot/issues
@@ -46,12 +63,12 @@ VersionInfoProductVersion={#NumericVersion}
 VersionInfoProductTextVersion={#AppVersion}
 VersionInfoDescription=Stinkshot Setup
 PrivilegesRequired=lowest
-DefaultDirName={autopf}\Stinkshot
+DefaultDirName={autopf}\{#AppTitle}
 DisableDirPage=auto
 DisableProgramGroupPage=yes
 DisableReadyPage=yes
 DisableWelcomePage=yes
-UninstallDisplayName=Stinkshot
+UninstallDisplayName={#AppTitle}
 UninstallDisplayIcon={app}\stinkshot.exe
 #if Arch == "arm64"
 ArchitecturesAllowed=arm64
@@ -71,7 +88,7 @@ SolidCompression=yes
 CloseApplications=force
 RestartApplications=no
 OutputDir={#OutputDir}
-OutputBaseFilename=Stinkshot-{#AppVersion}-{#Arch}-setup
+OutputBaseFilename={#SetupBase}-{#AppVersion}-{#Arch}-setup
 #ifdef IconFile
 SetupIconFile={#IconFile}
 #endif
@@ -95,7 +112,7 @@ Source: "{#StageDir}\stinkshot.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\Stinkshot"; Filename: "{app}\stinkshot.exe"; Comment: "Screenshots and screen recording"
+Name: "{autoprograms}\{#AppTitle}"; Filename: "{app}\stinkshot.exe"; Comment: "Screenshots and screen recording"
 
 [Registry]
 ; Same value the app's own Start with Windows setting writes, so either one can turn it off.
@@ -103,6 +120,9 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\stinkshot.exe"; Description: "{cm:LaunchNow}"; Flags: nowait postinstall skipifsilent
+; A silent upgrade (winget upgrade) that closed a running copy starts it again in the tray, so
+; the tray icon and the PrintScreen takeover come back.
+Filename: "{app}\stinkshot.exe"; Parameters: "--tray"; Flags: nowait runasoriginaluser; Check: RelaunchAfterSilentUpgrade
 
 [UninstallRun]
 ; Graceful exit: finishes saves and recordings and restores PrintScreen like Quit in the tray.
@@ -115,6 +135,9 @@ const
   KeyboardKey = 'Control Panel\Keyboard';
   PrtScValue = 'PrintScreenKeyForSnippingEnabled';
   PrevAbsent = $FFFFFFFF;
+
+var
+  WasRunning: Boolean;
 
 { Mirrors stinkshot_core::config::profile_suffix: "" normally, "-<name>" for a dev profile. }
 function ProfileSuffix(): String;
@@ -144,7 +167,8 @@ begin
   Result := 'StinkShot' + ProfileSuffix();
 end;
 
-{ Ask a running copy of this install to exit before its exe is replaced. }
+{ Ask a running copy of this install to exit before its exe is replaced, remembering whether
+  one was running (its single-instance mutex, see platform::system::acquire_single_instance). }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Exe: String;
@@ -152,13 +176,21 @@ var
 begin
   Result := '';
   Exe := ExpandConstant('{app}\stinkshot.exe');
+  WasRunning := False;
   if FileExists(Exe) then
   begin
+    WasRunning := CheckForMutexes('Local\StinkShot.Instance' + ProfileSuffix());
+    Log(Format('running instance before upgrade: %d', [Ord(WasRunning)]));
     if Exec(Exe, 'quit', '', SW_HIDE, ewWaitUntilTerminated, Code) then
       Log(Format('stinkshot quit exited with %d', [Code]))
     else
       Log('stinkshot quit could not be started');
   end;
+end;
+
+function RelaunchAfterSilentUpgrade(): Boolean;
+begin
+  Result := WasRunning and WizardSilent();
 end;
 
 procedure RemoveAutostartIfOurs();
@@ -172,6 +204,21 @@ begin
       RegDeleteValue(HKCU, RunKey, Name);
 end;
 
+{ Mirrors platform::system::may_restore_global: the Windows value is shared by every profile.
+  The release install always restores it; a dev profile only when the release instance holds
+  no takeover and the value is still the 0 a takeover set. }
+function MayRestoreGlobal(): Boolean;
+var
+  Current: Cardinal;
+begin
+  if ProfileSuffix() = '' then
+    Result := True
+  else if RegValueExists(HKCU, AppKey, 'PrevPrintScreenSnipping') then
+    Result := False
+  else
+    Result := RegQueryDWordValue(HKCU, KeyboardKey, PrtScValue, Current) and (Current = 0);
+end;
+
 { The app restores this itself when it quits; this covers a copy that was killed. }
 procedure RestorePrintScreen();
 var
@@ -181,7 +228,9 @@ begin
   Name := 'PrevPrintScreenSnipping' + ProfileSuffix();
   if RegQueryDWordValue(HKCU, AppKey, Name, Prev) then
   begin
-    if Prev = PrevAbsent then
+    if not MayRestoreGlobal() then
+      Log('PrintScreen left as is: another Stinkshot profile holds it')
+    else if Prev = PrevAbsent then
       RegDeleteValue(HKCU, KeyboardKey, PrtScValue)
     else
       RegWriteDWordValue(HKCU, KeyboardKey, PrtScValue, Prev);

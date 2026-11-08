@@ -181,12 +181,9 @@ impl Overlay {
         if !matches!(self.kind, Kind::Capture) {
             return false;
         }
+        // Shapes never exist here: any tool, paste source or Find Sensitive Info combines the
+        // regions first and switches to the editor (`combine_regions`).
         if let Some(i) = self.region_at(p) {
-            if !self.doc.shapes.is_empty() {
-                self.flash_notice("Annotations stay on the active region.");
-                self.drag = Drag::Ignore;
-                return true;
-            }
             let r = self.extra_regions.remove(i);
             self.extra_regions.push(sel);
             self.set_sel(r);

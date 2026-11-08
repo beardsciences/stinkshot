@@ -122,6 +122,23 @@ When the normal match fails after the first step (`repair`):
    that changed height); otherwise mismatching rows are **stale**: rows of the previous frame that
    changed in place after it was captured (lazy content that finished loading). Stale rows are
    overwritten in the stitched body with this frame's version.
+   A mismatching row counts as stale only when its previous version looked unloaded: blank,
+   nearly flat (fewer than 4 color runs) or a placeholder (`settle::placeholder_row`). More
+   than 3 % of the overlap in mismatching detailed rows rejects the offset, and only
+   unloaded rows are ever overwritten. Review fix (Nov 8): before, on a page with repeating
+   structure (a comment thread: text rows, blank rows, identical toolbar rows every 30 px) a
+   frame that did not overlap at all matched at any period-aligned offset through the blank
+   and toolbar rows, and its text rows were copied over correctly captured ones (266 of 900
+   rows wrong in the reviewer's bench); regression test
+   `periodic_page_never_matches_a_frame_without_overlap`.
+   Offsets tried: only those suggested by exact matches of distinctive rows (unique in the new
+   band, at most 8 times in the previous one, not blank; up to 48 anchors spread over the band)
+   plus the last step +/- 8, instead of every offset. `assess` skips the relaxed search for a
+   frame equal to the previous one. The full scan took 0.3-0.6 s per call at 1700-2500 px
+   wide and 2.1 s at 3840x2000 (and ran in every settle poll at the end of a page); now
+   2560x1400: unchanged frame 12 ms, no-overlap assess + push 49 ms
+   (`relaxed_search_is_cheap_on_large_frames`, release). A lazy step whose matching rows only
+   match within tolerance (no exact row) is no longer repaired: it fails and is retried.
 3. The first scroll (layout not known yet) tries the same relaxed search after the two plain ones.
 
 New content of a step now starts right under the previous frame's band and ends at this frame's
@@ -138,9 +155,13 @@ column reads as page and stays). Without thumb movement nothing is cropped.
 ### Web pages
 
 The web-page path is the ordinary scrolling capture: Ctrl+Alt+S (or `stinkshot scroll`), hover
-the page and click. The overlay starts on the outermost UIA `Document` of the element under the
-cursor (`hover::scroll_target_level`), which in Chrome, Edge and Firefox is the page without the
-tab strip, address bar and window frame; the wheel walks out to the window. Sticky headers (also
+the page and click. In a browser (process chrome, msedge, firefox, brave, opera, vivaldi or librewolf,
+`hover::is_browser`) the overlay starts on the outermost UIA `Document` of the element under
+the cursor (`hover::scroll_target_level`), which is the page without the tab strip, address bar
+and window frame; the wheel walks out to the window. In other apps it starts on the innermost
+element as before (review fix: in Electron and WebView2 apps such as VS Code, Slack, Discord
+and Teams the outermost Document is the whole app, sidebars included, which then fail to
+stitch); wheel up walks outward to the scrolling list, wheel down back inward. Sticky headers (also
 ones that collapse once scrolled), smooth scrolling, lazy images and skeleton screens, and the
 scrollbar are handled as above. No browser extension, no DevTools protocol, no network: only
 wheel input to the page and screen capture, like any other window.

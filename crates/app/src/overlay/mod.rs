@@ -201,7 +201,8 @@ enum Drag {
 }
 
 struct Finishing {
-    rx: Receiver<Option<Rgba>>,
+    /// The output image, and the image without its Beautify frame when one was applied.
+    rx: Receiver<Option<(Rgba, Option<Rgba>)>>,
     action: FinishAction,
     base: Arc<Rgba>,
     doc: Doc,
@@ -315,6 +316,9 @@ pub struct Overlay {
     exact_just_opened: bool,
     exact_text: String,
     hover: Option<PxRect>,
+    /// Settings > Capture > Snap to Elements, read each frame: the measure tool snaps its
+    /// ends to edges when on (Alt flips it either way).
+    snap_edges: bool,
     snap_level: usize,
     snap_sig: Option<PxRect>,
     snap_req: Option<PxPoint>,
@@ -587,6 +591,7 @@ impl Overlay {
             exact_just_opened: false,
             exact_text: String::new(),
             hover: None,
+            snap_edges: shared.config.capture.snap_to_elements,
             snap_level: 0,
             snap_sig: None,
             snap_req: None,
@@ -1096,6 +1101,7 @@ impl Overlay {
             .map(|w| SourceInfo {
                 app: w.process.clone(),
                 window_title: w.title.clone(),
+                scale: None,
             })
             .unwrap_or_default()
     }
@@ -1631,7 +1637,8 @@ impl Overlay {
 
     /// Take over from the quick overlay shown during a cold start
     /// (`stinkshot_platform::quick_overlay`): Esc there cancels, a drag still in progress
-    /// continues here, a finished drag becomes the selection. A plain click there is dropped.
+    /// continues here, a finished drag becomes the selection, a plain click takes the window
+    /// under it.
     pub fn take_quick_input(
         &mut self,
         inp: stinkshot_platform::quick_overlay::QuickInput,
@@ -1642,6 +1649,16 @@ impl Overlay {
             return;
         }
         if self.sel.is_some() || !matches!(self.drag, Drag::None) {
+            return;
+        }
+        if let (false, Some(click)) = (inp.down, inp.clicked) {
+            // The quick overlay highlighted the whole window under the cursor; a click there
+            // takes that window, as a click on the hover target does here.
+            let hit = hover::hover_target(&self.layers, click)
+                .and_then(|t| hover::virtual_to_local(t.frame, self.bounds));
+            if let Some(r) = hit.filter(|r| r.w >= 1 && r.h >= 1) {
+                self.accept_region(r, shared);
+            }
             return;
         }
         let end = if inp.down { inp.cursor } else { inp.release };

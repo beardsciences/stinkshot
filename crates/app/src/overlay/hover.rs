@@ -93,12 +93,27 @@ pub fn valid_snap_indices(rects: &[PxRect], p: PxPoint) -> Vec<usize> {
         .collect()
 }
 
-/// Scrolling capture: the element level to highlight first, the outermost Document in the
-/// chain (innermost first). In Chrome, Edge and Firefox that is the web page without the
-/// browser's tabs and toolbar; an inner document (an iframe, an editor) would scroll only
-/// itself.
+/// Scrolling capture in a browser: the element level to highlight first, the outermost
+/// Document in the chain (innermost first). In Chrome, Edge and Firefox that is the web page
+/// without the browser's tabs and toolbar; an inner document (an iframe, an editor) would
+/// scroll only itself. Only for browsers (`is_browser`): in Electron and WebView2 apps the
+/// outermost Document is the whole app, sidebars included.
 pub fn scroll_target_level(labels: &[stinkshot_platform::uia::ElementLabel]) -> Option<usize> {
     labels.iter().rposition(|l| l.control == "Document")
+}
+
+/// Web browsers whose outermost UIA Document is the page (process image name, no ".exe").
+pub fn is_browser(process: &str) -> bool {
+    const BROWSERS: [&str; 7] = [
+        "chrome",
+        "msedge",
+        "firefox",
+        "brave",
+        "opera",
+        "vivaldi",
+        "librewolf",
+    ];
+    BROWSERS.iter().any(|b| process.eq_ignore_ascii_case(b))
 }
 
 /// Next wheel level: scroll up (positive delta) goes outward (parent), down goes inward.
@@ -150,6 +165,16 @@ pub fn virtual_to_local(r: PxRect, bounds: PxRect) -> Option<PxRect> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browsers_by_process_name() {
+        assert!(is_browser("chrome"));
+        assert!(is_browser("MSEdge"));
+        assert!(is_browser("firefox"));
+        assert!(!is_browser("Code"));
+        assert!(!is_browser("slack"));
+        assert!(!is_browser("ms-teams"));
+    }
 
     #[test]
     fn scrolling_starts_at_the_outer_document() {

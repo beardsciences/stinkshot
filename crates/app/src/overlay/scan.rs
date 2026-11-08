@@ -33,6 +33,8 @@ pub struct ScanResult {
     /// None when no OCR engine is installed.
     pub text: Option<String>,
     pub table: Option<Table>,
+    /// OCR ran but failed (`text` is then empty).
+    pub ocr_failed: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,6 +67,7 @@ const PANEL_W: f32 = 320.0;
 /// Codes, then OCR text and table (worker thread).
 fn run(img: &Rgba, engine: Option<&dyn OcrEngine>) -> ScanResult {
     let codes = codes::decode(img);
+    let mut ocr_failed = false;
     let (text, table) = match engine {
         None => (None, None),
         Some(e) => match e.recognize(img) {
@@ -94,11 +97,17 @@ fn run(img: &Rgba, engine: Option<&dyn OcrEngine>) -> ScanResult {
             }
             Err(e) => {
                 log::warn!("scan: OCR failed: {e:#}");
+                ocr_failed = true;
                 (Some(String::new()), None)
             }
         },
     };
-    ScanResult { codes, text, table }
+    ScanResult {
+        codes,
+        text,
+        table,
+        ocr_failed,
+    }
 }
 
 /// Text that the Copy of `target` puts on the clipboard.
@@ -354,6 +363,9 @@ fn ready(
     match &r.text {
         None if !ocr => panels::caption(ui, "Text needs an OCR language in Windows Settings.", pal),
         None => {}
+        Some(t) if t.is_empty() && r.ocr_failed => {
+            panels::caption(ui, "Could not read text. Try a larger selection.", pal)
+        }
         Some(t) if t.is_empty() => panels::caption(ui, "No text found.", pal),
         Some(t) => {
             ui.add(
@@ -368,7 +380,7 @@ fn ready(
                 copy_button(ui, "Copy Text", CopyTarget::Text, copied, out);
                 let table_tip = match &r.table {
                     Some(tb) => format!(
-                        "{} Rows \u{d7} {} Columns, Tab-Separated",
+                        "{} rows \u{d7} {} columns, tab-separated",
                         tb.rows.len(),
                         tb.columns
                     ),
@@ -417,6 +429,7 @@ mod tests {
                 rows: vec![vec!["a".into(), "b".into()], vec!["c".into(), "d".into()]],
                 columns: 2,
             }),
+            ocr_failed: false,
         };
         assert_eq!(
             copy_text(&r, CopyTarget::Code(0)).as_deref(),

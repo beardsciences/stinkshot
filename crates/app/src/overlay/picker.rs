@@ -131,7 +131,7 @@ pub fn panel(
                     );
                     for f in ColorFormat::ALL {
                         if panels::chip(ui, f.label(), f == format)
-                            .on_hover_text("Tab Switches Format")
+                            .on_hover_text("Tab switches format")
                             .clicked()
                         {
                             out.push(PickerAction::Format(f));

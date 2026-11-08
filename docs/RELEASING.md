@@ -41,11 +41,16 @@ PC, for example an encrypted USB stick kept offline and a password manager attac
 (the `.key` file is about 400 bytes of text). Not to the NAS share that syncs captures, not to
 any cloud folder in plain form.
 
-If the secret key is lost, installed copies can never trust a new release again: ship a release
-signed with the old key first that embeds the new public key, or tell users to update by hand.
+Planned rotation (old key still held): ship one release signed with the old key that embeds
+the new public key, then sign with the new key from the next release on.
+
+If the secret key is lost, nothing can be signed with it again, so installed copies can never
+trust a new release: users have to download the next version by hand. This is why the backup
+matters.
+
 If it leaks, anyone can make installed copies show a fake "update available" pointing at a page
-on code.mccullough.dev (the app only links into the project, and never downloads anything), so
-rotate it the same way.
+on code.mccullough.dev (the app only links into the project, and never downloads anything).
+Rotate as above at once (the leaked key still signs that one release) and say so in its notes.
 
 ### Code signing (optional, Authenticode)
 
@@ -115,13 +120,19 @@ powershell -ExecutionPolicy Bypass -File scripts\release.ps1
 
    About 4 minutes with warm caches on the dev box (`-SkipTests` skips fmt, clippy and tests).
 
-5. Smoke test the installer on this PC under a test profile so your running copy and its
-   registry values are not touched:
+5. Smoke test with the test installer the script also builds,
+   `dist\<version>\test\Stinkshot-Test-<version>-x64-setup.exe` (never upload it). It has its
+   own AppId, Apps entry, folder and Start menu shortcut, so it cannot take over or remove a
+   real install's. Run it under a test profile so the Run value, saved PrintScreen value and
+   cache are separate too. The PrintScreen setting itself is shared: a test profile never hands
+   it back to Snipping Tool while your own copy holds the takeover, but never plant
+   `PrevPrintScreenSnipping-*` values by hand while your copy runs. Only Windows Sandbox or a VM
+   isolates everything (needed for an upgrade over a running copy).
 
 ```
 $env:STINKSHOT_PROFILE = "release-test"
-.\dist\<version>\Stinkshot-<version>-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="$env:TEMP\stinkshot-release-test"
-& "$env:TEMP\stinkshot-release-test\unins000.exe" /VERYSILENT
+.\dist\<version>\test\Stinkshot-Test-<version>-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+& "$env:LOCALAPPDATA\Programs\Stinkshot Test\unins000.exe" /VERYSILENT
 Remove-Item Env:STINKSHOT_PROFILE
 ```
 

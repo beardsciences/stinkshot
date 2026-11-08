@@ -80,6 +80,12 @@ const OVERLAP_BAD_ROW_PCT: usize = 3;
 const MAX_CANDIDATES: usize = 96;
 /// Max anchor rows used to generate candidates.
 const MAX_ANCHORS: usize = 16;
+/// Anchor rows used for the relaxed (lazy content) search, spread over the band.
+const RELAXED_ANCHORS: usize = 48;
+/// Offsets this close to the last step are always tried by the relaxed search.
+const LAST_STEP_SLACK: usize = 8;
+/// A row with fewer color runs than this is blank or nearly flat: content not loaded yet.
+const UNLOADED_MAX_RUNS: usize = 4;
 
 #[derive(Clone, Copy)]
 struct Geom {
@@ -502,7 +508,13 @@ impl Stitcher {
     /// top of the overlap is a sticky bar that grew; other mismatching rows are rows of the
     /// previous frame that changed in place since (lazy content that finished loading).
     /// At least a third of the rest must match, with 8 or more distinctive rows among them.
-    /// Returns (top run, step, stale rows as screen rows of the new frame).
+    /// A changed row counts as loaded only when its previous version looked unloaded (blank,
+    /// nearly flat or a placeholder); more than a few changed detailed rows reject the offset,
+    /// so a page with repeating structure (a comment thread) never matches a frame that does
+    /// not overlap it. Only offsets suggested by exact matches of distinctive rows (and the
+    /// last step's neighbourhood) are tried, which keeps this cheap on large frames.
+    /// Returns (top run, step, stale rows as screen rows of the new frame), where the stale
+    /// rows are only those whose previous version looked unloaded.
     fn find_offset_relaxed(
         &self,
         g: &Geom,
@@ -533,9 +545,16 @@ impl Stitcher {
         } else {
             vec![false; max_run]
         };
+        let bg = &self.bg;
+        let unloaded = |row: &[u8]| {
+            settle::row_runs(row, 10, UNLOADED_MAX_RUNS) < UNLOADED_MAX_RUNS
+                || settle::placeholder_row(row, bg)
+        };
+        let max_d = bh - min_ov;
+        let cands = self.relaxed_candidates(g, new, hdr, bh, max_d);
         // (matched rows, d, top)
         let mut best: Option<(usize, usize, usize)> = None;
-        for d in 1..=bh - min_ov {
+        for d in cands {
             let ov = bh - d;
             let close =
                 |y: usize| g.rows_close(g.row(new, hdr + y), g.row(prev, hdr + y + d), budget);
@@ -567,6 +586,14 @@ impl Stitcher {
             if missed > allowed {
                 continue;
             }
+            // Rows of the top run that are not a grown bar must have been unloaded too.
+            let noise = ((ov - top) * OVERLAP_BAD_ROW_PCT / 100).max(1);
+            let mut detailed_missed = (top..y)
+                .filter(|&r| !unloaded(g.row(prev, hdr + r + d)))
+                .count();
+            if detailed_missed > noise {
+                continue;
+            }
             while y < ov {
                 if close(y) {
                     matched += 1;
@@ -575,14 +602,20 @@ impl Stitcher {
                     }
                 } else {
                     missed += 1;
-                    if missed > allowed {
+                    if !unloaded(g.row(prev, hdr + y + d)) {
+                        detailed_missed += 1;
+                    }
+                    if missed > allowed || detailed_missed > noise {
                         break;
                     }
                 }
                 y += 1;
             }
-            let ok =
-                missed <= allowed && matched >= need && distinct >= 8 && (top > 0 || missed > 0);
+            let ok = missed <= allowed
+                && detailed_missed <= noise
+                && matched >= need
+                && distinct >= 8
+                && (top > 0 || missed > 0);
             if !ok {
                 continue;
             }
@@ -602,11 +635,74 @@ impl Stitcher {
         }
         let (_, d, top) = best?;
         let ov = bh - d;
+        // Never overwrite rows that were already detailed: only unloaded ones get replaced.
         let stale = (top..ov)
-            .filter(|&y| !g.rows_close(g.row(new, hdr + y), g.row(prev, hdr + y + d), budget))
+            .filter(|&y| {
+                let old = g.row(prev, hdr + y + d);
+                !g.rows_close(g.row(new, hdr + y), old, budget) && unloaded(old)
+            })
             .map(|y| hdr + y)
             .collect();
         Some((top, d, stale))
+    }
+
+    /// Offsets worth trying in `find_offset_relaxed`: from distinctive new band rows (unique
+    /// in the new band, rare in the previous one, not blank) whose exact hash appears in the
+    /// previous band, plus the last step's neighbourhood. Sorted, at most `MAX_CANDIDATES`.
+    fn relaxed_candidates(
+        &self,
+        g: &Geom,
+        new: &[u8],
+        hdr: usize,
+        bh: usize,
+        max_d: usize,
+    ) -> Vec<usize> {
+        let prev = &self.prev;
+        let mut prev_hashes: Vec<(u64, u32)> = (0..bh)
+            .map(|y| (g.hash_row(prev, hdr + y), y as u32))
+            .collect();
+        prev_hashes.sort_unstable();
+        let new_hashes: Vec<u64> = (0..bh).map(|y| g.hash_row(new, hdr + y)).collect();
+        let mut sorted_new = new_hashes.clone();
+        sorted_new.sort_unstable();
+        let anchors: Vec<usize> = (0..bh.saturating_sub(1))
+            .filter(|&y| {
+                let hv = new_hashes[y];
+                let n_new = sorted_new.partition_point(|&v| v <= hv)
+                    - sorted_new.partition_point(|&v| v < hv);
+                n_new == 1
+                    && (1..=8).contains(&count_hash(&prev_hashes, hv))
+                    && settle::row_runs(g.row(new, hdr + y), 10, 4) >= 4
+            })
+            .collect();
+        let step = (anchors.len() / RELAXED_ANCHORS).max(1);
+        let mut cands: Vec<usize> = Vec::new();
+        for &y in anchors.iter().step_by(step) {
+            let hv = new_hashes[y];
+            let lo = prev_hashes.partition_point(|&(v, _)| v < hv);
+            for &(v, r) in &prev_hashes[lo..] {
+                if v != hv {
+                    break;
+                }
+                let r = r as usize;
+                if r > y && r - y <= max_d {
+                    cands.push(r - y);
+                }
+            }
+        }
+        if let Some(ls) = self.last_step {
+            let lo = ls.saturating_sub(LAST_STEP_SLACK).max(1);
+            cands.extend((lo..=ls + LAST_STEP_SLACK).filter(|&d| d <= max_d));
+        }
+        cands.sort_unstable();
+        cands.dedup();
+        if cands.len() > MAX_CANDIDATES * 2 {
+            let n = cands.len();
+            cands = (0..MAX_CANDIDATES * 2)
+                .map(|i| cands[i * n / (MAX_CANDIDATES * 2)])
+                .collect();
+        }
+        cands
     }
 
     /// Whether `frame` looks fully loaded, without changing any state: the rows it would
@@ -643,7 +739,13 @@ impl Stitcher {
             return Assessment::default();
         }
         let bh = h - hdr - ftr;
+        // An unchanged frame (the end of the page, the end grace) has no partial overlap to
+        // look for, and the relaxed search is the expensive part.
+        let unchanged = g.same_region(&self.prev, &frame.data, hdr, h - ftr, (bh / 50).max(1));
         let d = self.find_offset(&g, &frame.data, hdr, ftr).or_else(|| {
+            if unchanged {
+                return None;
+            }
             self.find_offset_relaxed(&g, &frame.data, hdr, ftr)
                 .map(|(_, d, _)| d)
         });
@@ -1080,6 +1182,94 @@ mod tests {
         eprintln!("1080p push: {el:?}");
         if !cfg!(debug_assertions) {
             assert!(el.as_millis() < 30, "push took {el:?}");
+        }
+    }
+
+    /// A comment-thread-like page with a 30-row period: 14 unique text rows, 10 blank rows
+    /// and 6 identical toolbar rows.
+    fn periodic_page(w: usize, rows: usize) -> Vec<Vec<u8>> {
+        let mut rng = Lcg(77);
+        let toolbar: Vec<u8> = (0..w)
+            .flat_map(|x| {
+                let v = if x % 16 < 5 { 90 } else { 245 };
+                [v, v, v, 255]
+            })
+            .collect();
+        (0..rows)
+            .map(|y| match y % 30 {
+                0..14 => {
+                    let mut r = vec![255u8; w * 4];
+                    for x in w / 20..w * 3 / 4 {
+                        if rng.next().is_multiple_of(5) {
+                            let v = (rng.next() % 120) as u8;
+                            r[x * 4..x * 4 + 3].copy_from_slice(&[v, v, v]);
+                        }
+                    }
+                    r
+                }
+                14..24 => vec![255u8; w * 4],
+                _ => toolbar.clone(),
+            })
+            .collect()
+    }
+
+    fn page_frame(page: &[Vec<u8>], w: usize, off: usize, h: usize) -> Rgba {
+        let data: Vec<u8> = page[off..off + h].iter().flatten().copied().collect();
+        Rgba::from_raw(w as u32, h as u32, data)
+    }
+
+    #[test]
+    fn periodic_page_never_matches_a_frame_without_overlap() {
+        let (w, h) = (400usize, 400usize);
+        let page = periodic_page(w, 3000);
+        for jump in [1000usize, 1600, 2300] {
+            let mut st = Stitcher::new(no_trim());
+            assert!(matches!(
+                st.push(&page_frame(&page, w, 0, h)),
+                PushResult::Appended { .. }
+            ));
+            assert_eq!(
+                st.push(&page_frame(&page, w, 300, h)),
+                PushResult::Appended { added_rows: 300 }
+            );
+            let r = st.push(&page_frame(&page, w, jump, h));
+            assert_eq!(r, PushResult::Failed, "jump to {jump}");
+            let out = st.finish();
+            assert_eq!(out.height, 700);
+            let exp: Vec<u8> = page[..700].iter().flatten().copied().collect();
+            assert!(
+                out.data == exp,
+                "jump to {jump}: captured rows were overwritten"
+            );
+        }
+        // First scroll (layout not known yet) too.
+        let mut st = Stitcher::new(no_trim());
+        st.push(&page_frame(&page, w, 0, h));
+        assert_eq!(st.push(&page_frame(&page, w, 1000, h)), PushResult::Failed);
+    }
+
+    #[test]
+    fn relaxed_search_is_cheap_on_large_frames() {
+        let (w, h) = (2560usize, 1400usize);
+        let page = periodic_page(w, 4000);
+        let mut st = Stitcher::new(no_trim());
+        st.push(&page_frame(&page, w, 0, h));
+        st.push(&page_frame(&page, w, 600, h));
+        let same = page_frame(&page, w, 600, h);
+        let t = std::time::Instant::now();
+        let _ = st.assess(&same);
+        let same_el = t.elapsed();
+        let jump = page_frame(&page, w, 2500, h);
+        let t = std::time::Instant::now();
+        let a = st.assess(&jump);
+        let r = st.push(&jump);
+        let jump_el = t.elapsed();
+        assert_eq!(a.new_rows, None);
+        assert_eq!(r, PushResult::Failed);
+        eprintln!("2560x1400 assess unchanged {same_el:?}, assess+push no overlap {jump_el:?}");
+        if !cfg!(debug_assertions) {
+            assert!(same_el.as_millis() < 60, "assess took {same_el:?}");
+            assert!(jump_el.as_millis() < 120, "assess+push took {jump_el:?}");
         }
     }
 

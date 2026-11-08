@@ -66,7 +66,11 @@ function Fail([string]$Text) { throw "release: $Text" }
 
 function Invoke-Native {
     param([string]$Exe, [string[]]$Arguments)
-    & $Exe @Arguments
+    # Windows PowerShell 5.1 turns a native tool's stderr (cargo's progress lines) into error
+    # records when output is redirected; with 'Stop' that would end the script. Judge by the
+    # exit code only.
+    $ErrorActionPreference = 'Continue'
+    & $Exe @Arguments 2>&1 | ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host $_.Exception.Message } else { $_ } }
     if ($LASTEXITCODE -ne 0) { Fail "$([IO.Path]::GetFileName($Exe)) $($Arguments -join ' ') exited with $LASTEXITCODE" }
 }
 
@@ -241,6 +245,14 @@ try {
         $setup = Join-Path $OutDir "Stinkshot-$Version-$a-setup.exe"
         if ($Sign -eq 'signpath') { Invoke-CodeSign @($setup) }
         $artifacts += $setup
+
+        # Smoke-test installer (own AppId, name and shortcut; docs/RELEASING.md step 5). Not a
+        # release artifact: never hashed, signed or uploaded.
+        Step "smoke-test installer ($a)"
+        $testArgs = @('/Q', '/DTestBuild=1', "/DAppVersion=$Version", "/DArch=$a", "/DStageDir=$stage", "/DOutputDir=$(Join-Path $OutDir 'test')")
+        if ($ico) { $testArgs += "/DIconFile=$($ico.FullName)" }
+        $testArgs += (Join-Path $Repo 'packaging\inno\stinkshot.iss')
+        Invoke-Native $isccExe $testArgs
     }
 
     # ----------------------------------------------------------------- SBOM

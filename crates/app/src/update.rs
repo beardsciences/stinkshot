@@ -31,6 +31,9 @@ pub const SIGNATURE_NAME: &str = "stinkshot-release.json.minisig";
 pub const RELEASE_PUBLIC_KEY: &str = include_str!("../assets/release-key.pub");
 /// Error text prefix for signature failures, so the shell can say so instead of "offline".
 pub const UNTRUSTED: &str = "release manifest failed verification";
+/// Error text prefix for a newer release without its signed manifest or signature attached
+/// (not uploaded yet): not a verification failure.
+pub const UNSIGNED: &str = "release has no signed release info";
 
 const MAX_API_BYTES: u64 = 1024 * 1024;
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
@@ -89,14 +92,14 @@ pub fn check() -> anyhow::Result<Option<Release>> {
         "application/json",
         MAX_MANIFEST_BYTES,
     )?
-    .ok_or_else(|| anyhow!("{UNTRUSTED}: release {tag} has no {MANIFEST_NAME}"))?;
+    .ok_or_else(|| anyhow!("{UNSIGNED}: release {tag} has no {MANIFEST_NAME}"))?;
     let signature = get(
         &agent,
         &asset_url(&tag, SIGNATURE_NAME),
         "text/plain",
         MAX_SIGNATURE_BYTES,
     )?
-    .ok_or_else(|| anyhow!("{UNTRUSTED}: release {tag} has no {SIGNATURE_NAME}"))?;
+    .ok_or_else(|| anyhow!("{UNSIGNED}: release {tag} has no {SIGNATURE_NAME}"))?;
     let signature =
         String::from_utf8(signature).map_err(|_| anyhow!("{UNTRUSTED}: signature is not text"))?;
     let m = verify_manifest(&manifest, &signature, RELEASE_PUBLIC_KEY)?;

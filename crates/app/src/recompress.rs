@@ -15,11 +15,13 @@
 //!   between that check and the swap;
 //! - the result must decode to exactly the original pixels (checked in `png_opt`);
 //! - a temp file left by a crash or exit mid-write (`*.stinkshot-tmp`, never listed as a
-//!   capture) is deleted at the next start.
+//!   capture) is deleted at the next start, in history and in every Save As folder a job
+//!   wrote to (listed in `recompress-folders.txt` in the profile folder); an original that
+//!   a crash left parked mid-swap is put back.
 //!
 //! Not counted as a job in flight: quitting does not wait for it.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
@@ -77,21 +79,70 @@ fn queue() -> &'static Queue {
     })
 }
 
-/// Delete temp files a previous run left in `folder` (crash or exit mid-write).
-pub fn clean_up(folder: &Path) {
-    let folder = folder.to_path_buf();
+/// Folders (one per line, in the profile folder) that jobs wrote temp files into this run or
+/// an earlier one: Save As targets live outside history, so `clean_up` needs the list.
+const FOLDER_JOURNAL: &str = "recompress-folders.txt";
+static JOURNAL: Mutex<Option<HashSet<PathBuf>>> = Mutex::new(None);
+
+fn journal_path() -> PathBuf {
+    stinkshot_core::config::Config::dir().join(FOLDER_JOURNAL)
+}
+
+/// Record `folder` before a temp file is written there.
+fn remember_folder(folder: &Path) {
+    let mut j = JOURNAL.lock().unwrap_or_else(|e| e.into_inner());
+    let set = j.get_or_insert_with(HashSet::new);
+    if !set.insert(folder.to_path_buf()) {
+        return;
+    }
+    let text: String = set.iter().map(|f| format!("{}\n", f.display())).collect();
+    if let Err(e) = std::fs::write(journal_path(), text) {
+        log::debug!("recompress folder list: {e}");
+    }
+}
+
+/// Whether `name` is a temp or parked file another (earlier) process left behind.
+fn leftover_of_other_process(name: &str) -> bool {
+    let own = format!(".{}", std::process::id());
+    name.strip_suffix(TEMP_SUFFIX)
+        .is_some_and(|stem| !stem.ends_with(&own))
+}
+
+/// Tidy what a previous run left in `history_folder` and in the folders it recorded (crash or
+/// exit mid-job): temp files are deleted, an original parked by an interrupted swap is put
+/// back (`files::recover_parked`). Call once at start, before anything is queued.
+pub fn clean_up(history_folder: &Path) {
+    let mut folders = vec![history_folder.to_path_buf()];
+    {
+        // Taken over on this thread so this run's own entries never mix with the old ones.
+        let _j = JOURNAL.lock().unwrap_or_else(|e| e.into_inner());
+        if let Ok(text) = std::fs::read_to_string(journal_path()) {
+            folders.extend(
+                text.lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .map(PathBuf::from)
+                    .filter(|f| f != history_folder),
+            );
+            let _ = std::fs::remove_file(journal_path());
+        }
+    }
     let _ = std::thread::Builder::new()
         .name("png-recompress-cleanup".into())
         .spawn(move || {
-            let Ok(dir) = std::fs::read_dir(&folder) else {
-                return;
-            };
-            for e in dir.flatten() {
-                let name = e.file_name();
-                if name.to_string_lossy().ends_with(TEMP_SUFFIX) {
-                    match std::fs::remove_file(e.path()) {
-                        Ok(()) => log::info!("removed leftover {}", e.path().display()),
-                        Err(err) => log::debug!("leftover {}: {err}", e.path().display()),
+            for folder in folders {
+                let Ok(dir) = std::fs::read_dir(&folder) else {
+                    continue;
+                };
+                for e in dir.flatten() {
+                    let name = e.file_name();
+                    let name = name.to_string_lossy();
+                    if leftover_of_other_process(&name) {
+                        match std::fs::remove_file(e.path()) {
+                            Ok(()) => log::info!("removed leftover {}", e.path().display()),
+                            Err(err) => log::debug!("leftover {}: {err}", e.path().display()),
+                        }
+                    } else if name.ends_with(files::PARKED_SUFFIX) {
+                        files::recover_parked(&e.path());
                     }
                 }
             }
@@ -234,6 +285,9 @@ fn run(mut job: Job) -> Option<Job> {
     let mut temp_name = file_name.to_os_string();
     temp_name.push(format!(".{}{TEMP_SUFFIX}", std::process::id()));
     let temp = job.path.with_file_name(temp_name);
+    if let Some(folder) = job.path.parent().and_then(|p| std::path::absolute(p).ok()) {
+        remember_folder(&folder);
+    }
     let written = (|| -> std::io::Result<()> {
         use std::io::Write;
         let mut f = std::fs::File::create(&temp)?;
@@ -288,6 +342,14 @@ fn run(mut job: Job) -> Option<Job> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn leftovers_are_only_other_processes_temps() {
+        assert!(leftover_of_other_process("a.png.1.stinkshot-tmp"));
+        let own = format!("a.png.{}.stinkshot-tmp", std::process::id());
+        assert!(!leftover_of_other_process(&own));
+        assert!(!leftover_of_other_process("a.png"));
+    }
 
     #[test]
     fn effort_by_size() {

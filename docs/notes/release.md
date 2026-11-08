@@ -52,7 +52,34 @@ session, whichever exe it runs from: a portable copy running under the default p
 to quit too. Accepted: there is one instance per profile by design.
 
 `STINKSHOT_PROFILE` is honored by the installer's Pascal code (same sanitizing as
-`profile_suffix`), which is what made the install tests below safe beside the real instance.
+`profile_suffix`) for the Run value, the saved PrintScreen value and the cache folder. It is
+not full isolation, fixed or documented after the Nov 8 review:
+
+- The PrintScreen setting (`HKCU\Control Panel\Keyboard\PrintScreenKeyForSnippingEnabled`)
+  is one value for every profile. A dev profile's restore (the app's `take_over(false)` and the
+  uninstaller's `RestorePrintScreen`) now writes it only when the release instance holds no
+  takeover (no unsuffixed `PrevPrintScreenSnipping`) and the value is still 0
+  (`system::may_restore_global`, `MayRestoreGlobal` in the .iss); otherwise it only forgets
+  its own saved value. Before, a test-profile uninstall could hand the real instance's
+  PrtSc back to Snipping Tool. On Nov 8 the dev box showed exactly that state: the real
+  instance running with the takeover saved (`PrevPrintScreenSnipping` = 0) but the Keyboard
+  value missing, so PrtSc went to Snipping Tool. Most likely from the reltest uninstall below
+  (its planted `PrevPrintScreenSnipping-reltest`); not proven. Fix for the user: quit the tray
+  instance and start it again (startup takeover writes 0 back). Not done for them.
+- AppId, the Apps entry and the Start menu shortcut were shared, so a smoke-test install to a
+  temp folder would take over and then remove a real install's entry and shortcut.
+  `/DTestBuild=1` now builds `Stinkshot-Test-<version>-<arch>-setup.exe` with its own AppId,
+  name, folder and shortcut; `release.ps1` builds it into `dist\<version>	est\` (never
+  hashed, signed or uploaded) and RELEASING step 5 uses it.
+- Test hygiene: never plant `PrevPrintScreenSnipping-*` values by hand while the real instance
+  runs.
+
+Silent upgrade relaunch (review fix): `PrepareToInstall` records whether the profile's
+single-instance mutex was held before `stinkshot quit`, and a second `[Run]` entry
+(`--tray`, `runasoriginaluser`, `Check: RelaunchAfterSilentUpgrade`, only when silent)
+starts it again, so a `winget upgrade` no longer leaves the tray app closed and PrtSc with
+Snipping Tool. Interactive installs keep the Launch checkbox. Both installers compile with
+ISCC 7.1.1; neither was run (no exe swap over the real instance on this box).
 
 ## `stinkshot quit`
 
@@ -87,7 +114,9 @@ Now (`update.rs`):
 Nothing else is sent: three plain GETs at most, same User-Agent as before, no cookies, no query
 strings. No binary is downloaded. A signature failure is an error that starts with
 `update::UNTRUSTED`; a forced check shows "The release info failed its signature check, so it
-was ignored." instead of the offline message.
+was ignored." instead of the offline message. A newer release with no manifest or signature
+attached (not uploaded yet) is `update::UNSIGNED` instead (review fix: it used to read as a
+signature failure): "The latest release has no signed release info yet. Try again later."
 
 Manifest (`stinkshot-release.json`, written by the release script, LF, UTF-8 without BOM):
 
@@ -188,3 +217,7 @@ restored to DWORD 0 right away and the test script fixed; the real instance kept
   app's verifier on the script's signed output).
 - Interactive installer pages (only silent runs were exercised), Windows 10, Windows on Arm.
 - `-Sign signpath` and `-Sign signtool` code paths in the script never ran.
+- The review fixes of Nov 8 (test installer, silent-upgrade relaunch, profile-safe PrintScreen
+  restore, `Invoke-Native` stderr handling under Windows PowerShell 5.1 with redirected
+  output) compiled or passed unit tests only; the installers were not run and release.ps1 was
+  not re-run.

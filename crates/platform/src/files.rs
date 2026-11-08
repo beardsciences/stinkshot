@@ -8,7 +8,8 @@ use std::time::SystemTime;
 
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::{
-    FILE_RENAME_INFO, FileRenameInfoEx, SetFileInformationByHandle,
+    FILE_DISPOSITION_INFO, FILE_RENAME_INFO, FileDispositionInfo, FileRenameInfo,
+    SetFileInformationByHandle,
 };
 
 const FILE_READ_DATA: u32 = 0x0001;
@@ -18,8 +19,6 @@ const DELETE: u32 = 0x0001_0000;
 const FILE_SHARE_READ: u32 = 0x0000_0001;
 const FILE_SHARE_WRITE: u32 = 0x0000_0002;
 const FILE_SHARE_DELETE: u32 = 0x0000_0004;
-const FILE_RENAME_FLAG_REPLACE_IF_EXISTS: u32 = 0x1;
-const FILE_RENAME_FLAG_POSIX_SEMANTICS: u32 = 0x2;
 const ERROR_SHARING_VIOLATION: i32 = 32;
 const ERROR_LOCK_VIOLATION: i32 = 33;
 
@@ -34,15 +33,20 @@ pub enum Replace {
     Changed,
 }
 
+/// Suffix of the name `original` is parked under during `replace_if_unchanged`, after
+/// `.<pid>`. A crash can leave one behind; `recover_parked` puts it back.
+pub const PARKED_SUFFIX: &str = ".stinkshot-old";
+
 /// Replace `original` with `replacement` (a finished file in the same folder) when
 /// `original` still has `expect_len` bytes and was last written at `expect_modified`, and no
 /// other process has it open. `original` keeps its creation and modification times.
 ///
-/// `original` is held open without read or write sharing while it is checked and swapped, so
-/// no other program can open it in between. The swap is a POSIX-semantics rename of
-/// `replacement` over it (NTFS, Windows 10 1809 and later): atomic, and a reader that opened
-/// the file with delete sharing keeps reading the old data. Volumes without that rename
-/// report `InUse`. On anything but `Replaced` the caller still owns `replacement`.
+/// `original` is held open with no sharing at all while it is checked and swapped, so no
+/// other program can open, delete or rename it in between. Through that handle it is parked
+/// under `<name>.<pid>.stinkshot-old`, `replacement` is renamed into the free name (never
+/// over anything: if a file appeared there meanwhile, that file wins), and the parked
+/// original is deleted when the handle closes. If the second rename fails the original is
+/// renamed back. On anything but `Replaced` the caller still owns `replacement`.
 pub fn replace_if_unchanged(
     original: &Path,
     replacement: &Path,
@@ -51,9 +55,9 @@ pub fn replace_if_unchanged(
 ) -> anyhow::Result<Replace> {
     let held = match std::fs::OpenOptions::new()
         // Read access takes part in sharing checks (attribute-only opens do not), so other
-        // handles make this fail and new ones fail while it is held.
-        .access_mode(FILE_READ_DATA | FILE_READ_ATTRIBUTES)
-        .share_mode(FILE_SHARE_DELETE)
+        // handles make this fail, and new opens, deletes and renames fail while it is held.
+        .access_mode(FILE_READ_DATA | FILE_READ_ATTRIBUTES | DELETE)
+        .share_mode(0)
         .open(original)
     {
         Ok(f) => f,
@@ -93,37 +97,115 @@ pub fn replace_if_unchanged(
     }
     temp.set_times(times)?;
 
-    let target: Vec<u16> = std::path::absolute(original)?.as_os_str().encode_wide_vec();
+    let target = std::path::absolute(original)?;
+    let Some(file_name) = target.file_name() else {
+        return Ok(Replace::Changed);
+    };
+    let mut parked_name = file_name.to_os_string();
+    parked_name.push(format!(".{}{PARKED_SUFFIX}", std::process::id()));
+    let parked = target.with_file_name(parked_name);
+
+    if let Err(e) = rename_handle(&held, &parked) {
+        log::debug!("replace: park {}: {e}", original.display());
+        return Ok(Replace::InUse);
+    }
+    if let Err(e) = rename_handle(&temp, &target) {
+        log::debug!("replace {}: {e}", original.display());
+        drop(temp);
+        if let Err(back) = rename_handle(&held, &target) {
+            // Something new took the name while it was free (another program's save): it is
+            // newer than the parked copy, which goes, as its rename-over would have done.
+            log::info!(
+                "replace: {} was replaced meanwhile; dropping the parked copy ({back})",
+                original.display()
+            );
+            let _ = delete_on_close(&held);
+            return Ok(Replace::Changed);
+        }
+        return Ok(Replace::InUse);
+    }
+    drop(temp);
+    if let Err(e) = delete_on_close(&held) {
+        // The swap is done; the parked copy is left for `recover_parked`.
+        log::warn!("replace: delete {}: {e}", parked.display());
+    }
+    drop(held);
+    Ok(Replace::Replaced)
+}
+
+/// Rename the open `file` to `target`, failing if anything exists there.
+fn rename_handle(file: &std::fs::File, target: &Path) -> windows::core::Result<()> {
+    let name: Vec<u16> = target.as_os_str().encode_wide_vec();
     // FILE_RENAME_INFO with the name inline; u64 backing keeps the struct aligned.
     let header = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
-    let bytes = header + target.len() * 2 + 2;
+    let bytes = header + name.len() * 2 + 2;
     let mut buf = vec![0u64; bytes.div_ceil(8)];
-    // SAFETY: `buf` is large enough and aligned for FILE_RENAME_INFO plus the name; the
-    // handle is live for the call.
-    let swapped = unsafe {
+    // SAFETY: `buf` is large enough and aligned for FILE_RENAME_INFO plus the name (zeroed,
+    // so ReplaceIfExists is false and the name is terminated); the handle is live.
+    unsafe {
         let info = buf.as_mut_ptr() as *mut FILE_RENAME_INFO;
-        (*info).Anonymous.Flags =
-            FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS;
         (*info).RootDirectory = HANDLE::default();
-        (*info).FileNameLength = (target.len() * 2) as u32;
-        let name = (buf.as_mut_ptr() as *mut u8).add(header) as *mut u16;
-        std::ptr::copy_nonoverlapping(target.as_ptr(), name, target.len());
+        (*info).FileNameLength = (name.len() * 2) as u32;
+        let dst = (buf.as_mut_ptr() as *mut u8).add(header) as *mut u16;
+        std::ptr::copy_nonoverlapping(name.as_ptr(), dst, name.len());
         SetFileInformationByHandle(
-            HANDLE(temp.as_raw_handle()),
-            FileRenameInfoEx,
+            HANDLE(file.as_raw_handle()),
+            FileRenameInfo,
             buf.as_ptr() as *const core::ffi::c_void,
             (buf.len() * 8) as u32,
         )
+    }
+}
+
+/// Mark the open `file` (opened with DELETE access) for deletion when its last handle closes.
+fn delete_on_close(file: &std::fs::File) -> windows::core::Result<()> {
+    let info = FILE_DISPOSITION_INFO { DeleteFile: true };
+    // SAFETY: a valid FILE_DISPOSITION_INFO for a live handle.
+    unsafe {
+        SetFileInformationByHandle(
+            HANDLE(file.as_raw_handle()),
+            FileDispositionInfo,
+            &info as *const _ as *const core::ffi::c_void,
+            std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    }
+}
+
+/// Put back an original that a crash left parked by `replace_if_unchanged` (`parked`
+/// ends in `.<pid>.stinkshot-old`): renamed back if its name is still free, otherwise (the
+/// swap finished, or something newer took the name) deleted. Parked files of this process
+/// are left alone. Returns whether `parked` was such a file.
+pub fn recover_parked(parked: &Path) -> bool {
+    let Some(name) = parked.file_name().and_then(|n| n.to_str()) else {
+        return false;
     };
-    drop(temp);
-    drop(held);
-    match swapped {
-        Ok(()) => Ok(Replace::Replaced),
-        Err(e) => {
-            log::debug!("replace {}: {e}", original.display());
-            Ok(Replace::InUse)
+    let Some(stem) = name.strip_suffix(PARKED_SUFFIX) else {
+        return false;
+    };
+    let Some((orig_name, pid)) = stem.rsplit_once('.') else {
+        return false;
+    };
+    if pid
+        .parse::<u32>()
+        .ok()
+        .is_none_or(|p| p == std::process::id())
+        || orig_name.is_empty()
+    {
+        return false;
+    }
+    let original = parked.with_file_name(orig_name);
+    if original.exists() {
+        match std::fs::remove_file(parked) {
+            Ok(()) => log::info!("removed leftover {}", parked.display()),
+            Err(e) => log::debug!("leftover {}: {e}", parked.display()),
+        }
+    } else {
+        match std::fs::rename(parked, &original) {
+            Ok(()) => log::info!("restored {} after an interrupted swap", original.display()),
+            Err(e) => log::warn!("restore {}: {e}", original.display()),
         }
     }
+    true
 }
 
 trait EncodeWideVec {
@@ -215,6 +297,11 @@ mod tests {
             std::fs::metadata(&orig).unwrap().modified().unwrap(),
             modified
         );
+        assert_eq!(
+            std::fs::read_dir(&d).unwrap().count(),
+            1,
+            "no parked or temp file left"
+        );
         // Gone: changed.
         std::fs::write(&new, b"x").unwrap();
         std::fs::remove_file(&orig).unwrap();
@@ -222,6 +309,48 @@ mod tests {
             replace_if_unchanged(&orig, &new, len, modified).unwrap(),
             Replace::Changed
         );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_held_original_cannot_be_deleted_or_renamed() {
+        let d = dir().join("held");
+        std::fs::create_dir_all(&d).unwrap();
+        let orig = d.join("b.png");
+        std::fs::write(&orig, b"original").unwrap();
+        let held = std::fs::OpenOptions::new()
+            .access_mode(FILE_READ_DATA | FILE_READ_ATTRIBUTES | DELETE)
+            .share_mode(0)
+            .open(&orig)
+            .unwrap();
+        assert!(std::fs::remove_file(&orig).is_err());
+        assert!(std::fs::rename(&orig, d.join("c.png")).is_err());
+        drop(held);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn parked_originals_are_recovered() {
+        let d = dir().join("parked");
+        std::fs::create_dir_all(&d).unwrap();
+        // Crash after parking: renamed back.
+        let parked = d.join("x.png.1.stinkshot-old");
+        std::fs::write(&parked, b"x").unwrap();
+        assert!(recover_parked(&parked));
+        assert_eq!(std::fs::read(d.join("x.png")).unwrap(), b"x");
+        assert!(!parked.exists());
+        // Crash after the swap: the parked copy goes, the new file stays.
+        let parked = d.join("x.png.2.stinkshot-old");
+        std::fs::write(&parked, b"old").unwrap();
+        assert!(recover_parked(&parked));
+        assert_eq!(std::fs::read(d.join("x.png")).unwrap(), b"x");
+        assert!(!parked.exists());
+        // Not a parked name, or this process's own: untouched.
+        let own = d.join(format!("y.png.{}.stinkshot-old", std::process::id()));
+        std::fs::write(&own, b"y").unwrap();
+        assert!(!recover_parked(&own));
+        assert!(!recover_parked(&d.join("x.png")));
+        assert!(own.exists());
         let _ = std::fs::remove_dir_all(&d);
     }
 }

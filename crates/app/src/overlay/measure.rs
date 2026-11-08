@@ -1,6 +1,7 @@
 //! Measure tool (U): drag a ruler across the capture. Shows width, height, length and angle
-//! in physical px (image px of the capture) and in logical px at the monitor's scale. Ends snap
-//! to the nearest strong edge in the pixels (a UI element's border) unless Alt is held; Shift
+//! in physical px (image px of the capture) and in logical px at the capture's scale. Ends snap
+//! to the nearest strong edge in the pixels (a UI element's border) when Snap to Elements is on;
+//! Alt flips that while held; Shift
 //! keeps the ruler horizontal, vertical or at 45 degrees. Nothing is added to the image.
 
 use egui::{Color32, FontId, Pos2, Stroke, Vec2};
@@ -119,8 +120,8 @@ fn fmt_len(v: f32) -> String {
     }
 }
 
-/// Label lines: physical px, then logical px when the scale is not 100 %.
-pub fn label(m: &Measurement, scale: f32) -> (String, Option<String>) {
+/// Label lines: physical px, then logical px when the scale is known and not 100 %.
+pub fn label(m: &Measurement, scale: Option<f32>) -> (String, Option<String>) {
     let main = format!(
         "{} \u{d7} {} px \u{b7} {} px \u{b7} {}\u{b0}",
         fmt_len(m.dx),
@@ -128,7 +129,7 @@ pub fn label(m: &Measurement, scale: f32) -> (String, Option<String>) {
         fmt_len(m.len),
         fmt_len((m.angle * 10.0).round() / 10.0)
     );
-    let logical = ((scale - 1.0).abs() > 0.01).then(|| {
+    let logical = scale.filter(|s| (s - 1.0).abs() > 0.01).map(|scale| {
         format!(
             "{} \u{d7} {} \u{b7} {} at {}%",
             fmt_len(m.dx / scale),
@@ -141,24 +142,29 @@ pub fn label(m: &Measurement, scale: f32) -> (String, Option<String>) {
 }
 
 impl Overlay {
-    /// Where a ruler end goes: clamped to the image, snapped to an edge unless Alt.
+    /// Where a ruler end goes: clamped to the image, snapped to an edge when snapping is on
+    /// (Snap to Elements) and Alt is not held, or off and Alt is held.
     pub(super) fn ruler_point(&mut self, p: (f32, f32), alt: bool) -> PtF {
         let ip = self.clamp_image(self.to_image(p));
-        if alt {
+        if self.snap_edges == alt {
             return PtF::new(ip.x.round(), ip.y.round());
         }
         let base = self.ensure_base();
         snap_edge(&base, ip, SNAP_RADIUS)
     }
 
-    /// DPI scale for the logical readout: the monitor under the selection.
-    fn ruler_scale(&self) -> f32 {
-        self.sel
-            .map(|s| {
-                let r = self.canvas_rect_screen(s);
-                self.monitor_at((r.x + r.w / 2, r.y + r.h / 2)).1
-            })
-            .unwrap_or(1.0)
+    /// DPI scale for the logical readout: the scale the pixels were captured at. On the
+    /// frozen screen that is the monitor under the selection; an opened capture (history
+    /// Edit, window, scrolling) carries it in its source, and without it there is no
+    /// logical line.
+    fn ruler_scale(&self) -> Option<f32> {
+        if matches!(self.kind, Kind::Annotate) {
+            return self.annotate_meta.as_ref().and_then(|(_, _, s)| s.scale);
+        }
+        self.sel.map(|s| {
+            let r = self.canvas_rect_screen(s);
+            self.monitor_at((r.x + r.w / 2, r.y + r.h / 2)).1
+        })
     }
 
     pub(super) fn paint_ruler(&self, painter: &egui::Painter, m: ImgToPt, accent: Color32) {
@@ -232,14 +238,16 @@ mod tests {
     #[test]
     fn labels_show_logical_px_off_100_percent() {
         let m = measure(PtF::new(0.0, 0.0), PtF::new(300.0, 0.0));
-        let (main, logical) = label(&m, 1.0);
+        let (main, logical) = label(&m, Some(1.0));
         assert_eq!(main, "300 \u{d7} 0 px \u{b7} 300 px \u{b7} 0\u{b0}");
         assert!(logical.is_none());
-        let (_, logical) = label(&m, 1.5);
+        let (_, logical) = label(&m, Some(1.5));
         assert_eq!(logical.unwrap(), "200 \u{d7} 0 \u{b7} 200 at 150%");
         let m = measure(PtF::new(0.0, 0.0), PtF::new(10.0, -10.0));
-        assert!(label(&m, 1.0).0.contains("14.1 px"));
-        assert!(label(&m, 1.0).0.ends_with("45\u{b0}"));
+        assert!(label(&m, Some(1.0)).0.contains("14.1 px"));
+        // Unknown capture scale (a history item): no logical line.
+        assert!(label(&m, None).1.is_none());
+        assert!(label(&m, Some(1.0)).0.ends_with("45\u{b0}"));
     }
 
     #[test]

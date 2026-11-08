@@ -24,11 +24,8 @@ Only the latest release gets fixes.
 
 ## Reporting a vulnerability
 
-Please report privately, not in a public issue:
-
-- Open a confidential issue on https://code.mccullough.dev/beard/stinkshot/issues (tick
-  "This issue is confidential" if your account can), or
-- email the maintainer at the address on the Forgejo profile of the repository owner.
+Email the maintainer at christian@mccullough.dev. Do not open an issue: issues on the
+repository are public.
 
 Include the Stinkshot version (`stinkshot --version`), Windows version, and steps to reproduce.
 You should get an answer within a week. Fixed issues are credited in CHANGELOG.md unless you

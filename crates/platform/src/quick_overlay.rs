@@ -50,6 +50,9 @@ pub struct QuickInput {
     pub down: bool,
     /// Where the button went up again (the end of a finished drag).
     pub release: Option<PxPoint>,
+    /// Where a plain click (press and release without a drag) landed: the overlay takes the
+    /// window highlighted under it, like a click in the region overlay.
+    pub clicked: Option<PxPoint>,
     /// Esc was pressed.
     pub cancelled: bool,
 }
@@ -173,7 +176,13 @@ pub fn show(
     windows: Vec<PxRect>,
     accent: [u8; 3],
 ) -> anyhow::Result<QuickOverlay> {
-    if bounds.w <= 0 || bounds.h <= 0 || frozen.width as i32 != bounds.w {
+    let expected_len = (bounds.w.max(0) as usize) * (bounds.h.max(0) as usize) * 4;
+    if bounds.w <= 0
+        || bounds.h <= 0
+        || frozen.width as i32 != bounds.w
+        || frozen.height as i32 != bounds.h
+        || frozen.data.len() != expected_len
+    {
         anyhow::bail!("frozen image does not match its bounds");
     }
     let (dim_bmp, dim_bits) = dib(bounds.w, bounds.h)?;
@@ -453,6 +462,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     i.cursor = Some(to_virtual(x, y));
                     i.down = true;
                     i.release = None;
+                    i.clicked = None;
                 }
                 let c = clear_rect(st, x, y);
                 set_clear(hwnd, st, c);
@@ -465,7 +475,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     i.cursor = Some(to_virtual(x, y));
                     i.down = false;
                     let up = to_virtual(x, y);
-                    // A click (no drag) selects nothing here; the overlay drops it too.
+                    // A click (no drag) takes the highlighted window once the overlay is up.
                     let moved = i
                         .press
                         .is_some_and(|p| (p.x - up.x).abs().max((p.y - up.y).abs()) >= CLICK_SLOP);
@@ -473,6 +483,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         i.release = Some(up);
                     } else {
                         i.press = None;
+                        i.clicked = Some(up);
                     }
                 }
                 let c = clear_rect(st, x, y);

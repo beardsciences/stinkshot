@@ -27,8 +27,8 @@ use crate::{RecordOptions, RecordingResult, Status};
 /// Audio may run this far ahead of the output clock before the oldest data is discarded.
 const MAX_AUDIO_LEAD_FRAMES: usize = (OUT_RATE as usize) / 10;
 /// What the video thread reports once capture and encoder are up: the shared encoder, its
-/// display name and the capture backend name (or an error message).
-type InitResult = Result<(Arc<Mutex<Encoder>>, String, &'static str), String>;
+/// display name, the capture backend name and the frame rate in use (or an error message).
+type InitResult = Result<(Arc<Mutex<Encoder>>, String, &'static str, u32), String>;
 
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -76,6 +76,8 @@ pub struct Recorder {
     height: u32,
     encoder_name: String,
     capture_backend: &'static str,
+    /// Frame rate in use: the requested one, or `MAX_SOFTWARE_FPS` without hardware encoding.
+    fps: u32,
     final_elapsed: Option<Duration>,
     finished: bool,
     /// Keeps Media Foundation alive until the encoder has been finalized and dropped.
@@ -196,7 +198,7 @@ impl Recorder {
                 })
                 .context("spawn video thread")?
         });
-        let (enc, encoder_name, capture_backend) =
+        let (enc, encoder_name, capture_backend, fps) =
             match init_rx.recv_timeout(Duration::from_secs(30)) {
                 Ok(Ok(v)) => v,
                 // The guard stops and joins every worker and removes the temp file.
@@ -237,6 +239,7 @@ impl Recorder {
             height,
             encoder_name,
             capture_backend,
+            fps,
             final_elapsed: None,
             finished: false,
             _mf: mf_guard,
@@ -247,6 +250,12 @@ impl Recorder {
     /// "DXGI Desktop Duplication" fallback).
     pub fn capture_backend(&self) -> &'static str {
         self.capture_backend
+    }
+
+    /// Frame rate of the recording: the requested one, or 60 when a higher one needed a
+    /// hardware encoder that was not available.
+    pub fn fps(&self) -> u32 {
+        self.fps
     }
 
     pub fn pause(&self) {
@@ -489,8 +498,8 @@ fn video_thread(
             return;
         }
     };
-    let init = (|| -> Result<(Capturer, Arc<Mutex<Encoder>>)> {
-        let cap = Capturer::new(region, opts.include_cursor, fps)?;
+    // The encoder first: it decides the frame rate the capture runs at.
+    let init = (|| -> Result<(Capturer, Arc<Mutex<Encoder>>, u32)> {
         let vp = VideoParams {
             width: region.w as u32,
             height: region.h as u32,
@@ -498,9 +507,18 @@ fn video_thread(
             bitrate_kbps: opts.bitrate_kbps,
         };
         let enc = Encoder::create(&temp, &vp, want_audio)?;
-        Ok((cap, Arc::new(Mutex::new(enc))))
+        let fps = enc.fps;
+        let cap = match Capturer::new(region, opts.include_cursor, fps) {
+            Ok(c) => c,
+            Err(e) => {
+                drop(enc);
+                let _ = std::fs::remove_file(&temp);
+                return Err(e);
+            }
+        };
+        Ok((cap, Arc::new(Mutex::new(enc)), fps))
     })();
-    let (mut cap, enc) = match init {
+    let (mut cap, enc, fps) = match init {
         Ok(v) => v,
         Err(e) => {
             let _ = init_tx.send(Err(format!("{e:#}")));
@@ -517,7 +535,7 @@ fn video_thread(
         *t = Timeline::new(Instant::now());
     }
     if init_tx
-        .send(Ok((enc.clone(), name, cap.backend_name)))
+        .send(Ok((enc.clone(), name, cap.backend_name, fps)))
         .is_err()
     {
         // `Recorder::start` gave up (timed out) while we were still initialising: nobody

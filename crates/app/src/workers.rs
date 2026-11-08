@@ -271,11 +271,13 @@ fn encode_save(img: &Rgba, path: &Path, cfg: &Config) -> anyhow::Result<()> {
 }
 
 /// Write the flattened image (+ re-edit sidecar) into the history folder and index it.
+#[allow(clippy::too_many_arguments)]
 fn save_to_history(
     env: &Env,
     base: &Rgba,
     doc: &Doc,
     flat: &Rgba,
+    unframed: Option<&Rgba>,
     source: &SourceInfo,
     mode: &str,
     editing: Option<ItemId>,
@@ -286,7 +288,7 @@ fn save_to_history(
     {
         let path = meta.path;
         encode_save(flat, &path, cfg)?;
-        write_sidecar(cfg, &path, base, doc, true);
+        write_sidecar(cfg, &path, base, doc, unframed, true);
         env.history.touch(id, flat.width, flat.height)?;
         crate::recompress::enqueue(&path, Some((env.history.clone(), id)));
         return Ok((id, path));
@@ -314,7 +316,7 @@ fn save_to_history(
         fmt,
         t0.elapsed().as_secs_f64() * 1000.0
     );
-    write_sidecar(cfg, &path, base, doc, false);
+    write_sidecar(cfg, &path, base, doc, unframed, false);
     let id = env.history.add(NewItem {
         path: path.clone(),
         kind: Some(ItemKind::Image),
@@ -328,9 +330,29 @@ fn save_to_history(
     Ok((id, path))
 }
 
-fn write_sidecar(cfg: &Config, path: &Path, base: &Rgba, doc: &Doc, was_editing: bool) {
-    if cfg.history.keep_editable && !doc.shapes.is_empty() {
-        if let Err(e) = annotate::save_editable(path, base, doc) {
+/// The re-edit sidecar: the unannotated base and the document when Keep Editable Originals
+/// is on and there are annotations. Otherwise, for a framed export (Beautify), the picture
+/// without the frame and no annotations: it holds nothing the export does not show
+/// (redactions are already in it), and a re-edit starts from it instead of framing the frame.
+fn write_sidecar(
+    cfg: &Config,
+    path: &Path,
+    base: &Rgba,
+    doc: &Doc,
+    unframed: Option<&Rgba>,
+    was_editing: bool,
+) {
+    let flat_doc;
+    let keep = if cfg.history.keep_editable && !doc.shapes.is_empty() {
+        Some((base, doc))
+    } else if let Some(u) = unframed {
+        flat_doc = Doc::new(u.width, u.height);
+        Some((u, &flat_doc))
+    } else {
+        None
+    };
+    if let Some((b, d)) = keep {
+        if let Err(e) = annotate::save_editable(path, b, d) {
             log::warn!(
                 "could not save editable sidecar for {}: {e:#}",
                 path.display()
@@ -350,6 +372,7 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
             base,
             doc,
             flattened,
+            unframed,
             rect,
             action,
             source,
@@ -358,19 +381,27 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
         } = out;
         let (width, height) = (flattened.width, flattened.height);
 
-        let (item, path) =
-            match save_to_history(env, &base, &doc, &flattened, &source, mode, editing) {
-                Ok((id, p)) => (Some(id), Some(p)),
-                Err(e) => {
-                    let body = report(
-                        "saving capture to history",
-                        &e,
-                        "The capture could not be written to the history folder.",
-                    );
-                    env.notify("Could Not Save to History", body, true);
-                    (None, None)
-                }
-            };
+        let (item, path) = match save_to_history(
+            env,
+            &base,
+            &doc,
+            &flattened,
+            unframed.as_ref(),
+            &source,
+            mode,
+            editing,
+        ) {
+            Ok((id, p)) => (Some(id), Some(p)),
+            Err(e) => {
+                let body = report(
+                    "saving capture to history",
+                    &e,
+                    "The capture could not be written to the history folder.",
+                );
+                env.notify("Could Not Save to History", body, true);
+                (None, None)
+            }
+        };
         drop(base);
 
         let want_copy = match action {
@@ -584,6 +615,8 @@ pub fn scroll_capture(env: &Env, rect: PxRect, source: SourceInfo, control: Arc<
             let delay = Duration::from_millis(cfg.scroll_delay_ms.clamp(30, 2000) as u64);
             let center = capture_ops::center(rect);
             let scale = capture_ops::scale_at(rect);
+            let mut source = source;
+            source.scale = Some(scale);
 
             // Let the selection overlay and HUD finish disappearing before the first frame.
             std::thread::sleep(Duration::from_millis(250));
@@ -982,6 +1015,8 @@ pub fn edit_item(env: &Env, id: ItemId) {
             let source = SourceInfo {
                 app: meta.app.clone(),
                 window_title: meta.window_title.clone(),
+                // History does not record the capture's scale: no logical px readout.
+                scale: None,
             };
             if let Some((base, doc)) = annotate::load_editable(&meta.path)? {
                 return Ok((base, doc, source));
@@ -1015,6 +1050,8 @@ pub fn edit_item(env: &Env, id: ItemId) {
 
 pub fn delete_item(env: &Env, id: ItemId) {
     job(env, "delete-item", move |env| {
+        // Never between a background re-compression's check and its swap.
+        let _g = crate::recompress::write_lock();
         // Recycle Bin first so a mistaken delete can be undone from Explorer; the index row
         // and the re-edit sidecars go with `History::delete`.
         if let Ok(Some(meta)) = env.history.get(id)
@@ -1183,7 +1220,11 @@ fn maintain(c: &BgConfig, tx: &Sender<WorkerMsg>) {
         Err(e) => log::warn!("history rescan failed: {e:#}"),
     }
     if c.keep_days > 0 || c.max_bytes > 0 {
-        match c.history.apply_retention(c.keep_days, c.max_bytes) {
+        let retained = {
+            let _g = crate::recompress::write_lock();
+            c.history.apply_retention(c.keep_days, c.max_bytes)
+        };
+        match retained {
             Ok(n) if n > 0 => {
                 log::info!("retention removed {n} items");
                 changed = true;
@@ -1274,6 +1315,44 @@ pub fn check_updates(tx: Sender<WorkerMsg>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_framed_capture_keeps_its_unframed_picture_for_re_editing() {
+        let dir = std::env::temp_dir().join(format!("stinkshot-sidecar-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = Rgba::filled(40, 30, [10, 20, 30, 255]);
+        let framed = stinkshot_core::beautify::apply(
+            &base,
+            &stinkshot_core::beautify::Beautify {
+                padding: 16,
+                ..Default::default()
+            },
+        );
+        assert_ne!((framed.width, framed.height), (40, 30));
+        for keep_editable in [true, false] {
+            let mut cfg = Config::default();
+            cfg.history.keep_editable = keep_editable;
+            let path = dir.join(format!("shot-{keep_editable}.png"));
+            std::fs::write(
+                &path,
+                framed
+                    .encode(stinkshot_core::image::ImageFormat::Png, 90)
+                    .unwrap(),
+            )
+            .unwrap();
+            // No annotations, Beautify applied: the re-edit base is the original size.
+            write_sidecar(&cfg, &path, &base, &Doc::new(40, 30), Some(&base), false);
+            let (b, d) = annotate::load_editable(&path).unwrap().expect("sidecar");
+            assert_eq!(
+                (b.width, b.height),
+                (40, 30),
+                "keep_editable {keep_editable}"
+            );
+            assert!(d.shapes.is_empty());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn preview_collapses_and_truncates() {

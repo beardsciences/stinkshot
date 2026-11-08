@@ -42,6 +42,17 @@ fn prtsc_prev_value() -> String {
         stinkshot_core::config::profile_suffix()
     )
 }
+/// The release (no profile) instance's saved value.
+const PRTSC_PREV_RELEASE: &str = "PrevPrintScreenSnipping";
+
+/// Whether a takeover restore may write the one global Windows value. The release instance
+/// always may. A dev profile may only when the release instance holds no takeover and the
+/// value is still the 0 a takeover set, so a test profile never hands the real instance's
+/// PrintScreen back to Snipping Tool.
+fn may_restore_global(dev_profile: bool, release_saved: bool, current: Option<u32>) -> bool {
+    !dev_profile || (!release_saved && current == Some(0))
+}
+
 /// Stored in `PrevPrintScreenSnipping` when the Windows value did not exist.
 const PREV_ABSENT: u32 = u32::MAX;
 const PERSONALIZE_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
@@ -95,6 +106,15 @@ pub fn take_over_printscreen(take: bool) -> anyhow::Result<bool> {
         Ok(true)
     } else {
         let Some(prev) = saved else { return Ok(false) };
+        let dev_profile = !stinkshot_core::config::profile_suffix().is_empty();
+        let release_saved = reg_get_dword(APP_KEY, PRTSC_PREV_RELEASE).is_some();
+        if !may_restore_global(dev_profile, release_saved, current) {
+            // The Windows value is shared by every profile: leave it to the instance that
+            // still holds the takeover, and only forget this profile's saved value.
+            log::info!("PrintScreen left as is: another Stinkshot profile holds it");
+            reg_delete_value(APP_KEY, &prev_value)?;
+            return Ok(false);
+        }
         let changed = if prev == PREV_ABSENT {
             let had = current.is_some();
             reg_delete_value(KEYBOARD_KEY, PRTSC_VALUE)?;
@@ -536,6 +556,19 @@ pub fn trim_working_set() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dev_profiles_leave_the_release_printscreen_alone() {
+        // Release instance: always restores.
+        assert!(may_restore_global(false, true, Some(0)));
+        assert!(may_restore_global(false, false, None));
+        // Dev profile while the release instance holds the takeover: never.
+        assert!(!may_restore_global(true, true, Some(0)));
+        // Dev profile alone: only while the value is still its own 0.
+        assert!(may_restore_global(true, false, Some(0)));
+        assert!(!may_restore_global(true, false, Some(1)));
+        assert!(!may_restore_global(true, false, None));
+    }
 
     #[test]
     fn args_roundtrip() {

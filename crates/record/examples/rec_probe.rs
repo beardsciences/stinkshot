@@ -2,7 +2,8 @@
 //! stderr, without making the process DPI aware (like the test binaries), and prints the
 //! status and result. For diagnosing capture start-up.
 //!
-//! `cargo run -p stinkshot-record --example rec_probe -- [SECS [X Y W H]]`
+//! `cargo run -p stinkshot-record --example rec_probe -- [SECS [X Y W H]]`; `FPS=` sets the
+//! frame rate (default 30).
 
 use std::time::Duration;
 
@@ -52,7 +53,10 @@ fn main() -> anyhow::Result<()> {
     let rec = Recorder::start(RecordOptions {
         region,
         output: out.clone(),
-        fps: 30,
+        fps: std::env::var("FPS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30),
         bitrate_kbps: 8000,
         system_audio: false,
         microphone: mic.is_some(),
@@ -71,7 +75,7 @@ fn main() -> anyhow::Result<()> {
         std::thread::sleep(Duration::from_millis(500));
         eprintln!("status {:?}", rec.status());
     }
-    eprintln!("backend {}", rec.capture_backend());
+    eprintln!("backend {}, {} fps", rec.capture_backend(), rec.fps());
     let r = rec.stop();
     eprintln!("stop: {r:?}");
     if let Ok(res) = &r {

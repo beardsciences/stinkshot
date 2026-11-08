@@ -521,7 +521,7 @@ impl Overlay {
         };
         let ready = match (ready, &frame) {
             (Some(flat), None) => {
-                self.complete(shared, action, base, doc, flat, rect);
+                self.complete(shared, action, base, doc, (flat, None), rect);
                 return;
             }
             (r, _) => r,
@@ -536,8 +536,10 @@ impl Overlay {
                     None => render::flatten(&b, &d, &fonts),
                 };
                 let r = match (flat, frame) {
-                    (Some(f), Some(fr)) => Some(stinkshot_core::beautify::apply(&f, &fr)),
-                    (f, _) => f,
+                    (Some(f), Some(fr)) => {
+                        Some((stinkshot_core::beautify::apply(&f, &fr), Some(f)))
+                    }
+                    (f, _) => f.map(|f| (f, None)),
                 };
                 let _ = tx.send(r);
                 ctx2.request_repaint();
@@ -567,9 +569,9 @@ impl Overlay {
     pub(super) fn poll_finish(&mut self, ctx: &Context, shared: &mut Shared) {
         let Some(f) = &self.finishing else { return };
         match f.rx.try_recv() {
-            Ok(Some(img)) => {
+            Ok(Some(out)) => {
                 if let Some(f) = self.finishing.take() {
-                    self.complete(shared, f.action, f.base, f.doc, img, f.rect);
+                    self.complete(shared, f.action, f.base, f.doc, out, f.rect);
                 }
             }
             Ok(None) | Err(TryRecvError::Disconnected) => {
@@ -591,7 +593,7 @@ impl Overlay {
         action: FinishAction,
         base: Arc<Rgba>,
         doc: Doc,
-        flat: Rgba,
+        (flat, unframed): (Rgba, Option<Rgba>),
         rect: PxRect,
     ) {
         self.persist_prefs(shared);
@@ -604,16 +606,19 @@ impl Overlay {
         if self.annotate_meta.is_none() {
             self.remember_region(shared, rect);
         }
-        shared.outbox.push(Command::CaptureDone(CaptureOutput {
-            base: (*base).clone(),
-            doc,
-            flattened: flat,
-            rect,
-            action,
-            source,
-            mode,
-            editing,
-        }));
+        shared
+            .outbox
+            .push(Command::CaptureDone(Box::new(CaptureOutput {
+                base: (*base).clone(),
+                doc,
+                flattened: flat,
+                unframed,
+                rect,
+                action,
+                source,
+                mode,
+                editing,
+            })));
         self.closed = true;
     }
 
@@ -686,7 +691,7 @@ impl Overlay {
                 UiAction::ToggleAddRegions => {
                     self.add_regions = !self.add_regions;
                     if self.add_regions {
-                        self.flash_notice("Drag to add regions. Enter combines them.");
+                        self.flash_notice("Drag to add regions. Enter copies them all.");
                     }
                 }
                 UiAction::Ratio(r) => {

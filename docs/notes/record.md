@@ -171,6 +171,24 @@ step" list scale with the frame interval. Runs: 60 s each with a 5 s pause at 30
 off (console display state 0), so the pictures came through the GDI fallback, as in the Nov 7
 runs. Quiet machine (no builds running; 20-40% CPU from other apps):
 
+**120 FPS review fix (Nov 8).** Above 60 FPS (`encoder::MAX_SOFTWARE_FPS`) only a confirmed
+hardware MFT is used; when there is none, or it refuses the type, the stream is opened at
+60 FPS (hardware first, then software) and the app says so: toast "Recording at 60 FPS",
+"120 FPS needs hardware encoding.", and the HUD summary shows the rate in use
+(`Recorder::fps`). The encoder is now created before the capturer, which runs at the rate in
+use. The encoder name and the H.264 level of the MFT's output type are logged. Measured with
+`rec_probe` (`FPS=120 AWARE=1`, new `FPS=` variable), release, RTX 3060 Ti, NVIDIA H.264
+Encoder MFT, DXGI backend, displays off (one GDI picture, so the encoder saw a still image):
+
+| Region | Result |
+|---|---|
+| 3840x2160 (full HDR monitor) | NVENC refused 120 FPS at SetInputMediaType (0xC00D36B4); before this fix that fell through to the software MFT at 120 FPS. Now 60 FPS on NVENC, level 5.2, 239 frames in 4 s, none dropped |
+| 2560x1440 | 120 FPS on NVENC, level 5.2, 360 frames in 3 s, none dropped, file probes 120.0 FPS |
+| 1920x1080 | 120 FPS on NVENC, level 5.1, 360 frames in 3 s, none dropped |
+
+Not verified: displays on through the real duplication or WGC path with moving content at
+120 FPS (whether NVENC keeps up with full-screen motion), and the software fallback's speed.
+
 | Measure | 60 FPS (run c / run d) | 120 FPS (run d) |
 |---|---|---|
 | Frames written / dropped | 3600 / 0, 3601 / 0 | 7202 / 0 |

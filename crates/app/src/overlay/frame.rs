@@ -861,7 +861,11 @@ impl Overlay {
             return vec![
                 ("Drag", "Measure"),
                 ("Shift", "Straight"),
-                ("Alt", "No Edge Snapping"),
+                if self.snap_edges {
+                    ("Alt", "No Edge Snapping")
+                } else {
+                    ("Alt", "Snap to Edges")
+                },
                 ("Esc", "Deselect"),
                 help,
             ];
@@ -1266,6 +1270,7 @@ impl Overlay {
             if self.beautify_open {
                 let (pos, pivot) = place(beautify_panel::panel_height(), 350.0);
                 let tex = self.beautify_texture();
+                let note = self.beautify_note();
                 let mut b_actions = Vec::new();
                 beautify_panel::panel(
                     ctx,
@@ -1273,6 +1278,7 @@ impl Overlay {
                     pivot,
                     &self.beautify,
                     tex.as_ref(),
+                    note.as_deref(),
                     pal,
                     &mut b_actions,
                 );

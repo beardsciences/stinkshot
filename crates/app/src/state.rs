@@ -50,7 +50,7 @@ pub enum Command {
     EditItem(ItemId),
     PinItem(ItemId),
     /// Overlay finished an image capture.
-    CaptureDone(CaptureOutput),
+    CaptureDone(Box<CaptureOutput>),
     /// Overlay finished selecting a region for a non-image mode.
     RegionChosen {
         purpose: RegionPurpose,
@@ -111,6 +111,9 @@ pub enum RegionPurpose {
 pub struct SourceInfo {
     pub app: String,
     pub window_title: String,
+    /// DPI scale of the monitor the pixels came from, when known (the measure tool's logical
+    /// px readout). Not stored in history.
+    pub scale: Option<f32>,
 }
 
 /// What the user chose to do when finishing an overlay capture.
@@ -133,8 +136,12 @@ pub struct CaptureOutput {
     /// Unannotated pixels of the selection (window fx already applied for window mode).
     pub base: Rgba,
     pub doc: Doc,
-    /// `stinkshot_core::annotate::render(base, doc)`; the overlay produces it.
+    /// `stinkshot_core::annotate::render(base, doc)`; the overlay produces it. With a
+    /// Beautify frame applied, the framed image.
     pub flattened: Rgba,
+    /// Set when a Beautify frame was applied: the flattened image without it. History keeps
+    /// it for re-editing, so a re-edit never frames the frame again.
+    pub unframed: Option<Rgba>,
     /// Virtual-desktop rect that was captured (for repeat-last-region).
     pub rect: PxRect,
     pub action: FinishAction,

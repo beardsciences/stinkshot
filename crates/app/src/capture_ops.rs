@@ -14,6 +14,7 @@ pub fn source_of(win: &WinInfo) -> SourceInfo {
     SourceInfo {
         app: win.process.clone(),
         window_title: win.title.clone(),
+        scale: monitors::at_point(center(win.rect)).map(|m| m.scale),
     }
 }
 
@@ -111,7 +112,9 @@ pub fn monitor_rect_at(p: PxPoint, fallback: PxRect) -> PxRect {
 
 /// Topmost window containing the centre of `rect`, as a source description.
 pub fn source_for_rect(windows: &[WinInfo], rect: PxRect) -> SourceInfo {
-    windows_enum::window_at(windows, center(rect))
+    let mut s = windows_enum::window_at(windows, center(rect))
         .map(source_of)
-        .unwrap_or_default()
+        .unwrap_or_default();
+    s.scale = monitors::at_point(center(rect)).map(|m| m.scale);
+    s
 }

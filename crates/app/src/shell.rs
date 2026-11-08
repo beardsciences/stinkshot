@@ -332,13 +332,43 @@ fn opens_region_overlay(cmd: &Command) -> bool {
     )
 }
 
-/// While the GPU device is still being made the main thread only waits for it. Take forwarded
-/// commands off the IPC channel meanwhile, and when one of them starts with a freeze, freeze
-/// the screen now: the overlay then opens as soon as eframe is up instead of freezing after
-/// it (a capture asked for at launch, e.g. by a hotkey tool or the bench). For the region
-/// overlay the frozen screen goes on display at once in a GDI window (`quick_overlay`),
-/// which takes the first input until the overlay replaces it.
+/// Freeze the screen for `cmd` while the app is still starting, and for the region overlay
+/// put the frozen screen on display at once (`quick_overlay`).
+fn early_freeze_for(cmd: &Command, include_cursor: bool, accent: [u8; 3]) -> Option<EarlyFreeze> {
+    let windows = windows_enum::visible_windows();
+    let frozen = match capture::freeze_all(include_cursor) {
+        Ok(f) => f,
+        Err(e) => {
+            log::debug!("early freeze failed: {e:#}");
+            return None;
+        }
+    };
+    timing::point(format_args!("early freeze done (GPU still starting)"));
+    let quick = opens_region_overlay(cmd)
+        .then(|| {
+            let rects = windows.iter().map(|w| w.rect).collect();
+            quick_overlay::show(&frozen.image, frozen.bounds, rects, accent)
+        })
+        .and_then(|r| r.map_err(|e| log::warn!("quick overlay: {e:#}")).ok());
+    if quick.is_some() {
+        timing::point(format_args!("quick overlay shown"));
+    }
+    Some(EarlyFreeze {
+        at: Instant::now(),
+        frozen,
+        windows,
+        quick,
+    })
+}
+
+/// While the GPU device is still being made the main thread only waits for it. When the
+/// launch's own command (`initial`, e.g. `stinkshot region`) or a command forwarded meanwhile
+/// starts with a freeze, freeze the screen now: the overlay then opens as soon as eframe is up
+/// instead of freezing after it. For the region overlay the frozen screen goes on display at
+/// once in a GDI window (`quick_overlay`), which takes the first input until the overlay
+/// replaces it. Only the first such command gets the early freeze.
 fn prefreeze_while_gpu_starts(
+    initial: Option<&Command>,
     ipc_rx: &Receiver<Vec<String>>,
     gpu: Option<&std::thread::JoinHandle<Option<eframe::egui_wgpu::WgpuSetupExisting>>>,
     include_cursor: bool,
@@ -349,38 +379,19 @@ fn prefreeze_while_gpu_starts(
     let Some(gpu) = gpu else {
         return (queued, early);
     };
+    if let Some(cmd) = initial.filter(|c| freezes_first(c))
+        && !gpu.is_finished()
+    {
+        early = early_freeze_for(cmd, include_cursor, accent);
+    }
     while !gpu.is_finished() {
         match ipc_rx.recv_timeout(Duration::from_millis(5)) {
             Ok(args) => {
-                let cmd = cli::command_from_args(&args);
-                let wants = cmd.as_ref().is_some_and(freezes_first);
-                if wants && early.is_none() {
-                    let windows = windows_enum::visible_windows();
-                    match capture::freeze_all(include_cursor) {
-                        Ok(frozen) => {
-                            timing::point(format_args!("early freeze done (GPU still starting)"));
-                            let quick = cmd
-                                .as_ref()
-                                .is_some_and(opens_region_overlay)
-                                .then(|| {
-                                    let rects = windows.iter().map(|w| w.rect).collect();
-                                    quick_overlay::show(&frozen.image, frozen.bounds, rects, accent)
-                                })
-                                .and_then(|r| {
-                                    r.map_err(|e| log::warn!("quick overlay: {e:#}")).ok()
-                                });
-                            if quick.is_some() {
-                                timing::point(format_args!("quick overlay shown"));
-                            }
-                            early = Some(EarlyFreeze {
-                                at: Instant::now(),
-                                frozen,
-                                windows,
-                                quick,
-                            });
-                        }
-                        Err(e) => log::debug!("early freeze failed: {e:#}"),
-                    }
+                // A launch command that freezes owns the early freeze even if that failed: a
+                // forwarded one must not take it and leave the launch command unfrozen first.
+                let taken = early.is_some() || initial.is_some_and(freezes_first);
+                if !taken && let Some(cmd) = cli::command_from_args(&args).filter(freezes_first) {
+                    early = early_freeze_for(&cmd, include_cursor, accent);
                 }
                 queued.push(args);
             }
@@ -464,6 +475,7 @@ fn run_app(
 
     let accent = resolve_theme(&config).1;
     let (early_args, early_freeze) = prefreeze_while_gpu_starts(
+        initial.as_ref(),
         &ipc_rx,
         gpu.as_ref(),
         config.capture.include_cursor,
@@ -779,7 +791,7 @@ fn fmt_duration(d: Duration) -> String {
 
 /// HUD summary line. A GIF has no audio and is written at the GIF frame rate, so it must not
 /// claim H.264, the MP4 frame rate or audio sources.
-fn record_summary(rc: &stinkshot_core::config::Recording, gif: bool) -> String {
+fn record_summary(rc: &stinkshot_core::config::Recording, gif: bool, fps: u32) -> String {
     if gif {
         return format!(
             "GIF \u{b7} {} FPS \u{b7} Up to {} px Wide \u{b7} No Audio",
@@ -793,7 +805,7 @@ fn record_summary(rc: &stinkshot_core::config::Recording, gif: bool) -> String {
         (false, true) => "System Audio",
         (false, false) => "No Audio",
     };
-    format!("MP4 \u{b7} H.264 \u{b7} {} FPS \u{b7} {}", rc.fps, audio)
+    format!("MP4 \u{b7} H.264 \u{b7} {fps} FPS \u{b7} {}", audio)
 }
 
 fn fmt_bytes(b: u64) -> String {
@@ -914,6 +926,12 @@ impl Shell {
                 crate::gpu::test_loss_plan(&rs.device).map(|n| (rs.device.clone(), n));
         }
 
+        // The launch's own command first: it came before anything forwarded, and when it
+        // freezes, the start-up freeze was taken for it.
+        let launched_with_command = initial.is_some();
+        if let Some(cmd) = initial {
+            shell.pending.push_back(cmd);
+        }
         for args in early_args {
             match cli::command_from_args(&args) {
                 Some(cmd) => shell.pending.push_back(cmd),
@@ -939,9 +957,7 @@ impl Shell {
         if shell.shared.ocr.is_none() {
             log::info!("no OCR language installed; OCR features will report that");
         }
-        if let Some(cmd) = initial {
-            shell.pending.push_back(cmd);
-        } else if welcome {
+        if !launched_with_command && welcome {
             let body = welcome_body(&shell.shared.config.hotkeys.region);
             shell.notify("Stinkshot Is Running", body, false);
         }
@@ -1074,7 +1090,7 @@ impl Shell {
             Command::OpenSettingsAt(section) => self.open_settings(Some(section)),
             Command::EditItem(id) => workers::edit_item(&self.env(), id),
             Command::PinItem(id) => workers::pin_item(&self.env(), id),
-            Command::CaptureDone(out) => self.capture_done(out),
+            Command::CaptureDone(out) => self.capture_done(*out),
             Command::RegionChosen {
                 purpose,
                 rect,
@@ -1318,10 +1334,11 @@ impl Shell {
         let Some((frozen, windows)) = self.freeze() else {
             return;
         };
-        let source = capture_ops::target_from(&windows)
+        let mut source = capture_ops::target_from(&windows)
             .map(|w| capture_ops::source_of(&w))
             .unwrap_or_default();
         let mon = capture_ops::monitor_rect_at(frozen.cursor, frozen.bounds);
+        source.scale = Some(capture_ops::scale_at(mon));
         let base = capture_ops::crop_frozen(&frozen, mon);
         if base.width == 0 || base.height == 0 {
             self.notify(
@@ -1404,6 +1421,7 @@ impl Shell {
             base: img.clone(),
             doc,
             flattened: img,
+            unframed: None,
             rect,
             action: FinishAction::Copy,
             source,
@@ -1431,6 +1449,7 @@ impl Shell {
             // only feeds the re-edit sidecar, which needs shapes): skip a full-size copy.
             base: Rgba::new(0, 0),
             flattened: base,
+            unframed: None,
             doc,
             rect,
             action: FinishAction::Quick,
@@ -1683,8 +1702,8 @@ impl Shell {
         workers::start_recorder(&self.env(), opts);
     }
 
-    fn record_summary(&self, gif: bool) -> String {
-        record_summary(&self.shared.config.recording, gif)
+    fn record_summary(&self, gif: bool, fps: u32) -> String {
+        record_summary(&self.shared.config.recording, gif, fps)
     }
 
     fn record_stop(&mut self) {
@@ -2048,7 +2067,15 @@ impl Shell {
                     webcam: rc.webcam,
                     overlays: rc.show_clicks || rc.show_keys,
                 };
-                let summary = self.record_summary(pending.gif);
+                let summary = self.record_summary(pending.gif, rec.fps());
+                let wanted_fps = rc.fps;
+                if !pending.gif && rec.fps() < wanted_fps {
+                    self.notify(
+                        "Recording at 60 FPS",
+                        format!("{wanted_fps} FPS needs hardware encoding."),
+                        false,
+                    );
+                }
                 let stop_key = crate::hotkeys::display(if pending.gif {
                     &self.shared.config.hotkeys.record_gif
                 } else {
@@ -2275,6 +2302,10 @@ impl Shell {
                 let body = if e.starts_with(crate::update::UNTRUSTED) {
                     log::warn!("update check: {e}");
                     "The release info failed its signature check, so it was ignored.".to_string()
+                } else if e.starts_with(crate::update::UNSIGNED) {
+                    log::info!("update check: {e}");
+                    "The latest release has no signed release info yet. Try again later."
+                        .to_string()
                 } else {
                     errors::report_network_str(
                         "update check",
@@ -2693,14 +2724,16 @@ mod tests {
     #[test]
     fn gif_summary_does_not_claim_h264_or_audio() {
         let rc = stinkshot_core::config::Recording::default();
-        let gif = record_summary(&rc, true);
+        let gif = record_summary(&rc, true, rc.fps);
         assert!(gif.starts_with("GIF"));
         assert!(!gif.contains("H.264"));
         assert!(gif.contains(&format!("{} FPS", rc.gif_fps)));
         assert!(gif.contains("No Audio"));
-        let mp4 = record_summary(&rc, false);
+        let mp4 = record_summary(&rc, false, rc.fps);
         assert!(mp4.contains("H.264"));
         assert!(mp4.contains(&format!("{} FPS", rc.fps)));
+        // The rate in use, not the setting, when 120 FPS fell back to 60.
+        assert!(record_summary(&rc, false, 60).contains("60 FPS"));
     }
 
     #[test]
