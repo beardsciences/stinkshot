@@ -43,6 +43,8 @@ pub enum UiAction {
     Shape(super::ops::ShapeOpt),
     /// The zoom chip: back to the fitted view.
     ZoomFit,
+    /// Add Regions toggle (multi-region capture).
+    ToggleAddRegions,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -274,18 +276,33 @@ pub fn tool_bar(
     }
 }
 
-/// Action bar: Find Sensitive Info, OCR, Pin, Save, Cancel, then the accent Copy button.
-/// `ocr` = an OCR language is installed (otherwise Find Sensitive Info and Copy Text are
-/// disabled and say why); `smart_open` = the Find Sensitive Info panel is showing.
+/// What the action bar shows.
+#[derive(Clone, Copy, Debug)]
+pub struct ActionBarState {
+    /// An OCR language is installed (otherwise Find Sensitive Info and Copy Text are
+    /// disabled and say why).
+    pub ocr: bool,
+    /// The Find Sensitive Info panel is showing.
+    pub smart_open: bool,
+    /// The Add Regions toggle and whether it is on (screen overlay only).
+    pub add_regions: Option<bool>,
+}
+
+/// Action bar: Add Regions (screen overlay), Find Sensitive Info, OCR, Pin, Save, Cancel,
+/// then the accent Copy button.
 pub fn action_bar(
     ctx: &Context,
     pos: Pos2,
     pal: &Palette,
-    ocr: bool,
-    smart_open: bool,
+    st: ActionBarState,
     lifted: bool,
     out: &mut Vec<UiAction>,
 ) -> Rect {
+    let ActionBarState {
+        ocr,
+        smart_open,
+        add_regions,
+    } = st;
     let resp = Area::new(Id::unique("stinkshot-ov-actions"))
         .order(Order::Foreground)
         .fixed_pos(pos)
@@ -293,6 +310,17 @@ pub fn action_bar(
             bar_frame(pal, lifted).show(ui, |ui| {
                 ui.spacing_mut().item_spacing = Vec2::new(2.0, 0.0);
                 ui.horizontal(|ui| {
+                    if let Some(on) = add_regions
+                        && theme::widgets::icon_button(
+                            ui,
+                            Icon::Regions,
+                            "Add Regions (Shift+Drag)",
+                            on,
+                        )
+                        .clicked()
+                    {
+                        out.push(UiAction::ToggleAddRegions);
+                    }
                     let smart_tip = super::smart_redact::button_tip(ocr);
                     let r = ui
                         .add_enabled_ui(ocr, |ui| {
@@ -795,7 +823,7 @@ pub struct ChipState<'a> {
     /// True on the first frame the exact editor is shown (requests focus).
     pub exact_just_opened: bool,
     pub exact_text: &'a mut String,
-    pub purpose: Option<&'static str>,
+    pub purpose: Option<&'a str>,
     /// Aspect/exact chips only make sense while the selection can still be edited.
     pub editable: bool,
     /// Image zoom in percent while the view is zoomed or panned; clicking it fits again.

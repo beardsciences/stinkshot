@@ -456,3 +456,54 @@ The harness's "visible" moved from 120 ms (oversized window) to 167 ms because t
 only visible once correct. Not verified: a layout whose primary monitor's DPI differs from the
 monitor holding most of the desktop (the hidden window is corrected by `set_rect` before it is
 shown, but that path was not exercised on this machine).
+
+## Multi-region capture (Nov 8 2026)
+
+`overlay/multi.rs`. In the screen overlay (Capture mode), with a region selected:
+
+- **Shift+drag outside the selection** adds a region; the previous one keeps an outline and a
+  number badge. Shift+click on a highlighted window or element adds it (hover snapping runs
+  while Shift is held outside the regions). The **Add Regions** toggle (first button of the
+  action bar, two-rectangles icon, screen overlay only) does the same without Shift.
+- During an add gesture Shift does not mean 1:1 (an aspect preset still applies).
+- Clicking an earlier region makes it the active one (handles, nudging, size chip). Esc with
+  several regions removes the active one and activates the previous. The size chip shows
+  "N Regions"; the hint bar says Enter copies all.
+- Picking any tool other than Select, any finish action (Enter, Copy, Save, Pin, Copy Text) or
+  Find Sensitive Info combines the regions (`combine_regions`) and switches the overlay to the
+  editor (`Kind::Annotate`) on the combined picture, so annotations, redaction and crop work
+  across all regions. The result is a normal new capture (`mode` "region", not an edit).
+- Regions are added only while the active region has no annotations (otherwise a notice:
+  "Add regions before annotating.").
+
+Layout decision: regions keep their **relative positions** on a **transparent** canvas, and any
+empty stretch between them (per axis) is squeezed to 16 px (`GAP_PX`). Relative placement keeps
+what was beside or above what (a menu and its dialog, two parts of a form) and lets an arrow
+point from one region to another; squeezing stops two regions on opposite monitors from making a
+mostly empty picture. Stacking was the alternative: simpler to read in a chat, but it loses the
+spatial relation, which is the reason to take several regions of one screen at once. The
+transparent gaps paste cleanly (the clipboard carries alpha; the plain-DIB fallback composites
+on white); in the editor they are drawn over the window background color (`combined`), not over
+the frozen screen.
+
+Tests: `multi::tests` (squeezed gaps and 1:1 pixels, overlap/side by side/clipping, dimming
+around several holes), `hover::tests::scrolling_starts_at_the_outer_document`.
+
+Not verified: the gestures themselves on a real desktop. This session sent no synthetic input
+(the displays were off and input would wake them), so Shift+drag, the toggle, Esc removal and
+the combine-into-editor path are covered by unit tests and a build only. Manual checks:
+
+1. Region, then Shift+drag two more on another monitor: three outlines with badges 1-3, size
+   chip "3 Regions"; Enter copies one picture with the regions in place and 16 px gaps.
+2. Shift+click a window outside the selection: it is added at its window rect.
+3. Toggle Add Regions, drag without Shift: adds; toggle off: a drag replaces the active region.
+4. Click region 1: it gets the handles; resize it; Esc removes it.
+5. With three regions pick Arrow: the editor opens on the combined picture; draw an arrow from
+   region 1 to region 3; Ctrl+S saves a PNG with transparent gaps.
+
+## Scrolling capture picks the page (Nov 8 2026)
+
+In the scrolling-capture overlay the first highlight on a new element chain is the outermost
+UIA `Document` in it (`hover::scroll_target_level`), so one click on a browser page selects the
+web page without the tab strip, address bar or window frame; the wheel still walks the chain.
+Not verified on a real browser (no input to other apps in this session).

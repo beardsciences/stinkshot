@@ -589,11 +589,7 @@ pub fn scroll_capture(env: &Env, rect: PxRect, source: SourceInfo, control: Arc<
             std::thread::sleep(Duration::from_millis(250));
             let outcome = drive::drive(
                 &mut stitcher,
-                &DriveParams {
-                    logical_height: rect.h as f32 / scale,
-                    delay,
-                    max_steps: 800,
-                },
+                &DriveParams::new(rect.h as f32 / scale, delay),
                 || capture::capture_rect(rect, false).map_err(|e| format!("{e:#}")),
                 |notches| input::scroll_at(center, notches),
                 || match control.load(Ordering::Relaxed) {

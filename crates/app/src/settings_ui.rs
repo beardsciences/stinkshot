@@ -1214,8 +1214,8 @@ impl SettingsWindow {
         );
         slider_row(
             ui,
-            "Delay Between Scrolls",
-            "Raise this if the page lazy-loads or animates.",
+            "Minimum Delay Between Scrolls",
+            "Longer waits happen on their own while a page loads.",
             &mut c.scroll_delay_ms,
             30..=1000,
             " ms",
@@ -1344,9 +1344,9 @@ impl SettingsWindow {
             ui,
             "fps",
             "Frame Rate",
-            "Capture frame rate for MP4.",
+            "MP4 frame rate. 120 FPS needs hardware encoding.",
             &mut r.fps,
-            &[(24u32, "24 fps"), (30, "30 fps"), (60, "60 fps")],
+            &[(30u32, "30 FPS"), (60, "60 FPS"), (120, "120 FPS")],
         );
         slider_row(
             ui,
@@ -1472,12 +1472,12 @@ impl SettingsWindow {
             "Lower is smaller.",
             &mut r.gif_fps,
             &[
-                (10u32, "10 fps"),
-                (12, "12 fps"),
-                (15, "15 fps"),
-                (20, "20 fps"),
-                (25, "25 fps"),
-                (30, "30 fps"),
+                (10u32, "10 FPS"),
+                (12, "12 FPS"),
+                (15, "15 FPS"),
+                (20, "20 FPS"),
+                (25, "25 FPS"),
+                (30, "30 FPS"),
             ],
         );
         slider_row(

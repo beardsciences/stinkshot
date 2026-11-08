@@ -157,6 +157,48 @@ Other checks:
 - Desktop tests: all 5 pass (`cargo test -p stinkshot-record --test desktop -- --ignored
   --test-threads=1`), including the new `records_while_the_capture_session_is_warm`.
 
+## Frame rate option, 60 and 120 FPS (Nov 8 2026)
+
+Settings > Recording > Frame Rate offers 30, 60 and 120 FPS ("120 FPS needs hardware
+encoding."); the default stays 60. The recorder already accepted 1..=120 (`opts.fps.clamp`), the
+encoder sets `MF_MT_FRAME_RATE` and a keyframe every 2 s, so only the option was missing. A
+config value outside the list (an older 24) shows as "Custom" and still records at that rate.
+GIF frame rate labels were made Title Case ("15 FPS") on the way.
+
+`av_harness` takes `FPS=60` / `FPS=120` (default 30); its content-pacing buckets and the "late
+step" list scale with the frame interval. Runs: 60 s each with a 5 s pause at 30 s, system audio,
+8 Mbps, hardware encoder "NVIDIA H.264 Encoder MFT (hardware)", DXGI backend. The displays were
+off (console display state 0), so the pictures came through the GDI fallback, as in the Nov 7
+runs. Quiet machine (no builds running; 20-40% CPU from other apps):
+
+| Measure | 60 FPS (run c / run d) | 120 FPS (run d) |
+|---|---|---|
+| Frames written / dropped | 3600 / 0, 3601 / 0 | 7202 / 0 |
+| Probe | 60.01 s, 60.0 fps / 60.03 s, 60.0 fps | 60.03 s, 120.0005 fps |
+| CFR | every pts step 16.667 ms, 0 off grid | every pts step 8.333 ms, 0 off grid |
+| Duplicate frames | 48 / 51 of 3600 | 93 of 7202 |
+| Content steps over 2.1 intervals | 1 (+ the pause jump) / 1 | 1 (+ the pause jump) |
+| A/V offset start / middle / end (ms) | -9.7 / -6.8 / -6.7; -8.9 / -6.6 / -7.0 | -6.6 / -8.1 / -6.6 |
+| Per-beep offsets (30 beeps) | first two beeps -12 to -14, then -8..-6 | -14 once, otherwise -8..-5 |
+| Drift | 2.68 / 1.56 ms/min | -0.06 ms/min |
+| Pause 5 s | pts continuous, offset unchanged after resume | same |
+| Trim 30..50 s | 20.01 s, same offsets (0.0 ms change) | 20.01 s, 0.0 ms change |
+| GIF of the trim | 300 frames, 20.00 s, barcode clean 300/300 | 300 frames, clean 300/300 |
+
+The A/V offset is the same -6..-7 ms as at 30 FPS on Nov 7 (-6.1..-6.8 ms in the sparse run), so
+the higher rates change neither sync nor CFR. Files at 60 s: 8.2 MB at 60 FPS, 12.4 MB at
+120 FPS (8 Mbps target; the moving bar makes every frame different).
+
+Under load the numbers are not like that. Three earlier runs overlapped other sessions' builds
+(CPU 85-100%, up to 15 compiler processes): CFR held in the full recordings, but the recorder
+started up to 12 s late, the content stalled for seconds (the test window itself rendered at
+70-130 fps instead of 220), and audio placement wandered up to +100 ms before the drift
+correction caught up (the known mixer-clock limitation in "A/V test" above). One 60 FPS run with
+a 6.8 s stall at the start has a 6.8 s pts gap (the scheduler's skip after a 2 s stall, by
+design), and one 120 FPS run under full load found only 1 of 30 beeps in its audio. These are
+load effects, not frame-rate effects: the 30 FPS baseline run in the same window was just as
+noisy (A/V offset -8..+64 ms).
+
 ## Contract changes (additive)
 
 - `Recorder::capture_backend(&self) -> &'static str` ("Windows Graphics Capture" or
@@ -164,7 +206,7 @@ Other checks:
 - `primary_monitor_rect() -> Option<PxRect>` free function (used by tests / tools).
 - `decode_all(path, on_video, on_audio)`, `DecodedFrame`, `AudioSink` (doc hidden): decode a
   whole file for measurement tools.
-- Examples: `av_window`, `av_harness` (A/V sync shakedown), `swatch_window` (HDR check),
+- Examples: `av_window`, `av_harness` (A/V sync shakedown; `FPS=` sets the rate), `swatch_window` (HDR check),
   `rec_probe` (logged short recording; `MIC=1`, `CAM=1`), `dup_probe` (duplication errors per
   DPI context and frame delivery), `display_state`, `wake_display` (guarded: only when its own
   window is foreground under the pointer).

@@ -51,7 +51,7 @@ impl Overlay {
                 round_pt(*anchor),
                 round_pt(*cur),
                 self.local_bounds(),
-                self.effective_aspect(shift),
+                self.effective_aspect(shift && !self.adding_region),
             );
             return Some(r);
         }
@@ -203,6 +203,24 @@ impl Overlay {
             ctx.set_cursor_icon(CursorIcon::Crosshair);
             return;
         }
+        // Adding a region: highlight the window or element under the cursor (click adds it).
+        let outside = self.sel.is_some_and(|s| {
+            !s.contains(PxPoint {
+                x: p.0.floor() as i32,
+                y: p.1.floor() as i32,
+            })
+        });
+        if self.add_armed(inp.shift)
+            && outside
+            && self.region_at(p).is_none()
+            && self.tool == Tool::Select
+            && self.handle_under(p, ppp).is_none()
+        {
+            self.update_snap(ctx, shared, p, inp);
+            ctx.set_cursor_icon(CursorIcon::Crosshair);
+            return;
+        }
+        self.hover = None;
         if self.edit.is_some() {
             let over_text = self
                 .edit
@@ -322,6 +340,13 @@ impl Overlay {
             self.snap_sig = sig;
             self.snap_level = 0;
             self.snap_wheel_used = false;
+            // Scrolling capture: start at the page (a browser's document element), so one
+            // click picks the web page without the tabs, address bar or window frame.
+            if matches!(self.kind, Kind::Select(RegionPurpose::Scrolling))
+                && let Some(i) = hover::scroll_target_level(&labels)
+            {
+                self.snap_level = i;
+            }
         }
         if inp.wheel.y != 0.0 {
             self.snap_level =
@@ -518,6 +543,10 @@ impl Overlay {
                 start_sel: sel,
                 start: p,
             };
+            return;
+        }
+        // 4. Multi-region: an earlier region becomes active, Shift (or the toggle) adds one.
+        if !inside && self.press_regions(p, inp.shift) {
             return;
         }
         if !self.annotating() {
@@ -722,12 +751,14 @@ impl Overlay {
                     moved = true;
                 }
                 if inp.released {
+                    // Shift held to add a region is not the 1:1 constraint.
+                    let shift = inp.shift && !self.adding_region;
                     if moved {
                         let r = selection::drag_rect(
                             round_pt(anchor),
                             round_pt(cur),
                             bounds,
-                            self.effective_aspect(inp.shift),
+                            self.effective_aspect(shift),
                         );
                         if r.w >= 1 && r.h >= 1 {
                             self.accept_region(r, shared);
@@ -735,6 +766,7 @@ impl Overlay {
                     } else if let Some(h) = self.hover {
                         self.accept_region(h, shared);
                     }
+                    self.cancel_add();
                 } else {
                     self.drag = Drag::Selecting {
                         anchor,

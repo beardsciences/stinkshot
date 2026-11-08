@@ -143,6 +143,8 @@ pub fn sheet(select_only: bool) -> Sheet {
         ];
         return vec![("Select", select), ("Finish", finish)];
     }
+    let mut select = select;
+    select.push(("Shift+Drag Outside".to_string(), "Add a Region"));
     let tools = TOOL_KEYS
         .iter()
         .map(|(t, k)| (k.name().to_string(), tool_name(*t)))
