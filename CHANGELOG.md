@@ -21,14 +21,19 @@ First public release.
   callout, magnifier inset, spotlight. Annotations stay editable from History.
 - Real redaction (blur, pixelate, solid box) and Find Sensitive Info.
 - Window capture with Windows 11 rounded corners, optional shadow and padded background.
-- Scrolling capture with sticky header and footer handling.
+- Multi-region capture: Shift+drag or Add Regions to combine several regions in one picture.
+- Scrolling capture with sticky header and footer handling, lazy-loading pages and full web
+  pages without the browser frame.
+- QR and barcode reading, Copy as Table from OCR text, a Pick Color tool, a Measure ruler and
+  Beautify frames (background, padding, corners, shadow).
+- CJK and emoji text in annotations and the UI.
 - OCR through Windows.Media.Ocr, offline.
 - Pin to screen.
-- Screen recording to MP4 (hardware H.264, AAC) or GIF, with system audio, microphone,
+- Screen recording to MP4 (hardware H.264, AAC, 30/60/120 FPS) or GIF, with system audio, microphone,
   pause/resume, click and key visualizer, webcam bubble, countdown and trim.
 - History folder with full-text search over OCR text, filters and retention limits.
 - Optional Snipping Tool replacement (Win+Shift+S, Win+Shift+R, PrtSc).
-- CLI for scripts: `stinkshot region|window|full|scroll|ocr|repeat|record|gif|history|settings`,
+- CLI for scripts: `stinkshot region|window|full|scroll|ocr|repeat|record|gif|pick-color|history|settings`,
   and `stinkshot quit` for installers and scripts.
 - Per-user installer (no admin) and a portable zip.
 - Opt-in update check that only trusts release info signed with the project's minisign key.
