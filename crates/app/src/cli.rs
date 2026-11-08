@@ -7,6 +7,7 @@
 //!   stinkshot full --out <file> [--monitor N] [--cursor]
 //!   stinkshot window --out <file>           (foreground window)  headless: no UI, exits
 //!   stinkshot ocr --file <image>            print recognized text to stdout, exits
+//!   stinkshot quit                          ask the running instance to exit and wait (installers)
 //!   stinkshot --version
 
 use std::path::PathBuf;
@@ -26,6 +27,8 @@ pub enum CliAction {
         forward_args: Vec<String>,
     },
     Headless(HeadlessJob),
+    /// Ask the running instance (if any) to quit and wait until it has. Never starts one.
+    QuitRunning,
 }
 
 #[derive(Debug)]
@@ -103,6 +106,8 @@ enum Sub {
     History,
     /// Open the settings window.
     Settings,
+    /// Ask the running instance to exit and wait for it (used by the installer).
+    Quit,
 }
 
 fn command_of(sub: &Sub) -> Command {
@@ -118,6 +123,7 @@ fn command_of(sub: &Sub) -> Command {
         Sub::Gif => Command::RecordGif,
         Sub::History => Command::OpenHistory,
         Sub::Settings => Command::OpenSettings,
+        Sub::Quit => Command::Quit,
     }
 }
 
@@ -146,6 +152,9 @@ fn headless_of(sub: &Sub) -> Option<HeadlessJob> {
 
 fn into_action(cli: Cli, raw_args: Vec<String>) -> CliAction {
     if let Some(sub) = &cli.cmd {
+        if matches!(sub, Sub::Quit) {
+            return CliAction::QuitRunning;
+        }
         if let Some(job) = headless_of(sub) {
             return CliAction::Headless(job);
         }
@@ -374,6 +383,19 @@ mod tests {
             } => assert!(forward_args.is_empty()),
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    #[test]
+    fn quit_never_starts_an_instance() {
+        assert!(matches!(
+            into_action(cli(&["quit"]), args(&["quit"])),
+            CliAction::QuitRunning
+        ));
+        // What the running instance does with the forwarded args.
+        assert!(matches!(
+            command_from_args(&args(&["quit"])),
+            Some(Command::Quit)
+        ));
     }
 
     #[test]

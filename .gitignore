@@ -2,3 +2,5 @@
 *.log
 *.tmp
 /.claude/
+/dist
+/target-dist

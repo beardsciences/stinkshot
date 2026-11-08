@@ -132,6 +132,54 @@ pub fn find_own_window(title: &str) -> Option<stinkshot_platform::Hwnd> {
     None
 }
 
+/// A process handle that can only be waited on. Closed on drop.
+pub struct ProcessWaiter(windows::Win32::Foundation::HANDLE);
+
+impl ProcessWaiter {
+    /// True once the process has exited (or the wait failed); false on timeout.
+    pub fn wait(&self, timeout: std::time::Duration) -> bool {
+        use windows::Win32::Foundation::WAIT_TIMEOUT;
+        use windows::Win32::System::Threading::WaitForSingleObject;
+        let ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
+        // SAFETY: the handle is open for SYNCHRONIZE until drop.
+        unsafe { WaitForSingleObject(self.0, ms) != WAIT_TIMEOUT }
+    }
+}
+
+impl Drop for ProcessWaiter {
+    fn drop(&mut self) {
+        // SAFETY: opened by OpenProcess in `running_instance` and closed exactly once.
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+/// The process behind the running instance's IPC window (`StinkShot.IPC<profile>`, a
+/// message-only window), so `stinkshot quit` can wait for the process itself to end: it lets go
+/// of the single-instance mutex before it has unloaded, and an installer needs the exe free.
+pub fn running_instance() -> Option<ProcessWaiter> {
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FindWindowExW, GetWindowThreadProcessId, HWND_MESSAGE,
+    };
+    let title = format!("StinkShot.IPC{}", stinkshot_core::config::profile_suffix());
+    let t: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: `t` is NUL-terminated and outlives the call.
+    let hwnd =
+        unsafe { FindWindowExW(Some(HWND_MESSAGE), None, PCWSTR::null(), PCWSTR(t.as_ptr())) }
+            .ok()?;
+    let mut pid = 0u32;
+    // SAFETY: the out pointer is a live local.
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    if pid == 0 {
+        return None;
+    }
+    // SAFETY: plain open for waiting; the handle is owned by the returned guard.
+    let h = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }.ok()?;
+    Some(ProcessWaiter(h))
+}
+
 /// Show a window that was created hidden (and activate it).
 pub fn show_window(hwnd: stinkshot_platform::Hwnd) {
     use windows::Win32::Foundation::HWND;

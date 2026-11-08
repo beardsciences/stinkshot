@@ -149,6 +149,7 @@ pub fn run() -> anyhow::Result<()> {
             initial,
             forward_args,
         } => (initial, forward_args),
+        CliAction::QuitRunning => return quit_running(),
     };
 
     // A restart after a GPU device loss waits for the old process to let go of the mutex.
@@ -201,6 +202,45 @@ pub fn run() -> anyhow::Result<()> {
             Err(e)
         }
     }
+}
+
+/// `stinkshot quit`: ask the instance of this profile to exit, then wait until its mutex is
+/// free (it finishes recordings and saves first, up to `QUIT_GRACE`). Exit code 0 when no
+/// instance is left, 1 when it did not answer or did not exit. The installer runs this before
+/// replacing or removing the exe, so a quit restores PrintScreen like a normal exit does.
+fn quit_running() -> anyhow::Result<()> {
+    if let Some(guard) = system::acquire_single_instance() {
+        drop(guard);
+        return Ok(());
+    }
+    let process = sysutil::running_instance();
+    let args = vec!["quit".to_string()];
+    if !(0..30).any(|_| {
+        system::send_to_running_instance(&args) || {
+            std::thread::sleep(Duration::from_millis(100));
+            false
+        }
+    }) {
+        eprintln!("stinkshot: the running instance did not respond");
+        std::process::exit(1);
+    }
+    let deadline = Instant::now() + QUIT_GRACE + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(200));
+        if let Some(guard) = system::acquire_single_instance() {
+            drop(guard);
+            // The mutex goes before the process has unloaded (GPU and COM teardown), and the
+            // exe stays locked until it has.
+            let left = deadline.saturating_duration_since(Instant::now());
+            if process.as_ref().is_some_and(|p| !p.wait(left)) {
+                break;
+            }
+            log::info!("quit: the running instance exited");
+            return Ok(());
+        }
+    }
+    eprintln!("stinkshot: the running instance did not exit");
+    std::process::exit(1);
 }
 
 /// Warm the capture session up again after events that invalidate it (unlock, display change,
@@ -2232,11 +2272,16 @@ impl Shell {
                 }
             }
             Err(e) => {
-                let body = errors::report_network_str(
-                    "update check",
-                    &e,
-                    "The update server did not answer. Try again later.",
-                );
+                let body = if e.starts_with(crate::update::UNTRUSTED) {
+                    log::warn!("update check: {e}");
+                    "The release info failed its signature check, so it was ignored.".to_string()
+                } else {
+                    errors::report_network_str(
+                        "update check",
+                        &e,
+                        "The update server did not answer. Try again later.",
+                    )
+                };
                 if forced {
                     self.notify("Could Not Check for Updates", body, true);
                 }

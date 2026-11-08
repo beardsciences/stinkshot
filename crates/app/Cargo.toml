@@ -4,6 +4,8 @@ description = "Stinkshot: local-first screenshot and screen recording for Window
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 build = "build.rs"
 
 [[bin]]
@@ -30,6 +32,7 @@ clap.workspace = true
 # Blocks on wgpu adapter and device requests in `gpu.rs` (already in the tree via eframe).
 pollster.workspace = true
 ureq.workspace = true
+minisign-verify.workspace = true
 # PNG frames of the About animation's disk cache (already in the tree via eframe and core).
 image.workspace = true
 

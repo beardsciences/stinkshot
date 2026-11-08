@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "product": "stinkshot",
+  "version": "9.9.9",
+  "tag": "v9.9.9",
+  "released": "2026-11-07",
+  "page": "https://code.mccullough.dev/beard/stinkshot/releases/tag/v9.9.9",
+  "files": [
+    {
+      "name": "Stinkshot-9.9.9-x64-portable.zip",
+      "size": 1234,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ]
+}

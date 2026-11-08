@@ -36,9 +36,21 @@ select and annotate in place, and saves every capture to a plain folder you can 
 
 Everything stays on your machine. There are no upload targets and no telemetry.
 
-The only network call Stinkshot can make is an update check against the releases API of the
-project's Forgejo instance. It is off until you turn it on in Settings, Privacy, and you can run it
-manually with "Check now". Nothing about you or your captures is sent.
+The only network call Stinkshot can make is an update check against the project's Forgejo
+releases. It is off until you turn it on in Settings, Privacy, and you can run it manually with
+Check Now. Nothing about you or your captures is sent. Release info is trusted only after its
+minisign signature checks out against the key built into the app, and Stinkshot never downloads
+or runs installers itself. See SECURITY.md.
+
+## Install
+
+- Installer: `Stinkshot-<version>-x64-setup.exe` from the releases page. Installs for your user
+  only (no admin) to `%LOCALAPPDATA%\Programs\Stinkshot`. Silent:
+  `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`, plus `/TASKS=autostart` to start with Windows.
+- Portable: unzip `Stinkshot-<version>-x64-portable.zip` anywhere and run `stinkshot.exe`.
+
+Uninstalling (Settings > Apps, or `unins000.exe /VERYSILENT`) keeps your captures, history and
+settings. Each release has `SHA256SUMS` signed with minisign; SECURITY.md shows how to check it.
 
 ## Hotkeys
 
@@ -83,9 +95,10 @@ stinkshot record
 stinkshot gif
 stinkshot history
 stinkshot settings
+stinkshot quit
 ```
 
-`window --out`, `full --out` and `ocr --file` run headless and exit. The output format follows the
+`quit` asks the running instance to exit and waits for it; it never starts one. `window --out`, `full --out` and `ocr --file` run headless and exit. The output format follows the
 file extension (png, jpg, webp). The others are handy for scripts, AutoHotkey and Stream Deck.
 
 ## Files and config
@@ -131,6 +144,9 @@ and install input hooks, so run it on an interactive session.
 
 The workspace is split into `core` (image, annotation render, config), `stitch`, `history`,
 `platform` (Windows APIs), `record` and `app` (UI). See `docs/ARCHITECTURE.md`.
+
+Release builds (installer, zip, SBOM, checksums, signed update manifest): `scripts\release.ps1`,
+see `docs/RELEASING.md`. Contributing: `CONTRIBUTING.md`. Changes: `CHANGELOG.md`.
 
 ## License
 
