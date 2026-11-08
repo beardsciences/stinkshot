@@ -335,3 +335,28 @@ The client itself reaches `main` 27-46 ms after process creation.
   is tied to the overlay's viewport rather than wgpu's allocator; polling the device after the
   window closed did not release it. Cause not found.
 - Countdown and recording frame transparency were not looked at on screen (the pin was).
+
+## Benchmark re-run (Nov 7 2026, evening)
+
+Full re-run of the benchmark (`docs/benchmark/`, raw data and harness in
+`C:\dev\stinkshot-bench`) for main at b5409a9, with the old build (3d3c876, profile
+`benchbefore`) and the three competitors in the same session. Harness change: "overlay ready"
+replaces "visible" / "settled" as the headline. It is the start of the last unbroken stretch in
+which the tool's overlay is shown (visible, uncloaked, covering a monitor) at the rect it still
+has 600 ms after it first became visible, so an oversized first show or a hide and re-show no
+longer counts (`follow_overlay` in the harness). `verify-baseline.ps1` checks the Run/Keyboard
+keys and the Flameshot config afterwards; `make-results.py` builds `results.json`.
+
+Overlay ready, median / p90, 30 runs: main 220 / 547 (4 slow runs of 30), old build 238 / 254
+(1 of 30), ShareX 644 / 1028, Greenshot 382 / 400 (window message, no process start), Flameshot
+357 / 387 (its monitor picker). Launch to tray 786 -> 32 ms; idle private bytes 620 -> 164 MB;
+full-screen via the instance 1460 -> 168 ms, and the old build's instance capture was stale in
+3 of 3 checks.
+
+Not verified / open:
+
+- The displays were off for the whole run (nobody at the PC), so main took the GDI freeze path
+  and its warm session got no frames. Overlay ready and idle memory with the displays on were
+  not measured in this run; the earlier app-track figure was 400 MB idle private bytes.
+- The slow overlay runs (0.5-0.95 s) are still there for CLI triggers; hotkey and tray
+  triggers were not measured (no synthetic input).
