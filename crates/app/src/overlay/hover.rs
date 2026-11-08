@@ -93,6 +93,14 @@ pub fn valid_snap_indices(rects: &[PxRect], p: PxPoint) -> Vec<usize> {
         .collect()
 }
 
+/// Scrolling capture: the element level to highlight first, the outermost Document in the
+/// chain (innermost first). In Chrome, Edge and Firefox that is the web page without the
+/// browser's tabs and toolbar; an inner document (an iframe, an editor) would scroll only
+/// itself.
+pub fn scroll_target_level(labels: &[stinkshot_platform::uia::ElementLabel]) -> Option<usize> {
+    labels.iter().rposition(|l| l.control == "Document")
+}
+
 /// Next wheel level: scroll up (positive delta) goes outward (parent), down goes inward.
 pub fn cycle_level(level: usize, wheel_delta_y: f32, max_level: usize) -> usize {
     if wheel_delta_y > 0.0 {
@@ -141,6 +149,25 @@ pub fn virtual_to_local(r: PxRect, bounds: PxRect) -> Option<PxRect> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scrolling_starts_at_the_outer_document() {
+        use stinkshot_platform::uia::ElementLabel;
+        let l = |c: &'static str| ElementLabel {
+            control: c,
+            name: String::new(),
+        };
+        let chain = [
+            l("Text"),
+            l("Document"),
+            l("Group"),
+            l("Document"),
+            l("Pane"),
+            l("Window"),
+        ];
+        assert_eq!(scroll_target_level(&chain), Some(3));
+        assert_eq!(scroll_target_level(&[l("Button"), l("Window")]), None);
+    }
 
     #[test]
     fn snap_prefers_valid_element_levels() {

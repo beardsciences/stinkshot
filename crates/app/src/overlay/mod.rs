@@ -37,6 +37,7 @@
 
 mod hover;
 mod keys;
+mod multi;
 mod paint;
 mod render;
 mod selection;
@@ -275,6 +276,15 @@ pub struct Overlay {
 
     // Selection (canvas px). In Annotate mode this is the crop of the displayed image.
     sel: Option<PxRect>,
+    /// Multi-region capture: regions added before the active `sel` (canvas px), see
+    /// `multi.rs`. Combined into one picture before annotating or finishing.
+    extra_regions: Vec<PxRect>,
+    /// Add Regions toggle: a drag outside the selection adds a region without Shift.
+    add_regions: bool,
+    /// The region drag in progress adds a region (the previous one is in `extra_regions`).
+    adding_region: bool,
+    /// The editor shows a combined multi-region picture (transparent gaps).
+    combined: bool,
     /// Canvas px per image px (1.0 outside Annotate mode).
     scale: f32,
     /// Annotate mode: the whole pre-captured image, where its top-left sits on the canvas,
@@ -539,6 +549,10 @@ impl Overlay {
             reveal: None,
             annotate_meta: None,
             sel: None,
+            extra_regions: Vec::new(),
+            add_regions: false,
+            adding_region: false,
+            combined: false,
             scale: 1.0,
             orig: None,
             img_origin: (0.0, 0.0),
@@ -1001,6 +1015,7 @@ impl Overlay {
 
     /// Unannotated pixels of the selection.
     fn ensure_base(&mut self) -> Arc<Rgba> {
+        self.combine_regions();
         if let Some(b) = &self.base {
             return b.clone();
         }
@@ -1451,6 +1466,7 @@ impl Overlay {
                 Drag::Marquee { before, .. } => self.selected = before,
                 _ => {}
             }
+            self.cancel_add();
             self.guides.clear();
             return;
         }
@@ -1475,6 +1491,9 @@ impl Overlay {
         if self.annotating() && (!self.selected.is_empty() || self.tool != Tool::Select) {
             self.selected.clear();
             self.set_tool(Tool::Select);
+            return;
+        }
+        if self.remove_active_region() {
             return;
         }
         let now = Instant::now();
@@ -1657,6 +1676,7 @@ impl Surface for Overlay {
         if self.reveal.is_some() {
             ctx.request_repaint();
         }
+        self.ensure_base_texture(ctx);
         self.frame(ctx, shared)
     }
 }

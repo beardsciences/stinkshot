@@ -332,6 +332,23 @@ pub fn paint_selection_chrome(
     }
 }
 
+/// Number badge at the top-left corner of a region of a multi-region capture.
+pub fn paint_region_badge(painter: &Painter, r: Rect, n: usize, accent: Color32) {
+    let c = Pos2::new(r.min.x + 12.0, r.min.y + 12.0);
+    painter.circle_filled(c, 9.0, accent);
+    painter.text(
+        c,
+        Align2::CENTER_CENTER,
+        n.to_string(),
+        FontId::proportional(11.0),
+        {
+            let [r, g, b, _] = accent.to_array();
+            let t = contrast_text([r, g, b, 255]);
+            Color32::from_rgb(t[0], t[1], t[2])
+        },
+    );
+}
+
 fn dashed_box(painter: &Painter, r: Rect, color: Color32) {
     for s in EShape::dashed_line(
         &[

@@ -8,8 +8,8 @@ use stinkshot_core::annotate;
 
 use super::paint::{
     around, color32, dashed_rect, paint_group_box, paint_guides, paint_loupe, paint_marquee,
-    paint_selected_outline, paint_selection_chrome, paint_shape, paint_shape_handles,
-    paint_spotlight_dim,
+    paint_region_badge, paint_selected_outline, paint_selection_chrome, paint_shape,
+    paint_shape_handles, paint_spotlight_dim,
 };
 use super::*;
 
@@ -587,6 +587,21 @@ impl Overlay {
             && let Some(t) = &self.base_tex
         {
             let (x, y) = self.view.to_screen(self.img_origin);
+            // A combined multi-region picture has transparent gaps: show them neutral, not
+            // as the frozen screen.
+            if self.combined
+                && let Some(o) = &self.orig
+            {
+                let s = kz * self.scale;
+                painter.rect_filled(
+                    Rect::from_min_size(
+                        Pos2::new(x * k, y * k),
+                        Vec2::new(o.width as f32 * s, o.height as f32 * s),
+                    ),
+                    0.0,
+                    pal.layer,
+                );
+            }
             t.paint(
                 &painter,
                 Pos2::new(x * k, y * k),
@@ -596,17 +611,46 @@ impl Overlay {
         }
 
         let preview = self.preview_rect(inp.shift);
-        let clear_px = preview.or(self.sel).or(self.hover);
-        let clear = clear_px.map(|r| self.canvas_rect_pt(r, ppp).intersect(screen));
-        match clear {
-            Some(c) if c.is_positive() => {
-                for r in around(screen, c) {
-                    painter.rect_filled(r, 0.0, pal.overlay_dim);
+        let adding = self.add_armed(inp.shift) || self.adding_region;
+        if !self.extra_regions.is_empty() || (adding && self.hover.is_some()) {
+            // Several regions: dim around all of them (and the window about to be added).
+            let mut holes: Vec<Rect> = self
+                .extra_regions
+                .iter()
+                .chain(preview.as_ref().or(self.sel.as_ref()))
+                .map(|r| self.canvas_rect_pt(*r, ppp))
+                .collect();
+            if adding && let Some(h) = self.hover {
+                holes.push(self.canvas_rect_pt(h, ppp));
+            }
+            for r in multi::dim_except(screen, &holes) {
+                painter.rect_filled(r, 0.0, pal.overlay_dim);
+            }
+        } else {
+            let clear_px = preview.or(self.sel).or(self.hover);
+            let clear = clear_px.map(|r| self.canvas_rect_pt(r, ppp).intersect(screen));
+            match clear {
+                Some(c) if c.is_positive() => {
+                    for r in around(screen, c) {
+                        painter.rect_filled(r, 0.0, pal.overlay_dim);
+                    }
+                }
+                _ => {
+                    painter.rect_filled(screen, 0.0, pal.overlay_dim);
                 }
             }
-            _ => {
-                painter.rect_filled(screen, 0.0, pal.overlay_dim);
-            }
+        }
+        // Earlier regions of a multi-region capture: outline and number.
+        for (i, r) in self.extra_regions.iter().enumerate() {
+            let rp = self.canvas_rect_pt(*r, ppp);
+            paint_selection_chrome(&painter, rp, accent.gamma_multiply(0.7), false, None);
+            paint_region_badge(&painter, rp, i + 1, accent);
+        }
+        if !self.extra_regions.is_empty()
+            && let Some(sel) = preview.or(self.sel)
+        {
+            let n = self.extra_regions.len() + 1;
+            paint_region_badge(&painter, self.canvas_rect_pt(sel, ppp), n, accent);
         }
 
         // Faint reminder of the previous region while nothing is selected yet.
@@ -704,6 +748,13 @@ impl Overlay {
             );
         } else if let Some(h) = self.hover {
             paint_selection_chrome(&painter, self.canvas_rect_pt(h, ppp), accent, false, None);
+        }
+        if adding
+            && self.sel.is_some()
+            && preview.is_none()
+            && let Some(h) = self.hover
+        {
+            dashed_rect(&painter, self.canvas_rect_pt(h, ppp), accent);
         }
     }
 
@@ -834,6 +885,13 @@ impl Overlay {
                 (keys::UNDO.label, "Undo"),
                 ("Ctrl+Wheel", "Zoom"),
                 esc,
+                help,
+            ],
+            (true, Kind::Capture) if !self.extra_regions.is_empty() => vec![
+                ("Enter", "Copy All"),
+                ("Shift+Drag", "Add Region"),
+                ("Click", "Pick Region"),
+                ("Esc", "Remove Region"),
                 help,
             ],
             (true, _) => vec![
@@ -1018,13 +1076,15 @@ impl Overlay {
             let zoom = (!self.view.is_identity() || matches!(self.kind, Kind::Annotate))
                 .then(|| view::percent(self.view, self.scale));
             let mut text = std::mem::take(&mut self.exact_text);
+            let regions = (!self.extra_regions.is_empty())
+                .then(|| format!("{} Regions", self.extra_regions.len() + 1));
             let mut st = ChipState {
                 size,
                 ratio: self.aspect,
                 exact_open: self.exact_open,
                 exact_just_opened: self.exact_just_opened,
                 exact_text: &mut text,
-                purpose: None,
+                purpose: regions.as_deref(),
                 editable,
                 zoom: zoom.filter(|_| self.sel.is_some() && preview.is_none()),
             };
@@ -1074,8 +1134,11 @@ impl Overlay {
                 ctx,
                 Pos2::new(ax * k, ay * k),
                 pal,
-                shared.ocr.is_some(),
-                self.smart_active(),
+                ui::ActionBarState {
+                    ocr: shared.ocr.is_some(),
+                    smart_open: self.smart_active(),
+                    add_regions: matches!(self.kind, Kind::Capture).then_some(self.add_regions),
+                },
                 lifted,
                 actions,
             );

@@ -8,6 +8,7 @@ select and annotate in place, and saves every capture to a plain folder you can 
 ## Features
 
 - Region capture on a frozen snapshot of all monitors, one selection across mixed-DPI displays.
+  Shift+drag adds more regions; they combine into one picture you can annotate across.
 - Magnifier loupe with pixel coordinates and a hex color picker.
 - Window and UI-element snapping through UI Automation. Aspect and size presets, arrow-key nudging.
 - Inline annotation: arrow, line, rectangle, ellipse, pen, highlighter, text, step counters,
@@ -16,10 +17,14 @@ select and annotate in place, and saves every capture to a plain folder you can 
 - Annotations stay editable. Any history item reopens in the same editor.
 - Window capture with Windows 11 rounded corners and alpha, optional drop shadow and padded
   background, cursor hidden by default.
-- Scrolling capture: auto-scroll and stitch, with sticky header and footer handling.
+- Scrolling capture: auto-scroll and stitch, with sticky header and footer handling. Waits out
+  smooth scrolling, spinners and lazy-loading placeholders on its own, and crops the scrollbar.
+  Full web pages: start a scrolling capture and click the page; Stinkshot snaps to the page
+  itself, without the browser's tabs and toolbar (no extension, nothing leaves the PC).
 - OCR with Windows.Media.Ocr: select a region, get the text on the clipboard.
 - Pin any capture to the screen as an always-on-top reference.
-- Screen recording to MP4 (hardware H.264 where available, AAC audio) or size-optimized GIF.
+- Screen recording to MP4 (hardware H.264 where available, AAC audio) at 30, 60 or 120 FPS, or
+  size-optimized GIF.
   System audio and microphone, pause/resume, click and key visualizer, webcam bubble,
   3-2-1 countdown, trim before saving.
 - History: plain image files plus a small index, background OCR, full-text search, filters by app,

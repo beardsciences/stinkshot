@@ -22,6 +22,9 @@ pub enum ShapeOpt {
 impl Overlay {
     pub(super) fn set_tool(&mut self, t: Tool) {
         self.commit_text();
+        if t != Tool::Select {
+            self.combine_regions();
+        }
         self.tool = if t == self.tool && t != Tool::Select {
             Tool::Select
         } else {
@@ -433,6 +436,7 @@ impl Overlay {
             return;
         }
         self.set_sel(r);
+        self.adding_region = false;
         self.set_tool(Tool::Select);
         self.drag = Drag::None;
     }
@@ -492,6 +496,7 @@ impl Overlay {
             return;
         }
         self.commit_text();
+        self.combine_regions();
         let Some(sel) = self.sel else { return };
         let base = self.ensure_base();
         let mut doc = self.doc.clone();
@@ -662,6 +667,12 @@ impl Overlay {
                 UiAction::Eyedropper => self.toggle_eyedropper(),
                 UiAction::Shape(o) => self.apply_shape_opt(o),
                 UiAction::ZoomFit => self.set_view(View::IDENTITY),
+                UiAction::ToggleAddRegions => {
+                    self.add_regions = !self.add_regions;
+                    if self.add_regions {
+                        self.flash_notice("Drag to add regions. Enter combines them.");
+                    }
+                }
                 UiAction::Ratio(r) => {
                     // The size chip ends typing (a resize may move the region origin).
                     self.commit_text();

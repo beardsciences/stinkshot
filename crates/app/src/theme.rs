@@ -681,6 +681,8 @@ pub enum Icon {
     ChevronDown,
     Settings,
     Eyedropper,
+    /// Two regions side by side (multi-region capture).
+    Regions,
 }
 
 /// Icon vector data (24x24 design grid, stroke 1.8) and the painter that draws it.
@@ -763,6 +765,10 @@ mod icons {
                 Path("M8.5 12l2.5 2.5 4.5-5"),
             ],
             Icon::ChevronDown => &[Path("M6 9l6 6 6-6")],
+            Icon::Regions => &[
+                Rect(3.0, 4.0, 10.0, 8.0, 1.5),
+                Rect(11.0, 12.0, 10.0, 8.0, 1.5),
+            ],
             Icon::Eyedropper => &[
                 Path("M13 8l3 3-8 8H5v-3z"),
                 Path("M12 7l5 5M15 4.5a2.1 2.1 0 013 0l1.5 1.5a2.1 2.1 0 010 3L17 11.5 12.5 7z"),

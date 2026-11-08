@@ -77,7 +77,8 @@ The public items in each crate's stub files are the contract. They compile today
   selected (otherwise Ctrl+C copies the image; Enter always does); Ctrl+] / Ctrl+[ forward /
   backward, with Shift to front / back; Ctrl+B bold text; Ctrl+wheel, Ctrl+= / Ctrl+- zoom,
   Ctrl+0 fit, Ctrl+1 100 %, Space or middle drag pans; Shift constrains, Alt disables
-  snapping. F1 or ? toggles the shortcut cheat sheet. Key table: `overlay/keys.rs`
+  snapping. Shift+drag outside the selection (or the Add Regions toggle) adds a region; the
+  regions combine into one picture before annotating or finishing (`overlay/multi.rs`). F1 or ? toggles the shortcut cheat sheet. Key table: `overlay/keys.rs`
   (handling, hints and the cheat sheet all read it).
 - Re-edit: `OverlayMode::Annotate` with the stored base and doc; finishing overwrites the
   history item (`CaptureOutput.editing`).

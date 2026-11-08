@@ -5,7 +5,13 @@
 //! window's ground truth. Scrolling is sent as WM_MOUSEWHEEL messages to this window only:
 //! no system input, the pointer never moves, other windows are never touched.
 //!
-//! `cargo run -p stinkshot --example scroll_harness -- [instant|smooth|slow|all] [DELAY_MS]`
+//! `cargo run -p stinkshot --example scroll_harness -- [instant|smooth|slow|lazy|web|all] [DELAY_MS]`
+//!
+//! Modes: `lazy` shows a skeleton placeholder with a spinner for 400-1200 ms (random per
+//! 100-row block) wherever rows first come into view; `web` is what a browser does to a
+//! long page: smooth scrolling, a 100 px header that collapses to 60 px once the page is
+//! scrolled, and lazy blocks. The default delay is the app's default (120 ms), so a pass
+//! means no tuning was needed.
 
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -24,6 +30,8 @@ use windows::core::{PCWSTR, w};
 const WIN_W: i32 = 800;
 const WIN_H: i32 = 600;
 const HEADER: usize = 60;
+/// `web` mode: header height at the top of the page, before it collapses to `HEADER`.
+const HEADER_BIG: usize = 100;
 const FOOTER: usize = 40;
 const DOC_H: usize = 6000;
 const NOTCH_PX: i32 = 100;
@@ -35,22 +43,82 @@ enum Mode {
     Smooth,
     /// Newly exposed 100-row blocks show a placeholder for 400 ms.
     Slow,
+    /// Newly exposed blocks show a skeleton and a spinner for 400-1200 ms.
+    Lazy,
+    /// Smooth scrolling, collapsing header and lazy blocks.
+    Web,
+}
+
+impl Mode {
+    fn lazy(self) -> bool {
+        matches!(self, Mode::Lazy | Mode::Web)
+    }
+}
+
+/// How long block `b` stays a placeholder.
+fn load_time(mode: Mode, b: usize) -> Duration {
+    match mode {
+        Mode::Slow => Duration::from_millis(400),
+        m if m.lazy() => {
+            let mut s = (b as u32 + 1).wrapping_mul(0x9E37_79B9) ^ 0x5bd1_e995;
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            Duration::from_millis(400 + (s % 801) as u64)
+        }
+        _ => Duration::ZERO,
+    }
+}
+
+/// Skeleton placeholder pixel for document row `dy`, column `x`: three gray bars per
+/// 100-row block on the page background, and a spinner (a rotating arc) at the right.
+fn skeleton(dy: usize, x: usize, w: usize, now_ms: u128) -> u32 {
+    let r = dy % 100;
+    let bar = |y0: usize, y1: usize, frac: usize| {
+        (y0..y1).contains(&r) && x >= 24 && x < 24 + (w - 80) * frac / 10
+    };
+    if bar(18, 34, 7) || bar(48, 64, 5) || bar(76, 88, 6) {
+        return 0x00E6_E6EA;
+    }
+    // `NO_SPINNER=1`: a static skeleton, found only by the placeholder check.
+    static NO_SPINNER: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *NO_SPINNER.get_or_init(|| std::env::var("NO_SPINNER").as_deref() == Ok("1")) {
+        return 0x00FA_FAF8;
+    }
+    let (cx, cy) = (w as f32 - 90.0, 50.0);
+    let (dx, dyf) = (x as f32 - cx, r as f32 - cy);
+    let d = (dx * dx + dyf * dyf).sqrt();
+    if (8.0..11.0).contains(&d) {
+        let a = dyf.atan2(dx);
+        let t = (now_ms % 1000) as f32 / 1000.0 * std::f32::consts::TAU;
+        let rel = (a - t).rem_euclid(std::f32::consts::TAU);
+        if rel < 4.0 {
+            return 0x0040_80E0;
+        }
+    }
+    0x00FA_FAF8
 }
 
 struct Doc {
     w: usize,
     /// header + document + footer, 0x00RRGGBB
     header: Vec<u32>,
+    /// `web` mode: the taller header shown at the top of the page.
+    header_big: Vec<u32>,
     body: Vec<u32>,
     footer: Vec<u32>,
 }
 
 impl Doc {
-    fn truth(&self) -> Rgba {
-        let h = HEADER + DOC_H + FOOTER;
+    fn truth(&self, mode: Mode) -> Rgba {
+        let header = if mode == Mode::Web {
+            &self.header_big
+        } else {
+            &self.header
+        };
+        let h = header.len() / self.w + DOC_H + FOOTER;
         let mut img = Rgba::new(self.w as u32, h as u32);
-        for (i, px) in self
-            .header
+        for (i, px) in header
             .iter()
             .chain(&self.body)
             .chain(&self.footer)
@@ -177,6 +245,18 @@ fn build_doc(w: usize) -> Doc {
             0x00FF_FFFF,
         );
     });
+    let header_big = render(w, HEADER_BIG, |dc, px| {
+        px.fill(0x0020_3040);
+        text(dc, 16, 14, "Stinkshot Scroll Test", f_head, 0x00FF_FFFF);
+        text(
+            dc,
+            16,
+            56,
+            "This header collapses once the page scrolls",
+            f_small,
+            0x00A0_C0E0,
+        );
+    });
     let footer = render(w, FOOTER, |dc, px| {
         px.fill(0x0040_2030);
         text(
@@ -276,6 +356,7 @@ fn build_doc(w: usize) -> Doc {
     Doc {
         w,
         header,
+        header_big,
         body,
         footer,
     }
@@ -348,8 +429,8 @@ fn window_thread(mode: Mode, x: i32, y: i32, shared: Arc<Shared>) {
         let (cw, ch) = (cr.right as usize, cr.bottom as usize);
         assert_eq!(ch, WIN_H as usize);
         let doc = Arc::new(build_doc(cw));
-        let vh = ch - HEADER - FOOTER;
-        let max_pos = (DOC_H - vh) as f32;
+        let vh_min = ch - HEADER - FOOTER;
+        let max_pos = (DOC_H - vh_min) as f32;
         let mut view = View {
             mode,
             target: 0.0,
@@ -376,6 +457,7 @@ fn window_thread(mode: Mode, x: i32, y: i32, shared: Arc<Shared>) {
         shared.hwnd.store(hwnd.0 as isize, Ordering::SeqCst);
         let mut msg = MSG::default();
         let mut last_drawn = (-1.0f32, 0usize);
+        let t_start = Instant::now();
         while !shared.quit.load(Ordering::Relaxed) {
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 DispatchMessageW(&msg);
@@ -385,7 +467,7 @@ fn window_thread(mode: Mode, x: i32, y: i32, shared: Arc<Shared>) {
             if wheel != 0 {
                 view.target =
                     (view.target - wheel as f32 / 120.0 * NOTCH_PX as f32).clamp(0.0, max_pos);
-                if view.mode == Mode::Smooth {
+                if matches!(view.mode, Mode::Smooth | Mode::Web) {
                     view.anim_from = view.pos;
                     view.anim_start = Some(now);
                 } else {
@@ -401,26 +483,38 @@ fn window_thread(mode: Mode, x: i32, y: i32, shared: Arc<Shared>) {
                 }
             }
             let top = view.pos.round() as usize;
-            // slow loading: which blocks are visible, which are loaded
+            let (hh, header) = if view.mode == Mode::Web && top == 0 {
+                (HEADER_BIG, &doc.header_big)
+            } else {
+                (HEADER, &doc.header)
+            };
+            let vh = ch - hh - FOOTER;
+            // lazy loading: which blocks are visible, which are loaded
             let mut loaded_mask = 0usize;
+            let mut animating = false;
             for b in top / 100..=((top + vh - 1) / 100).min(view.seen.len() - 1) {
                 let seen = *view.seen[b].get_or_insert(now);
-                if view.mode != Mode::Slow || now.duration_since(seen) >= Duration::from_millis(400)
-                {
+                if now.duration_since(seen) >= load_time(view.mode, b) {
                     loaded_mask = loaded_mask.wrapping_mul(31).wrapping_add(b + 1);
+                } else {
+                    animating |= view.mode.lazy();
                 }
             }
-            if last_drawn != (view.pos, loaded_mask) {
+            if last_drawn != (view.pos, loaded_mask) || animating {
                 last_drawn = (view.pos, loaded_mask);
-                frame[..HEADER * cw].copy_from_slice(&doc.header);
+                let now_ms = t_start.elapsed().as_millis();
+                frame[..hh * cw].copy_from_slice(header);
                 for r in 0..vh {
                     let dy = top + r;
-                    let row = &mut frame[(HEADER + r) * cw..(HEADER + r + 1) * cw];
-                    let loaded = view.mode != Mode::Slow
-                        || view.seen[dy / 100]
-                            .is_some_and(|s| now.duration_since(s) >= Duration::from_millis(400));
+                    let row = &mut frame[(hh + r) * cw..(hh + r + 1) * cw];
+                    let loaded = view.seen[dy / 100]
+                        .is_some_and(|s| now.duration_since(s) >= load_time(view.mode, dy / 100));
                     if loaded {
                         row.copy_from_slice(&doc.body[dy * cw..(dy + 1) * cw]);
+                    } else if view.mode.lazy() {
+                        for (x, px) in row.iter_mut().enumerate() {
+                            *px = skeleton(dy, x, cw, now_ms);
+                        }
                     } else {
                         row.fill(if (dy / 8).is_multiple_of(2) {
                             0x00E4_E4E4
@@ -451,7 +545,7 @@ fn window_thread(mode: Mode, x: i32, y: i32, shared: Arc<Shared>) {
                     fMask: SIF_ALL,
                     nMin: 0,
                     nMax: DOC_H as i32 - 1,
-                    nPage: vh as u32,
+                    nPage: vh_min as u32,
                     nPos: top as i32,
                     nTrackPos: 0,
                 };
@@ -550,7 +644,7 @@ fn run(mode: Mode, delay_ms: u64) -> anyhow::Result<bool> {
     let rect = PxRect::new(r.left, r.top, r.right - r.left, r.bottom - r.top);
     let cw = shared.client_w.load(Ordering::SeqCst) as u32;
     let doc = shared.doc.lock().unwrap().clone().unwrap();
-    let truth = doc.truth();
+    let truth = doc.truth(mode);
 
     let mut stitcher = Stitcher::new(StitchOptions {
         max_height: 30000,
@@ -561,11 +655,10 @@ fn run(mode: Mode, delay_ms: u64) -> anyhow::Result<bool> {
     let mut capture_ms = Vec::new();
     let out = drive::drive(
         &mut stitcher,
-        &DriveParams {
-            logical_height: rect.h as f32 / mon.scale.max(0.1),
-            delay: Duration::from_millis(delay_ms),
-            max_steps: 800,
-        },
+        &DriveParams::new(
+            rect.h as f32 / mon.scale.max(0.1),
+            Duration::from_millis(delay_ms),
+        ),
         || {
             let t = Instant::now();
             let r = capture::capture_rect(rect, false).map_err(|e| format!("{e:#}"));
@@ -589,13 +682,20 @@ fn run(mode: Mode, delay_ms: u64) -> anyhow::Result<bool> {
             }
         },
         || DriveControl::Run,
-        |_, _| {},
+        |st, _| {
+            if std::env::var("STITCH_LOG").as_deref() == Ok("1") {
+                eprintln!("  pushed: {} frames, height {}", st.frames(), st.height());
+            }
+        },
     );
     let took = t0.elapsed();
     let frames = stitcher.frames();
+    let repairs = stitcher.repairs();
     let img = stitcher.finish();
     let rep = compare(&img, &truth, cw);
     capture_ms.sort_by(f64::total_cmp);
+    let mut settle = out.settle_ms.clone();
+    settle.sort_unstable();
     println!(
         "{mode:?}, delay {delay_ms} ms: {} steps, {frames} frames appended, failed {}, error {:?}, scrolls {:?}, took {:.1} s, capture_rect median {:.1} ms max {:.1} ms",
         out.steps,
@@ -605,6 +705,15 @@ fn run(mode: Mode, delay_ms: u64) -> anyhow::Result<bool> {
         took.as_secs_f64(),
         capture_ms[capture_ms.len() / 2],
         capture_ms[capture_ms.len() - 1]
+    );
+    println!(
+        "  settle median {} ms max {} ms; {} captures; held for placeholders {}; timeouts {}; retried {}; stitch repairs {repairs}",
+        settle.get(settle.len() / 2).copied().unwrap_or(0),
+        settle.last().copied().unwrap_or(0),
+        out.captures,
+        out.placeholder_waits,
+        out.settle_timeouts,
+        out.retried,
     );
     println!("  {}", rep.line);
     if std::env::var("KEEP").as_deref() == Ok("1") {
@@ -622,8 +731,29 @@ fn run(mode: Mode, delay_ms: u64) -> anyhow::Result<bool> {
     Ok(rep.ok)
 }
 
+/// `STITCH_LOG=1`: print the stitcher's and driver's debug lines.
+struct StderrLog(Instant);
+
+impl log::Log for StderrLog {
+    fn enabled(&self, m: &log::Metadata) -> bool {
+        m.target().starts_with("stinkshot_stitch")
+    }
+    fn log(&self, r: &log::Record) {
+        if self.enabled(r.metadata()) {
+            eprintln!("[{:8.3}] {}", self.0.elapsed().as_secs_f64(), r.args());
+        }
+    }
+    fn flush(&self) {}
+}
+
 fn main() -> anyhow::Result<()> {
     stinkshot_platform::dpi::init();
+    if std::env::var("STITCH_LOG").as_deref() == Ok("1") {
+        let l: &'static StderrLog = Box::leak(Box::new(StderrLog(Instant::now())));
+        if log::set_logger(l).is_ok() {
+            log::set_max_level(log::LevelFilter::Debug);
+        }
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let which = args.first().map_or("all", |s| s.as_str());
     let delay: u64 = args.get(1).map_or(120, |s| s.parse().unwrap());
@@ -631,7 +761,15 @@ fn main() -> anyhow::Result<()> {
         "instant" => vec![Mode::Instant],
         "smooth" => vec![Mode::Smooth],
         "slow" => vec![Mode::Slow],
-        _ => vec![Mode::Instant, Mode::Smooth, Mode::Slow],
+        "lazy" => vec![Mode::Lazy],
+        "web" => vec![Mode::Web],
+        _ => vec![
+            Mode::Instant,
+            Mode::Smooth,
+            Mode::Slow,
+            Mode::Lazy,
+            Mode::Web,
+        ],
     };
     let _ = PCWSTR::null();
     let mut all = true;

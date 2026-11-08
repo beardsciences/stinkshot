@@ -5,6 +5,8 @@
 //!
 //! `cargo run -p stinkshot-record --example av_harness --release -- OUT_DIR [SECONDS [PAUSE_AT PAUSE_LEN]]`
 //!
+//! `FPS=60` (or 120) sets the recording frame rate (default 30).
+//!
 //! Every file it writes is deleted at the end unless `KEEP=1` is set (the recording contains
 //! the system audio mix).
 
@@ -25,7 +27,13 @@ use windows::core::w;
 
 const W: i32 = 640;
 const H: i32 = 400;
-const FPS: u32 = 30;
+/// Recording frame rate: `FPS` environment variable, default 30.
+fn fps() -> u32 {
+    std::env::var("FPS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30)
+}
 
 #[derive(Default)]
 struct WinLog {
@@ -156,7 +164,8 @@ fn analyze(path: &Path, log: &WinLog, label: &str) -> anyhow::Result<Sync> {
         onsets.len()
     );
     // CFR
-    let step = 10_000_000 / FPS as i64;
+    let step = 10_000_000 / fps() as i64;
+    let step_ms = 1000 / fps() as i64;
     let mut bad_pts = 0;
     let (mut dmin, mut dmax) = (i64::MAX, i64::MIN);
     for p in frames.windows(2) {
@@ -188,24 +197,34 @@ fn analyze(path: &Path, log: &WinLog, label: &str) -> anyhow::Result<Sync> {
         } else {
             dup_run = 0;
         }
-        let b = match d {
-            0 => 0,
-            1..=24 => 1,
-            25..=45 => 2,
-            46..=70 => 3,
-            71..=1000 => 4,
-            _ => 5,
+        // buckets in frame intervals: <0.75, 0.75-1.4, 1.4-2.1, 2.1 s.. (as 30 fps: 24/45/70 ms)
+        let b = if d == 0 {
+            0
+        } else if d * 4 < step_ms * 3 {
+            1
+        } else if d * 10 <= step_ms * 14 {
+            2
+        } else if d * 10 <= step_ms * 21 {
+            3
+        } else if d <= 1000 {
+            4
+        } else {
+            5
         };
         hist[b] += 1;
-        if d > 70 {
+        if d * 10 > step_ms * 21 {
             big.push((i + 1, d, p[1].pts as f64 / 1e7));
         }
     }
     println!(
-        "  content step histogram: dup {} | 1-24ms {} | 25-45ms {} | 46-70ms {} | 71-1000ms {} | >1s {}",
+        "  content step histogram (frame intervals of {step_ms} ms): dup {} | <0.75 {} | 0.75-1.4 {} | 1.4-2.1 {} | 2.1 to 1 s {} | >1s {}",
         hist[0], hist[1], hist[2], hist[3], hist[4], hist[5]
     );
-    println!("  duplicates {dups}, longest duplicate run {max_dup_run}, steps > 70 ms: {big:?}");
+    println!(
+        "  duplicates {dups}, longest duplicate run {max_dup_run}, steps > 2.1 intervals: {} {:?}",
+        big.len(),
+        &big[..big.len().min(40)]
+    );
     // Per-frame video lateness c = pts - render time of the content it shows, for frames
     // whose content changed (a duplicate's c only grows). The median over +-1 s is the
     // typical delay from screen to video timeline around a beep.
@@ -308,7 +327,8 @@ fn analyze(path: &Path, log: &WinLog, label: &str) -> anyhow::Result<Sync> {
         .collect();
     if !fl.is_empty() {
         println!(
-            "  flash-frame check (audio onset minus first white frame, ms, 33 ms resolution): first {:.1}, last {:.1}, min {:.1}, max {:.1}",
+            "  flash-frame check (audio onset minus first white frame, ms, {} ms resolution): first {:.1}, last {:.1}, min {:.1}, max {:.1}",
+            step_ms,
             fl[0],
             fl[fl.len() - 1],
             fl.iter().cloned().fold(f64::MAX, f64::min),
@@ -411,14 +431,14 @@ fn main() -> anyhow::Result<()> {
         (r.right - r.left) & !1,
         (r.bottom - r.top) & !1,
     );
-    println!("test window {region:?} on {}", mon.name);
+    println!("test window {region:?} on {}, {} fps", mon.name, fps());
 
     let out = dir.join("av.mp4");
     let started = Instant::now();
     let rec = Recorder::start(RecordOptions {
         region,
         output: out.clone(),
-        fps: FPS,
+        fps: fps(),
         bitrate_kbps: 8000,
         system_audio: true,
         microphone: false,
