@@ -32,13 +32,19 @@
 //!
 //! Module layout: `selection` (rect math), `shapes` (annotation math), `snap` (guides),
 //! `view` (zoom/pan), `textedit` (caret logic), `undo`, `hover` (snap picking), `render`
-//! (worker + tiled textures), `paint` (painter drawing), `ui` (egui widgets). This file owns
-//! the state machine.
+//! (worker + tiled textures), `paint` (painter drawing), `ui` (egui widgets), `panels` (shared
+//! panel look), `scan` (Codes and Text), `beautify_panel`, `picker` (color picker), `measure`
+//! (ruler). This file owns the state machine.
 
+mod beautify_panel;
 mod hover;
 mod keys;
+mod measure;
 mod paint;
+mod panels;
+mod picker;
 mod render;
+mod scan;
 mod selection;
 mod shapes;
 mod smart_redact;
@@ -187,6 +193,10 @@ enum Drag {
     },
     /// Selecting text with the pointer while typing on the image.
     TextSelect,
+    /// Dragging the Measure tool's ruler from `a` (image px).
+    Measure {
+        a: PtF,
+    },
 }
 
 struct Finishing {
@@ -235,6 +245,12 @@ struct Keys {
     hex: bool,
     help: bool,
     eyedropper: bool,
+    /// Q: Codes and Text panel.
+    scan: bool,
+    /// F: Beautify panel.
+    beautify: bool,
+    /// Tab: next color format (picker).
+    tab: bool,
     bold: bool,
     /// Z-order: +1 forward, -1 backward, +2 to front, -2 to back.
     order: i32,
@@ -375,6 +391,14 @@ pub struct Overlay {
     help_open: bool,
     /// Find Sensitive Info scan or review panel (see `smart_redact.rs`).
     smart: Option<smart_redact::SmartRedact>,
+    /// Codes and Text panel (see `scan.rs`).
+    scan: Option<scan::Scan>,
+    /// Beautify panel (see `beautify_panel.rs`) and its settings (saved on close / finish).
+    beautify_open: bool,
+    beautify: stinkshot_core::beautify::Beautify,
+    beautify_preview: Option<beautify_panel::Preview>,
+    /// The Measure tool's ruler ends (image px), shown while the tool is active.
+    ruler: Option<(PtF, PtF)>,
     /// Last C (copy color) result, shown in the loupe plate for a moment.
     hex_flash: Option<HexFlash>,
     /// Opened by a tray icon click (see `OverlayRequest::from_tray_click`).
@@ -609,6 +633,11 @@ impl Overlay {
             }),
             help_open: false,
             smart: None,
+            scan: None,
+            beautify_open: false,
+            beautify: cfg.beautify.clone(),
+            beautify_preview: None,
+            ruler: None,
             hex_flash: None,
             from_tray_click,
             tray_double_pending: false,
@@ -984,6 +1013,7 @@ impl Overlay {
             e.patch = None;
         }
         shapes::translate_shapes(&mut self.clipboard, dx, dy);
+        self.ruler = None;
     }
 
     /// Annotate mode: the whole image as a crop bounds rect (image px).
@@ -1195,6 +1225,9 @@ impl Overlay {
             if plain {
                 k.hex = keys::COPY_COLOR.pressed(i);
                 k.eyedropper = keys::EYEDROPPER.pressed(i);
+                k.scan = keys::SCAN.pressed(i);
+                k.beautify = keys::BEAUTIFY.pressed(i);
+                k.tab = i.key_pressed(Key::Tab) && !i.modifiers.shift;
                 for (tool, key) in keys::TOOL_KEYS {
                     if i.key_pressed(key) {
                         k.tool = Some(tool);
@@ -1250,11 +1283,23 @@ impl Overlay {
             return;
         }
         if k.hex {
-            self.copy_hex();
+            self.copy_hex(shared);
         }
 
         if k.esc {
             self.on_escape(shared);
+            return;
+        }
+        if self.picker_mode() {
+            if k.tab {
+                self.cycle_picker_format(shared);
+            }
+            if (k.enter || k.copy_event)
+                && let Some(p) = self.last_pointer
+            {
+                let c = self.sample_at(p);
+                self.pick_and_close(shared, c);
+            }
             return;
         }
         // Find Sensitive Info decides Enter and Ctrl+C first (they must not copy the
@@ -1318,7 +1363,17 @@ impl Overlay {
                 return;
             }
             if k.smart {
+                self.scan = None;
+                if self.beautify_open {
+                    self.close_beautify(shared);
+                }
                 self.toggle_smart_redact(ctx, shared);
+            }
+            if k.scan {
+                self.toggle_scan(ctx, shared);
+            }
+            if k.beautify {
+                self.toggle_beautify(shared);
             }
             if k.undo {
                 self.do_undo();
@@ -1465,6 +1520,13 @@ impl Overlay {
         if self.smart.take().is_some() {
             return;
         }
+        if self.scan.take().is_some() {
+            return;
+        }
+        if self.beautify_open {
+            self.close_beautify(shared);
+            return;
+        }
         if self.popup.is_some() {
             self.popup = None;
             return;
@@ -1497,28 +1559,19 @@ impl Overlay {
     }
 
     fn cancel(&mut self, shared: &mut Shared) {
+        // Beautify choices are remembered even when the capture is dropped.
+        self.persist_beautify(shared);
         shared.outbox.push(Command::Cancelled);
         self.closed = true;
     }
 
-    /// C: copy the hex color under the cursor. Feedback stays inside the overlay (loupe
-    /// plate, or the hint bar when the loupe is hidden) instead of a toast.
-    fn copy_hex(&mut self) {
+    /// C: copy the color under the cursor in the picker's format (hex by default).
+    /// Feedback stays inside the overlay (loupe plate, or the hint bar when the loupe is
+    /// hidden) instead of a toast.
+    fn copy_hex(&mut self, shared: &mut Shared) {
         let Some(p) = self.last_pointer else { return };
         let c = self.sample_at(p);
-        let hex = hover::hex_string(c);
-        let ok = match clipboard::set_text(&hex) {
-            Ok(()) => true,
-            Err(e) => {
-                log::warn!("copy color: {e:#}");
-                false
-            }
-        };
-        self.hex_flash = Some(HexFlash {
-            hex,
-            ok,
-            at: Instant::now(),
-        });
+        self.copy_color(shared, c);
     }
 
     /// Copied-color feedback text while it is fresh.

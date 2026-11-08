@@ -5,6 +5,9 @@
 //! RGBA8, row-major, tightly packed (`data.len() == width * height * 4`).
 
 pub mod annotate;
+pub mod beautify;
+pub mod codes;
+pub mod color;
 pub mod config;
 pub mod fonts;
 pub mod frame;
@@ -13,6 +16,7 @@ pub mod image;
 pub mod naming;
 pub mod redact;
 pub mod sensitive;
+pub mod table;
 
 pub use geom::{PtF, PxPoint, PxRect, RectF};
 pub use image::Rgba;

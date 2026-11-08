@@ -64,7 +64,7 @@ const SECTIONS: [(Section, &str); 8] = [
 /// Hotkey rows are the shared capture actions (one naming source, `actions.rs`).
 use crate::actions::Action as HotkeyField;
 
-const HOTKEY_FIELDS: [HotkeyField; 8] = HotkeyField::ALL;
+const HOTKEY_FIELDS: [HotkeyField; HotkeyField::ALL.len()] = HotkeyField::ALL;
 
 // ---------------------------------------------------------------------------------------
 // Pure helpers

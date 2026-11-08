@@ -2280,3 +2280,114 @@ fn sidecar_base_has_redactions_baked_in() {
     assert_eq!(stored.pixel(58, 38), base.pixel(58, 38));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn fonts_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into()))
+        .join("Fonts")
+}
+
+/// Mixed-script text renders real glyphs (fallback faces), not missing-glyph boxes: the
+/// same string drawn with fallbacks differs from the primary-only render, every glyph leaves
+/// ink, and the ink stays inside the measured line width (caret layout agrees).
+#[test]
+fn cjk_and_emoji_text_renders_with_fallback_fonts() {
+    if !fonts_dir().join("msyh.ttc").exists() || !fonts_dir().join("seguiemj.ttf").exists() {
+        eprintln!("skipped: CJK / emoji fonts not installed");
+        return;
+    }
+    let f = test_fonts();
+    let bare = Fonts::from_bytes(f.regular_bytes.to_vec(), f.bold_bytes.to_vec()).unwrap();
+    let text = "\u{4e2d}\u{6587} \u{65e5}\u{672c}\u{8a9e} \u{d55c}\u{ad6d}\u{c5b4} \u{1f680}";
+    let mut d = Doc::new(400, 60);
+    d.add(
+        ShapeKind::Text {
+            pos: pt(4.0, 4.0),
+            text: text.into(),
+            size: 28.0,
+            background: None,
+            bold: false,
+        },
+        style([0, 0, 0, 255], 2.0),
+    );
+    let with = render(&white(400, 60), &d, &f);
+    let without = render(&white(400, 60), &d, &bare);
+    let ink = |img: &Rgba| img.data.chunks_exact(4).filter(|p| p[0] < 128).count();
+    assert!(ink(&with) > 400, "{}", ink(&with));
+    assert_ne!(with.data, without.data);
+    let w = f.line_width(text, 28.0, false);
+    let right = (0..400u32)
+        .rev()
+        .find(|&x| (0..60u32).any(|y| with.pixel(x, y)[0] < 128))
+        .unwrap();
+    assert!((right as f32) <= 4.0 + w + 2.0, "{right} vs {w}");
+}
+
+/// Visual check of mixed scripts and Beautify:
+/// `STINKSHOT_EDITOR_SHOWCASE=<dir> cargo test -p stinkshot-core editor_showcase -- --ignored`.
+#[test]
+#[ignore]
+fn editor_showcase() {
+    let Some(dir) = std::env::var_os("STINKSHOT_EDITOR_SHOWCASE") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = test_fonts();
+    let mut d = Doc::new(520, 200);
+    let lines: [(&str, Option<[u8; 4]>); 3] = [
+        (
+            "English \u{4e2d}\u{6587} \u{65e5}\u{672c}\u{8a9e}\u{306e}\u{6587}",
+            None,
+        ),
+        (
+            "\u{d55c}\u{ad6d}\u{c5b4} \u{c548}\u{b155}\u{d558}\u{c138}\u{c694}",
+            Some([255, 138, 61, 255]),
+        ),
+        (
+            "Ship it \u{1f680}\u{1f600}\u{1f44d}\u{1f3fd} \u{2764}\u{fe0f} \u{2714}",
+            None,
+        ),
+    ];
+    for (i, (s, bg)) in lines.into_iter().enumerate() {
+        d.add(
+            ShapeKind::Text {
+                pos: pt(16.0, 16.0 + i as f32 * 60.0),
+                text: s.into(),
+                size: 30.0,
+                background: bg,
+                bold: i == 0,
+            },
+            style([20, 20, 20, 255], 2.0),
+        );
+    }
+    let img = render(&white(520, 200), &d, &f);
+    let png = crate::image::ImageFormat::Png;
+    img.save(&dir.join("cjk.png"), png, 90).unwrap();
+    use crate::beautify::{Aspect, BackgroundKind, Beautify};
+    let variants = [
+        ("beautify_gradient.png", Beautify::default()),
+        (
+            "beautify_blurred_169.png",
+            Beautify {
+                background: BackgroundKind::Blurred,
+                aspect: Aspect::Wide,
+                ..Default::default()
+            },
+        ),
+        (
+            "beautify_solid_square.png",
+            Beautify {
+                background: BackgroundKind::Solid,
+                color: "#1f1f23".into(),
+                aspect: Aspect::Square,
+                padding: 40,
+                ..Default::default()
+            },
+        ),
+    ];
+    for (name, b) in variants {
+        crate::beautify::apply(&img, &b)
+            .save(&dir.join(name), png, 90)
+            .unwrap();
+    }
+}

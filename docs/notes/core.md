@@ -108,6 +108,34 @@ All `todo!()` bodies in `crates/core` are implemented. `cargo test -p stinkshot-
     leading space); render and caret share `text_layout`.
   - `config::Editor::recent_colors` (hex, newest first) and `config::Editor::tool_styles`
     (`BTreeMap<String, ToolStyle { color, width }>`), both empty by default.
+- Editor tools (Nov 8 2026), all additive with serde defaults (app side in app-overlay.md):
+  - `fonts`: per-character fallback. Order Microsoft YaHei, Yu Gothic, Malgun Gothic,
+    Microsoft JhengHei, Segoe UI Emoji, Segoe UI Symbol; a line with kana prefers Yu Gothic
+    (Japanese Han forms), a line with Hangul prefers Malgun. Bold uses each family's bold file
+    when present. Files load on first need (2-20 MB each, read once per process, leaked as
+    `&'static [u8]` and shared with egui; nothing loads for Latin-only text, so idle memory is
+    unchanged). Fallback glyphs are scaled to the primary's em size; kerning only within one
+    face. Zero-width modifiers (ZWJ, variation selectors, tags, emoji skin tones) are skipped.
+    New: `Fonts::missing_glyphs`, `face_name_for`, `fallback_for_char` (+ `FallbackFont`),
+    `fonts::is_ignorable`. `Fonts` has a private field now (only `from_bytes` / `load_system`
+    construct it; `from_bytes` has no fallbacks). Emoji draw monochrome in the text color
+    (outlines only), and ZWJ sequences draw as their parts.
+  - `codes`: `decode(&Rgba) -> Vec<Code { format, text, rect }>` via rxing 0.9 (decoders only,
+    no image / network features); alpha composited over white, TryHarder + AlsoInverted, a 2x
+    pass for images up to 1200 px when nothing is found. `Code::is_url`.
+  - `table`: `detect(&[TextWord]) -> Option<Table>`, `detect_lines`, `Table::to_tsv`.
+  - `color`: `ColorFormat` (Hex / Rgb / Hsl, `format`, config names), `to_hsl`.
+  - `beautify`: `Beautify` settings, `apply`, `layout`, `preview_thumbnail`, presets
+    `GRADIENTS` / `SOLIDS`, `Aspect`, `BackgroundKind`.
+  - `config`: `Hotkeys::pick_color` (""), `Editor::picker_format` ("hex"),
+    `Editor::picker_recent`, `Editor::beautify`.
+  - Tests: CJK / Japanese / Korean / emoji strings have no missing glyphs (skipped when the
+    fonts are absent), script-based face choice, mixed-line layout vs measure, CJK render
+    differs from primary-only and stays inside the measured width; codes round trip (QR URL,
+    Unicode + inverted, EAN-13, Code 128, small QR via the 2x pass, blank); table layouts;
+    HSL edge cases; beautify layout / solid / gradient / shadow / blurred / serde / preview.
+    Ignored: `codes_perf`, `beautify_perf`, `editor_showcase` (writes PNGs to
+    `STINKSHOT_EDITOR_SHOWCASE`).
 - No signatures changed.
 
 ## Contract requests
@@ -126,6 +154,8 @@ None.
 - Sidecar folder `.stinkshot` is a dot-folder but is not given the Windows hidden attribute
   (no Win32 calls in core). History/platform may set it.
 - Segoe UI Variable bold is not used; step digits use Segoe UI Bold.
+- No text shaping: complex scripts (Arabic joining, Indic reordering) and emoji ZWJ sequences
+  draw glyph by glyph. CJK, Hangul (precomposed) and single emoji are fine.
 
 ## Manual verification checklist (needs a real desktop)
 

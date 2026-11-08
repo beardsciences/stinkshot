@@ -17,3 +17,8 @@ image.workspace = true
 tiny-skia.workspace = true
 ab_glyph.workspace = true
 directories.workspace = true
+rxing.workspace = true
+
+[dev-dependencies]
+# Tests draw codes to decode them again.
+rxing = { workspace = true, features = ["encoders"] }

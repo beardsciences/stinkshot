@@ -271,6 +271,7 @@ fn freezes_first(cmd: &Command) -> bool {
         Command::CaptureRegion
             | Command::CaptureScrolling
             | Command::OcrRegion
+            | Command::PickColor
             | Command::CaptureWindow
     )
 }
@@ -973,6 +974,9 @@ impl Shell {
                 }
             }
             Command::RepeatLastRegion => self.repeat_last_region(),
+            Command::PickColor => {
+                self.begin_overlay(OverlayMode::SelectRegion(RegionPurpose::PickColor))
+            }
             Command::RecordMp4 => self.record_command(false),
             Command::RecordGif => self.record_command(true),
             Command::OpenHistory => self.open_history(),
@@ -1460,6 +1464,8 @@ impl Shell {
 
     fn region_chosen(&mut self, purpose: RegionPurpose, rect: PxRect, source: SourceInfo) {
         match purpose {
+            // The picker copies inside the overlay and never chooses a region.
+            RegionPurpose::PickColor => {}
             RegionPurpose::Ocr => {
                 let cached = self.freeze_cache.take();
                 match cached {

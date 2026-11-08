@@ -6,7 +6,7 @@ use egui::Key;
 use super::shapes::Tool;
 
 /// Plain-letter tool shortcuts (no Ctrl / Alt), in toolbar order.
-pub const TOOL_KEYS: [(Tool, Key); 15] = [
+pub const TOOL_KEYS: [(Tool, Key); 16] = [
     (Tool::Select, Key::V),
     (Tool::Arrow, Key::A),
     (Tool::Line, Key::L),
@@ -22,6 +22,7 @@ pub const TOOL_KEYS: [(Tool, Key); 15] = [
     (Tool::Magnifier, Key::M),
     (Tool::Callout, Key::O),
     (Tool::Spotlight, Key::S),
+    (Tool::Measure, Key::U),
 ];
 
 /// Palette color keys 1-8.
@@ -77,6 +78,10 @@ pub const REDO: Chord = Chord::ctrl(Key::Y, "Ctrl+Y");
 pub const COPY_COLOR: Chord = Chord::plain(Key::C, "C");
 /// Pick a color from the image (eyedropper).
 pub const EYEDROPPER: Chord = Chord::plain(Key::I, "I");
+/// Codes and Text panel (QR codes, barcodes, Copy as Table).
+pub const SCAN: Chord = Chord::plain(Key::Q, "Q");
+/// Beautify panel (frame for sharing).
+pub const BEAUTIFY: Chord = Chord::plain(Key::F, "F");
 pub const DUPLICATE: Chord = Chord::ctrl(Key::D, "Ctrl+D");
 /// Copy / paste shapes inside the editor (Ctrl+C copies the image when no shape is selected).
 pub const COPY: Chord = Chord::ctrl(Key::C, "Ctrl+C");
@@ -163,6 +168,8 @@ pub fn sheet(select_only: bool) -> Sheet {
         ("Double-Click".to_string(), "Edit Text"),
         (BOLD.label.to_string(), "Bold Text"),
         (FIND_SENSITIVE.label.to_string(), "Find Sensitive Info"),
+        (SCAN.label.to_string(), "Read Codes and Text"),
+        (BEAUTIFY.label.to_string(), "Beautify"),
         ("Esc".to_string(), "Deselect, Then Cancel"),
     ];
     let arrange = vec![
@@ -249,6 +256,8 @@ mod tests {
             BOLD,
             ZOOM_FIT,
             ZOOM_ACTUAL,
+            SCAN,
+            BEAUTIFY,
         ] {
             let expect = if c.ctrl {
                 format!("Ctrl+{}", c.key.name())
@@ -260,7 +269,11 @@ mod tests {
         // Plain-letter chords must not collide with tool letters.
         assert!(tool_for_key(COPY_COLOR.key).is_none());
         assert!(tool_for_key(EYEDROPPER.key).is_none());
-        assert_ne!(EYEDROPPER.key, COPY_COLOR.key);
+        assert!(tool_for_key(SCAN.key).is_none());
+        assert!(tool_for_key(BEAUTIFY.key).is_none());
+        let mut plain = [EYEDROPPER.key, COPY_COLOR.key, SCAN.key, BEAUTIFY.key].map(|k| k.name());
+        plain.sort_unstable();
+        assert!(plain.windows(2).all(|w| w[0] != w[1]));
     }
 
     #[test]
@@ -328,6 +341,8 @@ mod tests {
             "Enter",
             "Arrows",
             EYEDROPPER.label,
+            SCAN.label,
+            BEAUTIFY.label,
             DUPLICATE.label,
             COPY.label,
             PASTE.label,

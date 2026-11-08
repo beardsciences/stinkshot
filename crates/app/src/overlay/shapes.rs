@@ -46,6 +46,8 @@ pub enum Tool {
     Magnifier,
     Callout,
     Spotlight,
+    /// Ruler: measures, adds nothing to the image (`measure.rs`).
+    Measure,
 }
 
 impl Tool {
@@ -66,6 +68,7 @@ impl Tool {
             Tool::Magnifier => "Magnifier Inset (M)",
             Tool::Callout => "Callout (O)",
             Tool::Spotlight => "Spotlight (S)",
+            Tool::Measure => "Measure (U)",
         }
     }
 
@@ -87,10 +90,11 @@ impl Tool {
             Tool::Magnifier => "magnifier",
             Tool::Callout => "callout",
             Tool::Spotlight => "spotlight",
+            Tool::Measure => "measure",
         }
     }
 
-    pub const ALL: [Tool; 15] = [
+    pub const ALL: [Tool; 16] = [
         Tool::Select,
         Tool::Arrow,
         Tool::Line,
@@ -106,6 +110,7 @@ impl Tool {
         Tool::Magnifier,
         Tool::Callout,
         Tool::Spotlight,
+        Tool::Measure,
     ];
 
     pub fn from_config_key(k: &str) -> Option<Tool> {
@@ -116,7 +121,12 @@ impl Tool {
     pub fn has_style(self) -> bool {
         !matches!(
             self,
-            Tool::Select | Tool::Blur | Tool::Pixelate | Tool::Spotlight | Tool::Magnifier
+            Tool::Select
+                | Tool::Blur
+                | Tool::Pixelate
+                | Tool::Spotlight
+                | Tool::Magnifier
+                | Tool::Measure
         )
     }
 }
@@ -837,7 +847,8 @@ pub fn shape_from_drag(
         | Tool::Highlighter
         | Tool::Text
         | Tool::Step
-        | Tool::Magnifier => return None,
+        | Tool::Magnifier
+        | Tool::Measure => return None,
     };
     Some((kind, style))
 }

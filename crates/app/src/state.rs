@@ -38,6 +38,8 @@ pub enum Command {
     CaptureScrolling,
     OcrRegion,
     RepeatLastRegion,
+    /// Standalone color picker: freeze, click a pixel, its color is copied.
+    PickColor,
     RecordMp4,
     RecordGif,
     OpenHistory,
@@ -101,6 +103,8 @@ pub enum RegionPurpose {
     Scrolling,
     RecordMp4,
     RecordGif,
+    /// Color picker: no region; a click copies the pixel's color and closes the overlay.
+    PickColor,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

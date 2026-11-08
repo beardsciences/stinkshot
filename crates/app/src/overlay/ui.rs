@@ -39,6 +39,14 @@ pub enum UiAction {
     Smart(super::smart_redact::SmartAction),
     /// Eyedropper button (or I): pick a color from the image.
     Eyedropper,
+    /// Codes and Text button (or Q).
+    ToggleScan,
+    Scan(super::scan::ScanAction),
+    /// Beautify button (or F).
+    ToggleBeautify,
+    Beautify(super::beautify_panel::BeautifyAction),
+    /// Color picker panel (standalone Pick Color).
+    Picker(super::picker::PickerAction),
     /// A context bar option on the selected arrow or text.
     Shape(super::ops::ShapeOpt),
     /// The zoom chip: back to the fitted view.
@@ -77,6 +85,7 @@ pub const TOOL_GROUPS: [&[(Tool, Icon)]; 2] = [
         (Tool::Magnifier, Icon::Magnifier),
         (Tool::Callout, Icon::Callout),
         (Tool::Spotlight, Icon::Spotlight),
+        (Tool::Measure, Icon::Ruler),
     ],
 ];
 
@@ -274,18 +283,28 @@ pub fn tool_bar(
     }
 }
 
-/// Action bar: Find Sensitive Info, OCR, Pin, Save, Cancel, then the accent Copy button.
-/// `ocr` = an OCR language is installed (otherwise Find Sensitive Info and Copy Text are
-/// disabled and say why); `smart_open` = the Find Sensitive Info panel is showing.
+/// Which action bar panels are open, and whether Beautify applies on export.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PanelState {
+    pub smart: bool,
+    pub scan: bool,
+    pub beautify: bool,
+    pub beautify_on: bool,
+}
+
+/// Action bar: Find Sensitive Info, Codes and Text, Beautify, OCR, Pin, Save, Cancel, then
+/// the accent Copy button. `ocr` = an OCR language is installed (otherwise Find Sensitive
+/// Info and Copy Text are disabled and say why).
 pub fn action_bar(
     ctx: &Context,
     pos: Pos2,
     pal: &Palette,
     ocr: bool,
-    smart_open: bool,
+    panels: PanelState,
     lifted: bool,
     out: &mut Vec<UiAction>,
 ) -> Rect {
+    let smart_open = panels.smart;
     let resp = Area::new(Id::unique("stinkshot-ov-actions"))
         .order(Order::Foreground)
         .fixed_pos(pos)
@@ -301,6 +320,25 @@ pub fn action_bar(
                         .inner;
                     if r.on_disabled_hover_text(&smart_tip).clicked() {
                         out.push(UiAction::FindSensitive);
+                    }
+                    let scan_tip = format!("Read Codes and Text ({})", super::keys::SCAN.label);
+                    if theme::widgets::icon_button(ui, Icon::Qr, &scan_tip, panels.scan).clicked() {
+                        out.push(UiAction::ToggleScan);
+                    }
+                    let frame_tip = format!(
+                        "Beautify ({}){}",
+                        super::keys::BEAUTIFY.label,
+                        if panels.beautify_on { " \u{b7} On" } else { "" }
+                    );
+                    if theme::widgets::icon_button(
+                        ui,
+                        Icon::Frame,
+                        &frame_tip,
+                        panels.beautify || panels.beautify_on,
+                    )
+                    .clicked()
+                    {
+                        out.push(UiAction::ToggleBeautify);
                     }
                     let ocr_tip = if ocr {
                         "Copy Text (Ctrl+T)"

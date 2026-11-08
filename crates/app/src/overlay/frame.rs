@@ -47,6 +47,7 @@ impl Overlay {
 
         self.poll_render(ctx);
         self.poll_smart_redact(shared);
+        self.poll_scan();
         if self.finishing.is_some() {
             self.poll_finish(ctx, shared);
         } else {
@@ -76,6 +77,7 @@ impl Overlay {
             self.read_input(ctx, ppp)
         };
         self.update_text_patch(ctx);
+        self.update_beautify_preview(ctx);
         self.ime_output(ctx, ppp);
         self.paint_canvas(ctx, shared, &inp, ppp);
         let mut actions = Vec::new();
@@ -604,6 +606,8 @@ impl Overlay {
                     painter.rect_filled(r, 0.0, pal.overlay_dim);
                 }
             }
+            // The color picker shows the screen undimmed, so colors look as they are.
+            _ if self.picker_mode() => {}
             _ => {
                 painter.rect_filled(screen, 0.0, pal.overlay_dim);
             }
@@ -613,6 +617,7 @@ impl Overlay {
         if self.sel.is_none()
             && self.hover.is_none()
             && matches!(self.kind, Kind::Capture | Kind::Select(_))
+            && !self.picker_mode()
             && let Some(lr) = self
                 .last_region
                 .and_then(|r| hover::virtual_to_local(r, self.bounds))
@@ -655,6 +660,8 @@ impl Overlay {
             self.paint_text_edit(&clip, ctx, m, accent);
             self.paint_drag_preview(&clip, m, inp);
             self.paint_smart_findings(&clip, m, accent);
+            self.paint_scan_codes(&clip, m, accent);
+            self.paint_ruler(&painter.with_clip_rect(screen), m, accent);
 
             let measure = self.measurer();
             if self.edit.is_none() {
@@ -789,6 +796,25 @@ impl Overlay {
         if self.picking {
             return vec![("Click", "Pick Color"), ("Esc", "Cancel"), help];
         }
+        if self.picker_mode() {
+            return vec![
+                ("Click", "Copy Color"),
+                ("Tab", "Change Format"),
+                ("Esc", "Cancel"),
+            ];
+        }
+        if self.scan.is_some() || self.beautify_open {
+            return vec![("Esc", "Close Panel"), help];
+        }
+        if self.annotating() && self.sel.is_some() && self.tool == Tool::Measure {
+            return vec![
+                ("Drag", "Measure"),
+                ("Shift", "Straight"),
+                ("Alt", "No Edge Snapping"),
+                ("Esc", "Deselect"),
+                help,
+            ];
+        }
         match self.smart_view() {
             Some(smart_redact::PanelView::Review(_)) => {
                 return vec![("Enter", "Redact Selected"), ("Esc", "Close Panel"), help];
@@ -910,6 +936,7 @@ impl Overlay {
             && self.edit.is_none()
             && !self.help_open
             && (self.picking
+                || self.picker_mode()
                 || (shared.config.capture.show_loupe
                     && (self.sel.is_none()
                         || matches!(
@@ -936,6 +963,11 @@ impl Overlay {
             Some(n.to_string())
         } else if self.picking {
             Some("Pick a Color from the Image".into())
+        } else if self.picker_mode() {
+            Some(format!(
+                "Pick a Color \u{b7} {}",
+                Self::picker_format(shared).label()
+            ))
         } else if let Kind::Select(p) = self.kind {
             Some(hover::purpose_label(p).into())
         } else {
@@ -953,6 +985,22 @@ impl Overlay {
             pal,
             accent,
         );
+
+        if self.picker_mode() && !self.help_open {
+            let mut picks = Vec::new();
+            picker::panel(
+                ctx,
+                Pos2::new(
+                    (ref_mon.x as f32 + ref_mon.w as f32 / 2.0) * k,
+                    ref_mon.y as f32 * k + 64.0,
+                ),
+                Self::picker_format(shared),
+                &shared.config.editor.picker_recent,
+                pal,
+                &mut picks,
+            );
+            actions.extend(picks.into_iter().map(UiAction::Picker));
+        }
 
         if self.help_open {
             ui::shortcut_sheet(
@@ -1075,7 +1123,12 @@ impl Overlay {
                 Pos2::new(ax * k, ay * k),
                 pal,
                 shared.ocr.is_some(),
-                self.smart_active(),
+                ui::PanelState {
+                    smart: self.smart_active(),
+                    scan: self.scan.is_some(),
+                    beautify: self.beautify_open,
+                    beautify_on: self.beautify.enabled,
+                },
                 lifted,
                 actions,
             );
@@ -1116,6 +1169,53 @@ impl Overlay {
                     &mut smart_actions,
                 );
                 actions.extend(smart_actions.into_iter().map(UiAction::Smart));
+            }
+            // Codes and Text / Beautify panels take the same spot.
+            let place = |h: f32, w: f32| {
+                let x = act_rect
+                    .right()
+                    .clamp(screen.left() + w + 8.0, screen.right() - 8.0);
+                if act_rect.bottom() + 8.0 + h <= screen.bottom() {
+                    (
+                        Pos2::new(x, act_rect.bottom() + 8.0),
+                        egui::Align2::RIGHT_TOP,
+                    )
+                } else {
+                    (
+                        Pos2::new(x, act_rect.top() - 8.0),
+                        egui::Align2::RIGHT_BOTTOM,
+                    )
+                }
+            };
+            if let Some(view) = self.scan_view(shared.ocr.is_some()) {
+                let (pos, pivot) = place(scan::panel_height(&view), 350.0);
+                let mut scan_actions = Vec::new();
+                scan::panel(ctx, pos, pivot, &view, pal, accent, &mut scan_actions);
+                actions.extend(scan_actions.into_iter().map(UiAction::Scan));
+                if matches!(
+                    view,
+                    scan::ScanView::Ready {
+                        copied: Some(_),
+                        ..
+                    }
+                ) {
+                    ctx.request_repaint_after(Duration::from_millis(250));
+                }
+            }
+            if self.beautify_open {
+                let (pos, pivot) = place(beautify_panel::panel_height(), 350.0);
+                let tex = self.beautify_texture();
+                let mut b_actions = Vec::new();
+                beautify_panel::panel(
+                    ctx,
+                    pos,
+                    pivot,
+                    &self.beautify,
+                    tex.as_ref(),
+                    pal,
+                    &mut b_actions,
+                );
+                actions.extend(b_actions.into_iter().map(UiAction::Beautify));
             }
             match self.popup {
                 Some(Popup::Color) => ui::color_popup(
