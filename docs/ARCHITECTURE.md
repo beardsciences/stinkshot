@@ -49,7 +49,8 @@ The public items in each crate's stub files are the contract. They compile today
   `ctx.request_repaint()`.
 - COM: platform/record initialize COM per worker thread they create (MTA). The UI thread
   is STA (winit) and must not be blocked by COM calls.
-- Network: none anywhere except `crates/app/src/update.rs`, behind the opt-in setting.
+- Network: none anywhere except `crates/app/src/update.rs`, behind the opt-in setting, and it
+  trusts only release info signed with the embedded minisign key (docs/notes/release.md).
 - Style: `cargo fmt`, `cargo clippy -p <crate> -- -D warnings` clean for your crate.
 - No AI attribution in code, comments, commits or docs.
 - UI copy: Title Case for every label (buttons, menu and tray items, window titles,

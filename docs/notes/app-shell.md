@@ -30,7 +30,9 @@ Files: `crates/app/src/{main,shell,cli,tray,hotkeys,update,theme,state}.rs`, new
   docs/notes/snipping-tool.md).
 - **cli**: clap; headless `full|window --out`, `ocr --file`; other subcommands forward over
   IPC. Release builds attach to the parent console so stdout/--help work.
-- **update**: ureq GET (10 s timeout), `parse_release`, `is_newer`. Only network code.
+- **update**: ureq GETs (10 s timeout), `is_newer`. Only network code. Since Nov 8 2026 it trusts
+  only a minisign-signed release manifest (docs/notes/release.md); `stinkshot quit` added for the
+  installer.
 - **theme**: install (fonts, Fluent-ish visuals/styles), all widgets, vector icons for every
   `Icon` variant (SVG path interpreter incl. arcs/cubics, shapes from the design SVGs).
 - **build.rs**: generates the .ico (BMP frames), embeds manifest (PerMonitorV2, Common

@@ -1,0 +1,6 @@
+# Signed fixtures: bytes must match exactly what was signed, so no line-ending conversion.
+crates/app/testdata/** -text
+crates/app/assets/release-key.pub -text
+# Inno Setup and PowerShell sources are fine either way; keep them CRLF on checkout for Windows tools.
+*.iss text eol=crlf
+*.ps1 text eol=crlf

@@ -62,6 +62,8 @@ fn main() {
 1 VERSIONINFO
 FILEVERSION {major},{minor},{patch},0
 PRODUCTVERSION {major},{minor},{patch},0
+FILEFLAGSMASK 0x3F
+FILEFLAGS {flags}
 FILEOS 0x40004
 FILETYPE 0x1
 BEGIN
@@ -69,12 +71,15 @@ BEGIN
   BEGIN
     BLOCK "040904B0"
     BEGIN
+      VALUE "CompanyName", "Stinkshot contributors"
       VALUE "ProductName", "Stinkshot"
       VALUE "FileDescription", "Stinkshot: local-first screenshot and screen recording"
       VALUE "FileVersion", "{version}"
       VALUE "ProductVersion", "{version}"
+      VALUE "InternalName", "stinkshot"
       VALUE "OriginalFilename", "stinkshot.exe"
-      VALUE "LegalCopyright", "GPL-3.0-or-later"
+      VALUE "LegalCopyright", "Copyright (C) 2026 Stinkshot contributors. GPL-3.0-or-later."
+      VALUE "Comments", "{repo}"
     END
   END
   BLOCK "VarFileInfo"
@@ -83,6 +88,9 @@ BEGIN
   END
 END
 "#,
+        // VS_FF_PRERELEASE for versions like 0.2.0-beta.1.
+        flags = if version.contains('-') { "0x2" } else { "0x0" },
+        repo = std::env::var("CARGO_PKG_REPOSITORY").unwrap_or_default(),
         ico = slash(ico_path),
         manifest = slash(manifest_dir.join("assets").join("stinkshot.manifest")),
     );

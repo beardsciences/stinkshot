@@ -1649,7 +1649,7 @@ impl SettingsWindow {
         toggle_row(
             ui,
             "Check for Updates",
-            "Once a day, asks code.mccullough.dev for the latest release tag. Sends nothing else.",
+            "Once a day, fetches signed release info from code.mccullough.dev. Sends nothing else.",
             &mut shared.config.privacy.check_for_updates,
         );
         let last = last_check_text(shared.config.privacy.last_update_check, chrono::Utc::now());
