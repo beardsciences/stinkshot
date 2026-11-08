@@ -109,6 +109,43 @@ All `todo!()` bodies in `crates/core` are implemented. `cargo test -p stinkshot-
   - `config::Editor::recent_colors` (hex, newest first) and `config::Editor::tool_styles`
     (`BTreeMap<String, ToolStyle { color, width }>`), both empty by default.
 - No signatures changed.
+- Perf track (Nov 8 2026):
+  - `png_opt` (new): `optimize(png, Effort) -> (Outcome, Report)`, lossless re-compression
+    (details under "Smaller PNGs" below). `Effort::{Miniz, Zopfli(n)}`,
+    `Outcome::{Smaller(bytes), NotSmaller, Skipped(why)}`.
+  - `fonts`: **signature change in core's own API.** `Fonts::regular_bytes` / `bold_bytes`
+    are `&'static [u8]` (were `Arc<Vec<u8>>`); new `Fonts::from_static` and
+    `fonts::map_font_file(path)`. `load_system` memory-maps the font files instead of reading
+    them (about 7 MB less private memory: Segoe UI Variable, 1.8 MB, was held three times).
+    `from_bytes` still takes owned bytes and leaks them (fonts live for the process). The only
+    users were `app/src/theme.rs` (now `FontData::from_static`, no copy) and tests.
+  - `Rgba::encode` writes opaque images as RGB (no alpha channel) on the fast PNG path.
+
+## Smaller PNGs (Nov 8 2026)
+
+The fast PNG encoder (fdeflate, adaptive filter) stays the save path: the file must exist at
+once for clipboard, toast and history. `png_opt::optimize` re-compresses a saved file
+afterwards (the app runs it on a background thread, docs/notes/app-shell.md):
+
+1. Decode (8-bit only; 16-bit and APNG are skipped), normalize to RGBA8.
+2. Lossless layouts: palette (up to 256 colors, 1/2/4/8 bit, alpha entries first for a short
+   tRNS), gray / gray+alpha, RGB when every pixel is opaque, else RGBA. No grayscale when an
+   iCCP profile is present (an RGB profile on a gray image is invalid).
+3. Filters: none, sub, up, average, paeth, and per-row minimum-sum and minimum-entropy
+   heuristics; each candidate is ranked by a miniz level 3 deflate, only the best buffer is
+   kept.
+4. Final deflate of the winner: miniz level 10, or zopfli (`Effort::Zopfli(n)` iterations).
+5. Ancillary chunks (sRGB, gAMA, iCCP, pHYs, text, ...) are copied in place; bKGD / sBIT /
+   hIST (color-type bound) are dropped; an unknown critical chunk skips the file.
+6. The output is decoded and compared with the original pixels; any difference is an error,
+   never a result. `NotSmaller` when it does not beat the input.
+
+Measured on the benchmark's sample captures with `examples/png_opt_bench` (release; times on
+one core of the Ryzen 5 5600X with the PC in use): see "Results" in
+docs/notes/app-shell.md, "Perf track". Entropy filtering won on every full-screen sample,
+min-sum on a 1000x700 crop; every opaque sample reduced to RGB (Greenshot's, which has
+transparent pixels, stayed RGBA). The RGB fast path alone: the 4K sample 8.58 -> 7.54 MB,
+53-59 ms either way.
 
 ## Contract requests
 

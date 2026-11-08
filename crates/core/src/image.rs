@@ -137,13 +137,27 @@ impl Rgba {
                     ::image::codecs::png::CompressionType::Fast,
                     ::image::codecs::png::FilterType::Adaptive,
                 );
-                enc.write_image(
-                    &self.data,
-                    self.width,
-                    self.height,
-                    ExtendedColorType::Rgba8,
-                )
-                .context("PNG encode failed")?;
+                // Screenshots are almost always opaque: without the alpha channel there is a
+                // quarter less to filter and deflate, and the file is about 10 % smaller
+                // (measured Nov 8 2026, docs/notes/core.md). The app re-compresses saved
+                // files further in the background (`png_opt`).
+                if self.data.chunks_exact(4).all(|p| p[3] == 255) {
+                    let mut rgb =
+                        Vec::with_capacity(self.width as usize * self.height as usize * 3);
+                    for p in self.data.chunks_exact(4) {
+                        rgb.extend_from_slice(&p[..3]);
+                    }
+                    enc.write_image(&rgb, self.width, self.height, ExtendedColorType::Rgb8)
+                        .context("PNG encode failed")?;
+                } else {
+                    enc.write_image(
+                        &self.data,
+                        self.width,
+                        self.height,
+                        ExtendedColorType::Rgba8,
+                    )
+                    .context("PNG encode failed")?;
+                }
             }
             ImageFormat::Jpeg => {
                 // JPEG has no alpha: composite over white.

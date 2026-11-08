@@ -11,6 +11,7 @@ pub mod frame;
 pub mod geom;
 pub mod image;
 pub mod naming;
+pub mod png_opt;
 pub mod redact;
 pub mod sensitive;
 

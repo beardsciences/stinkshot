@@ -1552,6 +1552,54 @@ impl Overlay {
         live.then_some(n.text.as_str())
     }
 
+    /// The window is up and visible (uncloaked after its first frames).
+    pub fn revealed(&self) -> bool {
+        self.window.is_some() && self.reveal.is_none()
+    }
+
+    /// Take over from the quick overlay shown during a cold start
+    /// (`stinkshot_platform::quick_overlay`): Esc there cancels, a drag still in progress
+    /// continues here, a finished drag becomes the selection. A plain click there is dropped.
+    pub fn take_quick_input(
+        &mut self,
+        inp: stinkshot_platform::quick_overlay::QuickInput,
+        shared: &mut Shared,
+    ) {
+        if inp.cancelled {
+            self.cancel(shared);
+            return;
+        }
+        if self.sel.is_some() || !matches!(self.drag, Drag::None) {
+            return;
+        }
+        let end = if inp.down { inp.cursor } else { inp.release };
+        let (Some(press), Some(cursor)) = (inp.press, end) else {
+            return;
+        };
+        let local = |p: PxPoint| ((p.x - self.bounds.x) as f32, (p.y - self.bounds.y) as f32);
+        let (start, cur) = (local(press), local(cursor));
+        let moved = (start.0 - cur.0).abs().max((start.1 - cur.1).abs()) >= CLICK_SLOP_PT;
+        if inp.down {
+            self.hover = None;
+            self.drag = Drag::Selecting {
+                anchor: start,
+                start,
+                cur,
+                moved,
+            };
+        } else if moved {
+            let r = selection::drag_rect(
+                (start.0 as i32, start.1 as i32),
+                (cur.0 as i32, cur.1 as i32),
+                self.local_bounds(),
+                self.effective_aspect(false),
+            );
+            if r.w >= 1 && r.h >= 1 {
+                self.accept_region(r, shared);
+            }
+        }
+    }
+
     /// Nothing has happened in this overlay yet (no selection, no gesture, no edits): it can
     /// be dropped without losing anything.
     pub fn is_untouched(&self) -> bool {

@@ -352,6 +352,20 @@ What is left: the D3D11 device itself (about 52 MB, driver) and, while warm, the
 - `window_util::get_rect(hwnd)` (GetWindowRect, physical px), `input::try_cursor_pos()`
   (None instead of 0,0 on failure) and `input::primary_button_down()` (async state, honours
   swapped buttons). Used by the pin's drag loop.
+- Perf track (Nov 8 2026, docs/notes/app-shell.md "Perf track"):
+  - `files` module: `replace_if_unchanged(original, replacement, len, modified) -> Replace`
+    (`Replaced` / `InUse` / `Changed`) and `background_thread()`. The original is held open
+    without read or write sharing while its size and time are checked, then the replacement
+    is renamed over it with `FileRenameInfoEx` (replace + POSIX semantics, NTFS on Windows 10
+    1809+): atomic, no other program can open it in between, a reader with delete sharing
+    keeps the old data. Creation and modification times are carried over. Other volumes
+    report `InUse` (nothing replaced). Unit test with a real temp folder.
+  - `quick_overlay` module: `show(frozen, bounds, window_rects, accent) -> QuickOverlay`,
+    `QuickOverlay::input() -> QuickInput { press, cursor, down, cancelled }`, closed on drop.
+    A plain Win32/GDI topmost window (two DIB sections: dimmed and clear copies of the
+    frozen screen, filled on up to 4 threads) that shows the start-up freeze before the GPU
+    is up. Excluded from capture like the overlay.
+  - `system::trim_working_set()` (`SetProcessWorkingSetSizeEx(-1, -1)`).
 
 ## Contract requests
 

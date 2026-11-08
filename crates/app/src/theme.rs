@@ -207,22 +207,22 @@ pub fn install(
         let mut defs = FontDefinitions::default();
         defs.font_data.insert(
             "SegoeUIVariable".into(),
-            std::sync::Arc::new(FontData::from_owned(fonts.regular_bytes.as_ref().clone())),
+            std::sync::Arc::new(FontData::from_static(fonts.regular_bytes)),
         );
         // The design's headings are weight 600: prefer the real Segoe UI Semibold face and
         // fall back to the bold face core loads for annotation text.
         let semibold_bytes = std::env::var_os("WINDIR")
-            .map(|w| {
-                std::path::PathBuf::from(w)
-                    .join("Fonts")
-                    .join("seguisb.ttf")
+            .and_then(|w| {
+                stinkshot_core::fonts::map_font_file(
+                    &std::path::PathBuf::from(w)
+                        .join("Fonts")
+                        .join("seguisb.ttf"),
+                )
             })
-            .and_then(|p| std::fs::read(p).ok())
-            .filter(|b| !b.is_empty())
-            .unwrap_or_else(|| fonts.bold_bytes.as_ref().clone());
+            .unwrap_or(fonts.bold_bytes);
         defs.font_data.insert(
             "SegoeUISemibold".into(),
-            std::sync::Arc::new(FontData::from_owned(semibold_bytes)),
+            std::sync::Arc::new(FontData::from_static(semibold_bytes)),
         );
         let proportional = defs.families.entry(FontFamily::Proportional).or_default();
         proportional.insert(0, "SegoeUIVariable".into());

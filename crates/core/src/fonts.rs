@@ -1,5 +1,10 @@
 //! Fonts for rasterizing annotation text. Loaded from the Windows font folder at runtime
 //! (Segoe UI Variable -> Segoe UI -> Arial), never bundled. Tests may use `from_bytes`.
+//!
+//! The font files are memory-mapped, not read: mapped pages belong to the file and are not
+//! private memory, and the same bytes serve ab_glyph (annotation text) and egui (the UI) with
+//! no copy. Reading them cost about 8 MB of private bytes (Segoe UI Variable alone is 1.8 MB
+//! and was held three times; measured Nov 8 2026, docs/notes/app-shell.md).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,9 +21,40 @@ pub struct Fonts {
     pub regular: Arc<ab_glyph::FontArc>,
     /// Semibold/bold for step numbers.
     pub bold: Arc<ab_glyph::FontArc>,
-    /// Raw bytes of `regular`, so the UI can register the same face with egui.
-    pub regular_bytes: Arc<Vec<u8>>,
-    pub bold_bytes: Arc<Vec<u8>>,
+    /// Raw bytes of `regular`, so the UI can register the same face with egui
+    /// (`egui::FontData::from_static`). Mapped or leaked once; they live for the process.
+    pub regular_bytes: &'static [u8],
+    pub bold_bytes: &'static [u8],
+}
+
+/// Map a font file for the rest of the process (falls back to reading it). None when the
+/// file is missing, empty or not a font ab_glyph can parse.
+pub fn map_font_file(path: &std::path::Path) -> Option<&'static [u8]> {
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) => {
+            log::debug!("font {} not available: {e}", path.display());
+            return None;
+        }
+    };
+    // SAFETY: the mapping is read-only and never unmapped. System font files are not
+    // rewritten in place while mapped (Windows replaces fonts by rename on update).
+    let bytes: &'static [u8] = match unsafe { memmap2::Mmap::map(&file) } {
+        Ok(m) => {
+            let m: &'static memmap2::Mmap = Box::leak(Box::new(m));
+            &m[..]
+        }
+        Err(e) => {
+            log::debug!("font {} not mappable ({e}); reading it", path.display());
+            let v = std::fs::read(path).ok()?;
+            Box::leak(v.into_boxed_slice())
+        }
+    };
+    if bytes.is_empty() || ab_glyph::FontRef::try_from_slice(bytes).is_err() {
+        log::warn!("font {} could not be parsed", path.display());
+        return None;
+    }
+    Some(bytes)
 }
 
 impl Fonts {
@@ -28,19 +64,26 @@ impl Fonts {
         let dir = windows_fonts_dir();
         let regular = first_loadable(&dir, &["SegUIVar.ttf", "segoeui.ttf", "arial.ttf"])
             .with_context(|| format!("no usable regular font in {}", dir.display()))?;
-        let bold = first_loadable(&dir, &["segoeuib.ttf", "arialbd.ttf"])
-            .unwrap_or_else(|| regular.clone());
-        Self::from_bytes(regular, bold)
+        let bold = first_loadable(&dir, &["segoeuib.ttf", "arialbd.ttf"]).unwrap_or(regular);
+        Self::from_static(regular, bold)
     }
 
+    /// From owned font data (tests). The bytes are leaked: fonts live for the process.
     pub fn from_bytes(regular: Vec<u8>, bold: Vec<u8>) -> anyhow::Result<Fonts> {
-        let r = FontArc::try_from_vec(regular.clone()).context("invalid regular font data")?;
-        let b = FontArc::try_from_vec(bold.clone()).context("invalid bold font data")?;
+        Self::from_static(
+            Box::leak(regular.into_boxed_slice()),
+            Box::leak(bold.into_boxed_slice()),
+        )
+    }
+
+    pub fn from_static(regular: &'static [u8], bold: &'static [u8]) -> anyhow::Result<Fonts> {
+        let r = ab_glyph::FontRef::try_from_slice(regular).context("invalid regular font data")?;
+        let b = ab_glyph::FontRef::try_from_slice(bold).context("invalid bold font data")?;
         Ok(Fonts {
-            regular: Arc::new(r),
-            bold: Arc::new(b),
-            regular_bytes: Arc::new(regular),
-            bold_bytes: Arc::new(bold),
+            regular: Arc::new(FontArc::new(r)),
+            bold: Arc::new(FontArc::new(b)),
+            regular_bytes: regular,
+            bold_bytes: bold,
         })
     }
 
@@ -141,20 +184,8 @@ fn windows_fonts_dir() -> PathBuf {
     win.join("Fonts")
 }
 
-fn first_loadable(dir: &std::path::Path, names: &[&str]) -> Option<Vec<u8>> {
-    for name in names {
-        let path = dir.join(name);
-        match std::fs::read(&path) {
-            Ok(bytes) => {
-                if FontArc::try_from_vec(bytes.clone()).is_ok() {
-                    return Some(bytes);
-                }
-                log::warn!("font {} could not be parsed", path.display());
-            }
-            Err(e) => log::debug!("font {} not available: {e}", path.display()),
-        }
-    }
-    None
+fn first_loadable(dir: &std::path::Path, names: &[&str]) -> Option<&'static [u8]> {
+    names.iter().find_map(|name| map_font_file(&dir.join(name)))
 }
 
 #[cfg(test)]

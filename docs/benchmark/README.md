@@ -274,3 +274,43 @@ its overlay.
    b5409a9 build with the displays on. ShareX (164 / 113), Greenshot (68 / 45) and Flameshot
    (38 / 8) are still smaller on private bytes. Idle CPU was at or below 0.13% of a core for
    all four.
+
+## Follow-up: perf track (Nov 8 2026)
+
+Changes after this run, measured against the benchmark's own Stinkshot build (f334f45) on
+the same machine. **The displays were off for the latency and memory numbers in this
+section** (console display state 0 throughout, 00:30-01:55), so Stinkshot captured with GDI
+instead of its warm Desktop Duplication session; the tables above (displays on) were not
+re-run. Method and raw numbers: docs/notes/app-shell.md, "Perf track".
+
+**PNG size on identical pixels.** Each tool's sample capture from this run
+(`C:\dev\stinkshot-bench\results\sample-captures`) decoded and re-encoded by Stinkshot
+(`crates/core/examples/png_opt_bench`). "Saved" is what the capture path writes at once;
+"after background pass" is the file once the low-priority re-compression has replaced it
+(seconds later; miniz level 10, zopfli for images up to 1 MP). MB = 10^6 bytes.
+
+| Pixels | Other tool's file | Stinkshot before | Saved now | After background pass |
+|---|---|---|---|---|
+| ShareX's 6400x2160 sample | ShareX 9.48 MB (0.686 MB/MP) | 9.68 MB (0.700) | 8.54 MB (0.617) | **7.43 MB (0.538)** |
+| Flameshot's 6400x2160 sample (same pixels as ShareX's) | Flameshot 7.50 MB (0.542) | 9.68 MB (0.700) | 8.54 MB (0.617) | **7.43 MB (0.538)** |
+| Greenshot's 6400x2160 sample (has transparent pixels) | Greenshot 10.65 MB (0.770) | 9.68 MB (0.700) | 9.68 MB (0.700) | **8.19 MB (0.592)** |
+| Stinkshot's 3840x2160 sample | - | 8.58 MB (1.034) | 7.54 MB (0.909) | **6.73 MB (0.812)** |
+
+On the same pixels the re-compressed file is 22-23 % smaller than ShareX's and Greenshot's
+and 1 % smaller than Flameshot's; the file written at once is 10-12 % smaller than before
+(opaque images no longer carry an alpha channel) and is written as fast (59-78 ms here). The
+background pass took 6.3 s (4K) and 7.6-9.1 s (6400x2160) on one core with the PC in use
+(the app runs it at background priority).
+
+**Cold launch to first overlay** (`cold`, region about 40 ms after launch, 8 runs, median,
+displays off): f334f45 548-563 ms; now the frozen screen is on display after **204 ms** (a
+GDI window that takes the first drag and Esc, see the notes) and the full region overlay
+replaces it at 592 ms.
+
+**Idle** (60 s, 2 runs, displays off): private bytes 135.5 -> 124.7 MB (fonts memory-mapped);
+working set 124 -> 8 MB once the app has been idle for 60 s (handed back to Windows; private
+bytes unchanged, no measurable cost on the next overlay). The 60 MB target was not reached:
+the GPU driver alone keeps 68 MB committed even after both of Stinkshot's devices are
+released, so only a design that keeps the GPU out of the idle process could get there
+(frontier in the notes). Warm overlay ready unchanged (218 -> 228 ms median with GDI, within
+the noise).

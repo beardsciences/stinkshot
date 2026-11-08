@@ -24,6 +24,7 @@ mod logger;
 mod logo_anim;
 mod overlay;
 mod pin;
+mod recompress;
 mod record_ui;
 mod settings_ui;
 mod shell;

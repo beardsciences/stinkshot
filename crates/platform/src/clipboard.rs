@@ -171,36 +171,41 @@ pub(crate) fn build_dib(img: &Rgba) -> Vec<u8> {
     out
 }
 
+/// The fast PNG path (`Rgba::to_png`): the png crate's default level took about 1.8 s for a
+/// 4K screenshot, during which the clipboard did not have the image yet; the fast path takes
+/// about 0.1 s (sizes do not matter on the clipboard). Nov 8 2026.
 fn encode_png(img: &Rgba) -> anyhow::Result<Vec<u8>> {
-    use image::ImageEncoder;
-    let mut out = Vec::new();
-    image::codecs::png::PngEncoder::new(&mut out).write_image(
-        &img.data,
-        img.width,
-        img.height,
-        image::ExtendedColorType::Rgba8,
-    )?;
-    Ok(out)
+    img.to_png()
 }
 
-fn put_image(img: &Rgba) -> anyhow::Result<()> {
+/// The clipboard formats of an image, built before the clipboard is opened so other programs
+/// are locked out only while they are copied in.
+fn image_payloads(img: &Rgba) -> anyhow::Result<Vec<(u32, Vec<u8>)>> {
     if img.width == 0 || img.height == 0 {
         anyhow::bail!("cannot copy an empty image");
     }
-    put(CF_DIBV5.0 as u32, &build_dibv5(img))?;
+    let mut v = vec![(CF_DIBV5.0 as u32, build_dibv5(img))];
     match encode_png(img) {
-        Ok(png) => put(png_format(), &png)?,
+        Ok(png) => v.push((png_format(), png)),
         Err(e) => log::warn!("PNG clipboard format skipped: {e}"),
     }
-    put(CF_DIB.0 as u32, &build_dib(img))?;
+    v.push((CF_DIB.0 as u32, build_dib(img)));
+    Ok(v)
+}
+
+fn put_all(payloads: &[(u32, Vec<u8>)]) -> anyhow::Result<()> {
+    for (format, bytes) in payloads {
+        put(*format, bytes)?;
+    }
     Ok(())
 }
 
 pub fn set_image(img: &Rgba) -> anyhow::Result<()> {
+    let payloads = image_payloads(img)?;
     let _g = ClipboardGuard::open()?;
     // SAFETY: clipboard is open on this thread.
     unsafe { EmptyClipboard() }?;
-    put_image(img)
+    put_all(&payloads)
 }
 
 pub fn set_text(text: &str) -> anyhow::Result<()> {
@@ -230,14 +235,15 @@ pub(crate) fn build_hdrop(path: &std::path::Path) -> Vec<u8> {
 /// Also used by "copy file" from history: CF_HDROP with the path, plus the image formats.
 pub fn set_file_and_image(path: &std::path::Path, img: Option<&Rgba>) -> anyhow::Result<()> {
     let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let payloads = img.map(image_payloads).transpose()?;
     let _g = ClipboardGuard::open()?;
     // SAFETY: clipboard is open on this thread.
     unsafe { EmptyClipboard() }?;
     put(CF_HDROP.0 as u32, &build_hdrop(&abs))?;
     // DROPEFFECT_COPY, so paste in Explorer copies rather than moves.
     put(name_format("Preferred DropEffect"), &1u32.to_le_bytes())?;
-    if let Some(img) = img {
-        put_image(img)?;
+    if let Some(p) = &payloads {
+        put_all(p)?;
     }
     Ok(())
 }

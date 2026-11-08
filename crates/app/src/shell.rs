@@ -42,6 +42,7 @@ use stinkshot_core::{PxRect, Rgba};
 use stinkshot_history::{History, ItemId, ItemKind};
 use stinkshot_platform::capture::{self, Frozen};
 use stinkshot_platform::ocr::{OcrEngine, WindowsOcr};
+use stinkshot_platform::quick_overlay::{self, QuickOverlay};
 use stinkshot_platform::system::{self, InstanceGuard};
 use stinkshot_platform::{Hwnd, window_util, windows_enum};
 use stinkshot_record::{Corner, RecordOptions, Recorder, WebcamOptions};
@@ -94,6 +95,9 @@ const WINDOW_CAPTURE_FALLBACK: &str =
     "Windows could not capture that window. Try again, or use Region capture.";
 /// How long the capture session keeps its shadow textures after the last capture.
 const SHADOW_IDLE: Duration = Duration::from_secs(30);
+/// Hand the working set back after this long with nothing open (`trim_when_idle`).
+/// `STINKSHOT_TRIM_IDLE_SECS` overrides it (0 turns trimming off), for measurements.
+const TRIM_IDLE: Duration = Duration::from_secs(60);
 /// How long a restart after a GPU device loss waits for jobs in flight (`wait_for_jobs`).
 const GPU_RESTART_GRACE: Duration = Duration::from_secs(15);
 
@@ -259,10 +263,14 @@ struct EarlyFreeze {
     at: Instant,
     frozen: Frozen,
     windows: Vec<windows_enum::WinInfo>,
+    /// The frozen screen already on display while eframe starts (region, scrolling, OCR).
+    quick: Option<QuickOverlay>,
 }
 
 /// How long an early freeze stays usable for the command it was taken for.
 const EARLY_FREEZE_MAX_AGE: Duration = Duration::from_secs(3);
+/// The quick overlay never stays longer than this, even if the region overlay never shows.
+const QUICK_OVERLAY_MAX: Duration = Duration::from_secs(10);
 
 /// Commands whose handler starts with `Shell::freeze`.
 fn freezes_first(cmd: &Command) -> bool {
@@ -275,14 +283,25 @@ fn freezes_first(cmd: &Command) -> bool {
     )
 }
 
+/// Commands that open the region overlay on the frozen screen.
+fn opens_region_overlay(cmd: &Command) -> bool {
+    matches!(
+        cmd,
+        Command::CaptureRegion | Command::CaptureScrolling | Command::OcrRegion
+    )
+}
+
 /// While the GPU device is still being made the main thread only waits for it. Take forwarded
 /// commands off the IPC channel meanwhile, and when one of them starts with a freeze, freeze
 /// the screen now: the overlay then opens as soon as eframe is up instead of freezing after
-/// it (a capture asked for at launch, e.g. by a hotkey tool or the bench).
+/// it (a capture asked for at launch, e.g. by a hotkey tool or the bench). For the region
+/// overlay the frozen screen goes on display at once in a GDI window (`quick_overlay`),
+/// which takes the first input until the overlay replaces it.
 fn prefreeze_while_gpu_starts(
     ipc_rx: &Receiver<Vec<String>>,
     gpu: Option<&std::thread::JoinHandle<Option<eframe::egui_wgpu::WgpuSetupExisting>>>,
     include_cursor: bool,
+    accent: [u8; 3],
 ) -> (Vec<Vec<String>>, Option<EarlyFreeze>) {
     let mut queued = Vec::new();
     let mut early = None;
@@ -292,16 +311,31 @@ fn prefreeze_while_gpu_starts(
     while !gpu.is_finished() {
         match ipc_rx.recv_timeout(Duration::from_millis(5)) {
             Ok(args) => {
-                let wants = cli::command_from_args(&args).is_some_and(|c| freezes_first(&c));
+                let cmd = cli::command_from_args(&args);
+                let wants = cmd.as_ref().is_some_and(freezes_first);
                 if wants && early.is_none() {
                     let windows = windows_enum::visible_windows();
                     match capture::freeze_all(include_cursor) {
                         Ok(frozen) => {
                             timing::point(format_args!("early freeze done (GPU still starting)"));
+                            let quick = cmd
+                                .as_ref()
+                                .is_some_and(opens_region_overlay)
+                                .then(|| {
+                                    let rects = windows.iter().map(|w| w.rect).collect();
+                                    quick_overlay::show(&frozen.image, frozen.bounds, rects, accent)
+                                })
+                                .and_then(|r| {
+                                    r.map_err(|e| log::warn!("quick overlay: {e:#}")).ok()
+                                });
+                            if quick.is_some() {
+                                timing::point(format_args!("quick overlay shown"));
+                            }
                             early = Some(EarlyFreeze {
                                 at: Instant::now(),
                                 frozen,
                                 windows,
+                                quick,
                             });
                         }
                         Err(e) => log::debug!("early freeze failed: {e:#}"),
@@ -385,9 +419,15 @@ fn run_app(
             .with_context(|| format!("open history folder {}", history_dir.display()))?,
     );
     timing::point(format_args!("history opened"));
+    crate::recompress::clean_up(&history_dir);
 
-    let (early_args, early_freeze) =
-        prefreeze_while_gpu_starts(&ipc_rx, gpu.as_ref(), config.capture.include_cursor);
+    let accent = resolve_theme(&config).1;
+    let (early_args, early_freeze) = prefreeze_while_gpu_starts(
+        &ipc_rx,
+        gpu.as_ref(),
+        config.capture.include_cursor,
+        [accent[0], accent[1], accent[2]],
+    );
     let wgpu_options = crate::gpu::options(gpu);
     timing::point(format_args!("gpu device joined"));
     let ocr: Option<Arc<dyn OcrEngine>> =
@@ -643,6 +683,10 @@ struct Shell {
     update_forced: bool,
     update_retry_at: Instant,
     last_housekeeping: Instant,
+    /// Since when nothing has been open or running (`trim_when_idle`), and whether the
+    /// working set was trimmed in this quiet spell.
+    quiet_since: Instant,
+    trimmed: bool,
     /// When to render the About logo's loop into its disk cache if it has no copy (once,
     /// a while after startup, so the first visit to the About page is instant).
     logo_prewarm_at: Option<Instant>,
@@ -658,6 +702,9 @@ struct Shell {
     overlays_opened: u32,
     /// Screen frozen during start-up for the first capture command (`freeze` uses it once).
     early_freeze: Option<EarlyFreeze>,
+    /// The start-up freeze's GDI window, shown until the region overlay is up
+    /// (`settle_quick_overlay`).
+    quick_overlay: Option<(QuickOverlay, Instant)>,
     _guard: InstanceGuard,
 }
 
@@ -806,6 +853,8 @@ impl Shell {
             update_forced: false,
             update_retry_at: Instant::now(),
             last_housekeeping: Instant::now(),
+            quiet_since: Instant::now(),
+            trimmed: false,
             logo_prewarm_at: Some(Instant::now() + LOGO_PREWARM_DELAY),
             root_setup_tries: 0,
             first_frame_seen: false,
@@ -815,6 +864,7 @@ impl Shell {
             test_gpu_loss: None,
             overlays_opened: 0,
             early_freeze,
+            quick_overlay: None,
             _guard: guard,
         };
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
@@ -1121,6 +1171,7 @@ impl Shell {
             && e.at.elapsed() < EARLY_FREEZE_MAX_AGE
         {
             timing::point(format_args!("freeze: using the start-up freeze"));
+            self.quick_overlay = e.quick.map(|q| (q, Instant::now()));
             return Some((e.frozen, e.windows));
         }
         let t0 = Instant::now();
@@ -2367,8 +2418,54 @@ impl Shell {
         } else {
             capture::release_idle_shadows(SHADOW_IDLE)
         };
+        let next = next.min(self.trim_when_idle());
         self.ctx
             .request_repaint_after(next.clamp(Duration::from_secs(1), Duration::from_secs(60)));
+    }
+
+    /// After `TRIM_IDLE` with no window, recording or job, give the working set back to
+    /// Windows once (`system::trim_working_set`): Task Manager's memory figure drops from about
+    /// 120 MB to a few MB and the RAM is free for other programs; the next capture faults
+    /// the pages back in (measured cost in docs/notes/app-shell.md, "Idle memory"). Private
+    /// bytes do not change. Returns how long until the next check is due.
+    fn trim_when_idle(&mut self) -> Duration {
+        let busy = self.overlay.is_some()
+            || self.history_win.is_some()
+            || self.settings.is_some()
+            || self.countdown.is_some()
+            || self.record_frame.is_some()
+            || self.record_hud.is_some()
+            || self.trim.is_some()
+            || self.scroll_hud.is_some()
+            || !self.toasts.is_empty()
+            || !matches!(self.rec, Rec::Idle)
+            || workers::jobs_in_flight() > 0;
+        if busy {
+            self.quiet_since = Instant::now();
+            self.trimmed = false;
+            return Duration::from_secs(60);
+        }
+        static AFTER: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+        let after = *AFTER.get_or_init(|| {
+            std::env::var("STINKSHOT_TRIM_IDLE_SECS")
+                .ok()
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .map_or(TRIM_IDLE, Duration::from_secs)
+        });
+        if self.trimmed || after.is_zero() {
+            return Duration::from_secs(60);
+        }
+        let quiet = self.quiet_since.elapsed();
+        if quiet < after {
+            return after - quiet;
+        }
+        system::trim_working_set();
+        self.trimmed = true;
+        timing::point(format_args!(
+            "working set trimmed after {} s idle",
+            quiet.as_secs()
+        ));
+        Duration::from_secs(60)
     }
 
     fn show_all(&mut self, ctx: &egui::Context) {
@@ -2398,6 +2495,38 @@ impl Shell {
             timing::point(format_args!("surface closed"));
             // One more pass so egui destroys the windows of surfaces that just closed.
             self.touch();
+        }
+    }
+
+    /// Hand over from the start-up quick overlay to the region overlay once that one is
+    /// visible (or close it when no overlay came, or after `QUICK_OVERLAY_MAX`). Esc in the
+    /// quick overlay cancels at once.
+    fn settle_quick_overlay(&mut self) {
+        if self
+            .early_freeze
+            .as_ref()
+            .is_some_and(|e| e.at.elapsed() >= EARLY_FREEZE_MAX_AGE)
+        {
+            self.early_freeze = None;
+        }
+        let Some((quick, since)) = &self.quick_overlay else {
+            return;
+        };
+        let inp = quick.input();
+        let timed_out = since.elapsed() >= QUICK_OVERLAY_MAX;
+        let handoff = match &mut self.overlay {
+            Some(o) if inp.cancelled || o.s.revealed() => {
+                o.s.take_quick_input(inp, &mut self.shared);
+                true
+            }
+            Some(_) => timed_out,
+            None => true,
+        };
+        if handoff {
+            timing::point(format_args!("quick overlay handed over"));
+            self.quick_overlay = None;
+        } else {
+            self.needs_repaint = true;
         }
     }
 
@@ -2460,11 +2589,15 @@ impl eframe::App for Shell {
         self.process_pending();
         self.apply_config();
         self.housekeeping();
+        self.settle_quick_overlay();
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.show_all(&ctx);
+        // The overlay may have been uncloaked in this pass: close the quick overlay now, not a
+        // frame later.
+        self.settle_quick_overlay();
         // After the surfaces: restyling the root hides and re-shows it, which costs about
         // 150 ms on the first frame and would delay an overlay requested at launch.
         self.setup_root_window();

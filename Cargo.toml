@@ -47,6 +47,11 @@ pollster = "1"
 ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
 directories = "6"
 windows = "0.62"
+png = "0.18"
+memmap2 = "0.9"
+miniz_oxide = "0.8"
+crc32fast = "1"
+zopfli = { version = "0.8", default-features = false, features = ["std", "zlib"] }
 
 [profile.release]
 lto = "thin"
