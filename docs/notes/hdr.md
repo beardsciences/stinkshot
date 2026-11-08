@@ -109,8 +109,10 @@ On the SDR monitor every path returns the exact source colors, before and after.
   every warm-up and capture. Shadows are dropped after 30 s without a capture and refilled by
   the next frame. Details and numbers in platform.md ("Review fixes and a smaller warm
   session").
-- Colors were not re-measured with the swatch window after this change; the conversion code
-  (`convert_into`, `srgb8_to_scrgb_half`) is unchanged and unit tested.
+- Re-measured after this change (review, Nov 7 2026, displays on): swatch window on the HDR
+  monitor, `hdr_probe` -> 127,211,106 / 128,128,128 / 255,255,255 exact for the first
+  `capture_rect` (GDI seed, banded upload), warm calls, `freeze_all`, and `freeze_all` right
+  after `release_idle_shadows` (app-shell.md, "Review of f334f45 / 0794b65").
 
 ## Not verified
 

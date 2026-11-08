@@ -1493,8 +1493,6 @@ pub fn warm_up_with(first_frame_timeout_ms: u32) {
     }
 }
 
-/// Drop the cached duplication session (frees GPU resources). Safe to call at any time; the
-/// next capture creates a new session.
 /// Drop the shadow textures of a session unused for `max_idle` (the device and duplications
 /// stay). Returns how long until it is worth calling again (an hour when there is nothing to
 /// release).
@@ -1536,6 +1534,8 @@ pub fn release_idle_shadows(max_idle: std::time::Duration) -> std::time::Duratio
     nothing
 }
 
+/// Drop the cached duplication session (frees GPU resources). Safe to call at any time; the
+/// next capture creates a new session.
 pub fn release_cached_capture() {
     *SESSION.lock().unwrap_or_else(|p| p.into_inner()) = None;
 }

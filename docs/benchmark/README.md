@@ -48,7 +48,7 @@ Median / p90 unless marked as a range. Lower is better everywhere. Displays on f
 | Slow runs (more than 150 ms above the median) | 4 of 30 | 3 of 30 | 0 of 30 | 6 of 30 |
 | Runs where the window changed after it became visible | 0 of 30 | 0 of 30 | 0 of 30 | 0 of 30 |
 | Launch to ready (tray / main window up, ms), 15 runs | 34 / 490 | 861 / 1033 | 297 / 659 | 117 / 370 |
-| Cold launch to first overlay ready (ms), 10 runs | 593 / 643 (region at +30 ms); 568 / 590 (region right after the tray) | not measured | not measured | not measured |
+| Cold launch to first overlay ready (ms), 10 runs | 593 / 643 (region about 40 ms after launch); 568 / 590 (region right after the tray) | not measured | not measured | not measured |
 | Idle working set after 60 s (MB), range of 3 | 120 | 163-164 | 68 | 33-38 |
 | Idle private bytes after 60 s (MB), range of 3 | 134-135 | 112-114 | 45 | 6-8 |
 | Idle handles, range of 3 | 707-709 | 835-836 | 468 | 447-528 |
@@ -73,8 +73,9 @@ All samples sorted (ms):
   473, 644, 665, 785, 792, 854, 900.
 - Launch to ready. Stinkshot: 31-42 for 11, then 311, 430, 490, 764. ShareX: 813-1033, then
   2014. Greenshot: 264-321 for 10, then 461-752. Flameshot: 99-122 for 10, then 175-517.
-- Cold launch to overlay, region 30 ms after launch: 546-675. Region 1 ms after the tray window
-  exists (32-43 ms after launch): 549-592.
+- Cold launch to overlay, region about 40 ms after launch (30 ms sleep after `CreateProcess`
+  returned; 37-40 ms measured, once 88): 546-675. Region 1 ms after the tray window exists
+  (32-43 ms after launch): 549-592.
 - Full-screen to PNG. Stinkshot headless: 151-177 for 16, then 245, 465, 593, 607. ShareX:
   995-1113 for 17, then 1445-1454. Greenshot: 760-845. Flameshot: 1492-1952.
 
@@ -175,7 +176,8 @@ and tray icon); Flameshot, the daemon's `Qt693TrayIconMessageWindowClass`. These
 Stinkshot the tray is up before the app can paint, which is why it also has a cold-launch row.
 
 **Cold launch to first overlay** (Stinkshot only). Kill, wait 3 s, launch `stinkshot --tray`,
-send `stinkshot region` either 30 ms after launch or 1 ms after the tray window exists, and
+send `stinkshot region` either 30 ms after `CreateProcess` returned (37-40 ms after the launch
+timestamp, which is taken before `CreateProcess`) or 1 ms after the tray window exists, and
 measure launch to overlay ready. The other tools were not measured this way.
 
 **Idle.** All four tools running at once, footprint after 60 s idle, CPU averaged over the next

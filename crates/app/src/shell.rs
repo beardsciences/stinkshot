@@ -94,6 +94,25 @@ const WINDOW_CAPTURE_FALLBACK: &str =
     "Windows could not capture that window. Try again, or use Region capture.";
 /// How long the capture session keeps its shadow textures after the last capture.
 const SHADOW_IDLE: Duration = Duration::from_secs(30);
+/// How long a restart after a GPU device loss waits for jobs in flight (`wait_for_jobs`).
+const GPU_RESTART_GRACE: Duration = Duration::from_secs(15);
+
+/// Block until worker jobs in flight (saves, exports, a recording's stop) have finished or
+/// `max` has passed. For exits that bypass `quit` (the GPU-loss restart).
+fn wait_for_jobs(max: Duration) {
+    let deadline = Instant::now() + max;
+    loop {
+        let busy = workers::jobs_in_flight();
+        if busy == 0 {
+            return;
+        }
+        if Instant::now() >= deadline {
+            log::warn!("restarting with {busy} job(s) still running");
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
 const NOTICE_NO_LAST_REGION: &str = "No Region Remembered Yet: Select One";
 const NOTICE_LAST_REGION_OFF_SCREEN: &str = "Last Region Is Off Screen: Select a New One";
 
@@ -418,6 +437,9 @@ fn run_app(
     match run {
         Ok(r) => r.map_err(|e| anyhow!("{e}")),
         Err(payload) if crate::gpu::lost() || crate::gpu::is_device_panic(payload.as_ref()) => {
+            // The shell is gone (dropped while unwinding; `Drop for Shell` kept a recording),
+            // but saves and exports run on worker threads: let them finish first.
+            wait_for_jobs(GPU_RESTART_GRACE);
             crate::gpu::relaunch();
             log::logger().flush();
             std::process::exit(0);
@@ -1381,6 +1403,8 @@ impl Shell {
         }
         self.hotkeys.shutdown();
         self.tray = None;
+        // Saves, exports and a recording's stop worker must not be cut off by the exit.
+        wait_for_jobs(GPU_RESTART_GRACE);
         crate::gpu::relaunch();
         log::logger().flush();
         std::process::exit(0);
@@ -2393,6 +2417,26 @@ impl Shell {
         if !self.shared.outbox.is_empty() {
             let drained: Vec<Command> = self.shared.outbox.drain(..).collect();
             self.pending.extend(drained);
+        }
+    }
+}
+
+impl Drop for Shell {
+    /// A panic out of the event loop (a GPU device loss inside a paint ends this way, see
+    /// `run_app`) drops the shell while unwinding. Dropping an active `Recorder` aborts it
+    /// and deletes the file; finish it instead so the recording is kept. Normal exits stop
+    /// recordings in `quit`.
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            return;
+        }
+        if let Rec::Active { .. } = &self.rec
+            && let Rec::Active { rec, .. } = std::mem::replace(&mut self.rec, Rec::Idle)
+        {
+            match rec.stop() {
+                Ok(r) => log::warn!("recording kept after a panic: {}", r.path.display()),
+                Err(e) => log::warn!("stop after a panic failed: {e:#}"),
+            }
         }
     }
 }

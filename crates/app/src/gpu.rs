@@ -231,10 +231,38 @@ fn is_device_panic_message(msg: &str) -> bool {
 
 /// Environment variable naming the process a restarted instance replaces (`relaunch`).
 const RESTART_ENV: &str = "STINKSHOT_RESTART_AFTER";
+/// Environment variable carrying how many restarts in a row came soon after start-up.
+const RESTARTS_ENV: &str = "STINKSHOT_GPU_RESTARTS";
+/// A device loss this soon after start-up counts towards `MAX_QUICK_RESTARTS`.
+const QUICK_RESTART: std::time::Duration = std::time::Duration::from_secs(60);
+/// Quick restarts in a row before giving up: a loss (or a device panic during eframe's
+/// start-up, before `install_handlers`) that happens on every launch must not turn into an
+/// endless chain of processes.
+const MAX_QUICK_RESTARTS: u32 = 3;
+
+static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+static PRIOR_RESTARTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The restart count to hand to the next instance, or None to give up. `prior`: quick
+/// restarts in a row before this instance; `uptime`: how long this instance has run.
+fn next_restart_count(prior: u32, uptime: std::time::Duration) -> Option<u32> {
+    let n = if uptime < QUICK_RESTART { prior + 1 } else { 1 };
+    (n <= MAX_QUICK_RESTARTS).then_some(n)
+}
 
 /// Start a new instance (`--tray`, same profile) that takes over once this process has
 /// exited. Returns whether it was started.
 pub fn relaunch() -> bool {
+    let uptime = STARTED
+        .get()
+        .map_or(std::time::Duration::ZERO, |t| t.elapsed());
+    let Some(count) = next_restart_count(PRIOR_RESTARTS.load(Ordering::SeqCst), uptime) else {
+        log::error!(
+            "GPU device lost {MAX_QUICK_RESTARTS} times in a row within {} s of start-up;              not restarting",
+            QUICK_RESTART.as_secs()
+        );
+        return false;
+    };
     let exe = match std::env::current_exe() {
         Ok(e) => e,
         Err(e) => {
@@ -245,6 +273,7 @@ pub fn relaunch() -> bool {
     match std::process::Command::new(exe)
         .arg("--tray")
         .env(RESTART_ENV, std::process::id().to_string())
+        .env(RESTARTS_ENV, count.to_string())
         .env_remove("STINKSHOT_TEST_GPU_LOSS")
         .spawn()
     {
@@ -259,17 +288,27 @@ pub fn relaunch() -> bool {
     }
 }
 
-/// In a restarted instance: wait (up to 10 s) for the process it replaces to exit, so that
-/// one has released the single-instance mutex. Does nothing for a normal launch.
+/// Call once at start-up. Notes the start time and the quick-restart count (`relaunch`); in
+/// a restarted instance, also waits (up to 10 s) for the process it replaces to exit, so
+/// that one has released the single-instance mutex.
 pub fn wait_for_predecessor() {
-    let Some(pid) = std::env::var(RESTART_ENV)
+    STARTED.get_or_init(std::time::Instant::now);
+    let prior = std::env::var(RESTARTS_ENV)
         .ok()
         .and_then(|v| v.trim().parse::<u32>().ok())
-    else {
+        .unwrap_or(0);
+    PRIOR_RESTARTS.store(prior, Ordering::SeqCst);
+    let pid = std::env::var(RESTART_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u32>().ok());
+    // SAFETY: removing our own variables before any other thread reads the environment.
+    unsafe {
+        std::env::remove_var(RESTART_ENV);
+        std::env::remove_var(RESTARTS_ENV);
+    }
+    let Some(pid) = pid else {
         return;
     };
-    // SAFETY: removing our own variable before any other thread reads the environment.
-    unsafe { std::env::remove_var(RESTART_ENV) };
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{
         OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
@@ -349,5 +388,23 @@ mod tests {
         assert!(is_device_panic(p.as_ref()));
         let p: Box<dyn std::any::Any + Send> = Box::new("called `Option::unwrap()`");
         assert!(!is_device_panic(p.as_ref()));
+    }
+
+    #[test]
+    fn quick_restarts_are_capped() {
+        let soon = std::time::Duration::from_secs(5);
+        let later = std::time::Duration::from_secs(600);
+        assert_eq!(next_restart_count(0, soon), Some(1));
+        assert_eq!(next_restart_count(2, soon), Some(3));
+        assert_eq!(
+            next_restart_count(3, soon),
+            None,
+            "fourth quick loss in a row"
+        );
+        assert_eq!(
+            next_restart_count(3, later),
+            Some(1),
+            "a long run resets the count"
+        );
     }
 }

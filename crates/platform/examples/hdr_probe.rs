@@ -236,6 +236,22 @@ fn main() -> anyhow::Result<()> {
         );
         std::thread::sleep(std::time::Duration::from_millis(300));
     }
+    // The idle path: shadows dropped (`release_idle_shadows`), then refilled by the next
+    // frame or a GDI seed.
+    for i in 0..2 {
+        capture::release_idle_shadows(std::time::Duration::ZERO);
+        let t = std::time::Instant::now();
+        let f = capture::freeze_all(false)?;
+        let el = t.elapsed();
+        let crop = f.image.crop(rect.translate(-f.bounds.x, -f.bounds.y));
+        println!(
+            "freeze_all after shadow release #{} in {:?}, probe avg {:?}",
+            i + 1,
+            el,
+            avg(&crop)
+        );
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
     // A process can hold one duplication per output; free Stinkshot's before probing.
     capture::release_cached_capture();
 

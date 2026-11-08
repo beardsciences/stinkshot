@@ -484,7 +484,7 @@ shaders), then the overlay about 105 ms. Changes:
 | Idle working set | 200 MB | 124 MB |
 | Overlay ready, 30 runs, median / p90 | 154 / 630 ms | 154 / 213 ms |
 | Peak private bytes during an overlay (median) | 659 MB | 476 MB |
-| Cold launch -> first overlay ready, region at +30 ms, 8 runs, median (range) | 807 ms (721-968) | 650 ms (609-811) |
+| Cold launch -> first overlay ready, region at +30 ms (41-51 ms measured), 8 runs, median (range) | 807 ms (721-968) | 650 ms (609-811) |
 | Same, region 1 ms after the tray is up | 714 ms (679-853) | 636 ms (610-699) |
 | 300 overlay cycles: crash / private median per 50 cycles (250 ms after each close) | none / 647-677 MB | none / 347-354 MB (drift about 6 MB over 300) |
 | Private bytes 5 s after the 300 cycles (start) | 506 MB (399) | 305 MB (212, shadows still held at both points) |
@@ -512,9 +512,55 @@ five-second samples and before every step; `display-state.log` in the raw result
 results moved to `C:\dev\stinkshot-bench\results-second-run`.
 
 Stinkshot: overlay ready 134 / 289 ms (median / p90, 4 slow runs of 30), launch to tray 34 ms
-median, cold launch to first overlay 593 ms (region at +30 ms) / 568 ms (region right after the
+median, cold launch to first overlay 593 ms (region about 40 ms after launch) / 568 ms (region right after the
 tray), idle 120 MB working set / 134-135 MB private, peak private during an overlay 414 / 477
 MB, headless full-screen of the 4K monitor to PNG 156 / 465 ms. The idle figure matches the
 134.2 / 134.3 MB measured in the previous section. Competitors and caveats (CLI vs
 `WM_HOTKEY` triggers, Flameshot's monitor picker, capture scope, PNG size) are in the
 benchmark README.
+
+## Review of f334f45 / 0794b65 (Nov 7 2026, 23:05-23:25)
+
+Skeptical read of the GPU-loss fix, the capture changes and the benchmark docs, with spot
+re-runs. **Displays on** for every check (console display state 1 before and after each).
+
+Verdicts:
+
+- **Crash fix: sound for the reported panic, verified with the test hook only.** The 300-cycle
+  runs (before and after, displays on) show no crash and no growth, which rules out a leak but
+  says nothing about the fix: the natural loss never happened in them. Re-ran both hook paths
+  on this review's build: `STINKSHOT_TEST_GPU_LOSS=2` -> the same `renderer.rs:1033` panic,
+  caught, new instance 72 ms later; `idle:6` -> loss logged, restart 17 ms later. Release
+  profile keeps `panic = "unwind"`, which `catch_unwind` needs.
+- **Gaps found and fixed in the restart** (`gpu.rs`, `shell.rs`):
+  - Both restart paths called `process::exit` at once, cutting off saves, exports and a
+    recording's stop worker still running (`quit` waits up to 30 s for those). They now wait up
+    to 15 s for `workers::jobs_in_flight()` to reach zero first.
+  - In the in-paint path the shell is dropped while unwinding, and dropping an active
+    `Recorder` aborts it and deletes the file; only the between-frames path kept recordings.
+    `Drop for Shell` now finishes an active recording when it runs during a panic. (The file
+    is kept on disk; it is not added to history, in either path.)
+  - No limit on restarts: a loss, or a device panic during eframe's start-up (before
+    `install_handlers` replaces wgpu's panicking default handler), that happens on every launch
+    would chain processes forever. A fourth restart in a row, each within 60 s of its start, is
+    now refused and logged (`STINKSHOT_GPU_RESTARTS`, unit tested).
+- **Capture decision tests: they cover the rules, not the wiring.** `prime_output` and the
+  tests match the two stale-frame causes, dimming no longer moving the epoch, and the released
+  shadow; the mapping from DXGI results to `Frame` (`OutputDup::acquire`) and `prime`'s
+  "no texture, no picture" override are covered only by the desktop tests below.
+- **No HDR regression.** Swatch window on the 4K HDR monitor (480-nit SDR white), `hdr_probe`
+  (new step: two `freeze_all` after `release_idle_shadows`): 127,211,106 / 128,128,128 /
+  255,255,255 exact on the first (GDI seed, banded upload) and warm `capture_rect`, all
+  `freeze_all` and both captures after the shadow release (34-39 ms, same as warm). The three
+  `capture_is_fresh_*` desktop tests pass (release build).
+- **Memory and overlay claims hold.** Spot re-run with the bench harness (Stinkshot only,
+  bench release build of f334f45): overlay ready 10 runs 139-192 ms plus one 593 ms, median
+  152 ms (the benchmark's 134 ms batch was a little faster; the memory work measured 154 ms);
+  idle after 60 s 133.7 / 134.6 MB private, 124 MB working set, 0.13% of a core.
+- **Docs:** honest about display state and about the unreproduced natural loss. Corrected
+  here: the "region at +30 ms" cold launch sent the command 37-51 ms after the launch
+  timestamp (30 ms sleep after `CreateProcess` returned). The misplaced doc comment of
+  `release_cached_capture` (it had ended up on `release_idle_shadows`) is fixed.
+
+Still open: a real (not hook-made) device loss; whether the restarted instance should add a
+recording kept during a restart to history; the restart cap was not exercised live.
