@@ -7,6 +7,13 @@ All `todo!()` bodies in `crates/core` are implemented. `cargo test -p stinkshot-
 
 - `image`: PNG / JPEG / lossless WebP encode, decode, `save` (atomic temp + rename), `thumbnail`
   (Lanczos3, premultiplied when alpha is present, never upscales). JPEG composites over white.
+  PNG uses the png crate's fast (fdeflate) compression with adaptive filters since Nov 7 2026:
+  a real 3840x2160 screenshot encodes in 47-120 ms instead of 1.1-1.9 s (zlib level 6), files
+  are about 17 % larger (7.75 MB vs 6.65 MB; 6400x2160: 8.73 vs 7.36 MB). `Up` filtering alone
+  was 20 % faster again but 40 % larger. `examples/encode_bench` compares the settings on any
+  PNG. `thumbnail` averages k x k blocks first when shrinking by 4x or more (keeping twice the
+  target size for the Lanczos pass): 27 ms instead of 75 ms for 3840x2160, 62 instead of 144 ms
+  for 6400x2160.
 - `config`: `dir()` (`%APPDATA%\Stinkshot`), `load()` (writes defaults when missing, backs up a
   malformed file as `config.toml.bad-<yyyymmdd-hhmmss>` then writes fresh defaults), `load_from`,
   atomic `save_to`, `history_folder()`, `parse_hex_color`.

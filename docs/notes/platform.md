@@ -37,9 +37,12 @@ about 5 s here because of the WGC hang described below).
   texture, so `capture_rect` of a small area is cheap (about 3 to 12 ms for 400x300 on this PC).
 - **The first frame of a new duplication is a placeholder** (observed: an uninitialized
   `R16G16B16A16_FLOAT` surface even on SDR content, later frames are BGRA8). It is never
-  trusted: the shadow texture is seeded once from a GDI capture of the output, and real frames
-  replace it. The shadow/staging textures are re-created whenever a frame's size or format
-  differs from them.
+  trusted: the shadow texture is seeded from a GDI capture of the output, and real frames
+  replace it. When that first frame only arrives after the seed (the warm-up's 300 ms wait for
+  it timed out), it stands for every change since the duplication was made, so the shadow is
+  seeded again (`needs_seed`); before Nov 7 2026 it was dropped silently and the warm-up
+  picture stayed until the next change on screen. The shadow/staging textures are re-created
+  whenever a frame's size or format differs from them.
 - Rotated outputs and software-composed outputs use GDI instead. GDI is also the fallback for
   any duplication error (secure desktop, driver reset, no adapters).
 - SDR outputs are duplicated as BGRA8. HDR outputs are duplicated as FP16 scRGB and converted
@@ -47,7 +50,8 @@ about 5 s here because of the WGC hang described below).
   clipped, not tone-mapped, and looked blown out. See `docs/notes/hdr.md`.
 - Conversion is split across up to 8 threads by row bands.
 - Timing on this box (2 monitors, 6400x2160 virtual desktop): `freeze_all` about 40 to 55 ms
-  with an optimized build once the session exists; **the first capture takes 0.3 to 0.6 s**
+  with an optimized build once the session exists (Nov 7 2026, under 20-45 % background load:
+  median 50-54 ms, was 68-70 ms before outputs converted straight into the result image); **the first capture takes 0.3 to 0.6 s**
   (device + duplication creation + GDI seed). Call the new `capture::warm_up()` from a worker
   thread at startup. A debug build without optimization is about 1 s per freeze because the
   conversion loops are unoptimized.
@@ -73,9 +77,103 @@ about 5 s here because of the WGC hang described below).
   duplication (0 frames in 2 s on both outputs with a window animating), but GDI still sees
   windows repaint. A cached session then returns its last picture forever. `capture_rect`
   (scrolling, "live") therefore uses GDI for the region unless the duplication delivered a
-  frame within the last 20 ms (`LIVE_MAX_AGE`, i.e. during this very call); `freeze_all`
-  keeps using the shadow. `examples/display_state` in the record crate prints the console
-  display state (0 off, 1 on).
+  frame within the last 20 ms (`LIVE_MAX_AGE`, i.e. during this very call). `freeze_all` and
+  `freeze_rect` use GDI while the displays are off (see "Stale frames" below).
+  `examples/display_state` in the record crate prints the console display state (0 off, 1 on).
+
+### Stale frames and save speed (Nov 7 2026)
+
+Benchmark report: `stinkshot full` through a running instance returned the screen as it was
+when the instance started (a window open for 15 s missing, an old toast still there); the
+headless capture in the same trial was correct.
+
+**Reproduced deterministically** with `cargo run -p stinkshot-platform --example stale_probe
+--release -- cycle 5`: drop the session, warm it up, open a solid marker window on each
+monitor (this process's own, no input), wait, capture. Old code: `freeze_all` missed the
+markers in 10 of 10 checks (it returned the warm-up picture every time), `capture_rect` was
+right (its GDI live fallback); `latefirst 8` gave the same 16 of 16. The bench harness (`fullcap`) reproduced it too: every instance
+capture had the same byte size and failed the swatch check (max error 194).
+
+**Root cause 1, displays idle-off (reproduced).** The console display state was 0 (off) during
+all of these runs (the benchmark ran unattended, so the displays had gone to sleep). DWM feeds
+duplications nothing then, and a cached session treats "no frame" as "unchanged", so every
+freeze returned the warm-up picture. The later full benchmark run that did not reproduce it
+most likely ran with the displays on.
+
+**Root cause 2, late first frame (found in review, not reproducible here).** The first frame of
+each duplication is skipped as untrusted. If the warm-up's wait for it timed out (busy
+start-up), the first frame acquired later was the one carrying every change since, and it was
+dropped; with a static screen afterwards the warm-up seed stayed forever.
+
+Fixes (`capture.rs`, new `display_power.rs`):
+
+- `display_power`: `PowerSettingRegisterNotification(GUID_CONSOLE_DISPLAY_STATE)` with a
+  callback (no window); Windows reports the current state on registration. `is_off()`, an
+  `epoch` bumped on every change, and a wake hook. Registered lazily on the first capture or
+  warm-up; unknown state is treated as on (old behavior).
+- `OutputDup::prime` (used by captures and `warm_up`): displays off -> GDI serves the capture
+  and the output is marked `needs_seed`; otherwise pick up a pending frame and re-seed from
+  GDI when `must_seed` (no picture, late first frame, or the display epoch changed since the
+  last seed or real frame). A real frame clears it (it is the whole desktop as composed now).
+- `Session::capture` with the displays off: one GDI copy of the whole rect (median 89 ms for
+  6400x2160 in `stale_probe timing`, against 143 ms per output).
+- When the displays come back on, a `display-wake` thread re-seeds the warm session after
+  500 ms (`revalidate_after_wake`), so the first PrtSc after waking the screen does not pay
+  the seed. Not verified: the displays stayed off for this whole session, and the off -> on
+  transition logic is covered by a unit test only.
+- Regression tests (desktop, `#[ignore]`): `capture_is_fresh_after_warm_up` and
+  `capture_is_fresh_when_the_first_frame_comes_late` (`warm_up_with(0)` skips the wait for the
+  first frame) open marker windows after the warm-up and assert they appear in `freeze_all`,
+  `freeze_rect` and `capture_rect`, and are gone after closing. Both pass; with the displays
+  off they exercise the GDI path, the duplication path was not verified with the displays on
+  (nobody at the PC during this work).
+- Session rebuilds are now logged with their reason (`capture: building a duplication session
+  (monitor layout changed | HDR state changed | no session)`, `access lost`) and creation time.
+
+Cost: with the displays off a freeze takes the GDI path (about 90-150 ms for both monitors
+instead of 40-60 ms from the stale shadow). Benchmarks that run unattended now measure that
+path; the overlay opened in about 212 ms median there instead of 120 ms.
+
+**Save speed.** `stinkshot full` via the instance took 1.35-1.45 s for one 4K monitor, headless
+1.7-2.3 s. Almost all of it was PNG encoding at zlib level 6 with adaptive filters (1.1-1.9 s
+for 3840x2160 depending on load). Changes:
+
+- `Rgba::encode` PNG: `CompressionType::Fast` (fdeflate) + adaptive filters (core.md).
+- `freeze_all` composites without the 55 MB black fill and per-output tiles (`grab_into` /
+  `read_back_into` convert straight into the result; gaps between monitors are made opaque
+  only when the outputs do not cover the rect).
+- `freeze_rect(rect)`: the freeze rules for one rect. Full-screen capture with the editor off
+  reads back only the monitor under the cursor (`capture_fullscreen_quick`), and `finish_quick`
+  no longer clones the image for an unused `base`.
+- Headless `full --out` uses `capture_rect_once` (GDI for that monitor, no duplication session:
+  building one cost 0.2-1 s, a GDI copy of the 4K monitor about 60 ms).
+
+Results (release, `C:\dev\stinkshot-bench\harness-capture` = the bench harness pointed at its own
+target dir and the `capbench` profile, `BENCH_ONLY=stinkshot fullcap 10`, displays idle-off,
+20-45 % background load from parallel builds):
+
+| | before | after |
+|---|---|---|
+| `stinkshot full` via instance, 3840x2160 (median, min-max) | 1446 ms (1416-1928) | 182 ms (165-198) |
+| headless `full --out --monitor 1` | 2332 ms (2319-2815) | 166 ms (153-181) |
+| `repeat` with last region = whole 6400x2160 desktop, via instance | not measured | 290 ms (277-308) |
+| PNG size, 3840x2160 desktop | 7.17 MB | 8.40 MB |
+| PNG size, 6400x2160 | 7.36 MB | 8.73 MB (bench sample) / 9.55 MB (this desktop) |
+| instance capture shows the current screen | no (swatch error 194) | yes (exact) |
+
+The `repeat` figure includes PowerShell's `Start-Process` overhead (scratch script, not the
+harness).
+
+**Overlay slow mode (from the capture side).** `freeze_all` inside the instance over the 30-run
+overlay test (before the fix): 38-90 ms, no session rebuild, while the overlay itself took
+340-518 ms in 4 of 30 runs. The slow mode is therefore not in the capture: the instance logs
+show IPC received to overlay window created in about 170 ms on every run, so the extra time is
+in the forwarding process before `main` (process creation, image load) or after the window
+exists (show/resize). `stale_probe timing 50` on a warm session (duplication path forced with
+`PROBE_ASSUME_ON=1`): 32-110 ms, median 50-54 ms. The GPU part of a 4K FP16 read-back is
+itself bimodal (copy + map 2.7 ms or 20.6 ms, apparently GPU clock state), worth at most about
+18 ms. One instance crashed during the overlay test in `egui-wgpu` 0.37 `renderer.rs:1033`
+("Failed to create staging buffer for index data"); not investigated (overlay track).
 
 ### Window capture (WGC) and a hang found on this machine
 - `capture_window` runs `Windows.Graphics.Capture` on a private MTA thread with a 5 s timeout
@@ -166,6 +264,10 @@ about 5 s here because of the WGC hang described below).
   it from a `capture-warmup` thread right after taking the single-instance mutex (see
   app-shell.md, "First overlay after launch was slow").
 - `capture::release_cached_capture()`: drop the cached session.
+- `capture::freeze_rect(rect, cursor)` (freeze rules for one rect), `capture::capture_rect_once`
+  (GDI only, no session; one-shot processes), `capture::warm_up_with(ms)` (`#[doc(hidden)]`,
+  tests and probes). `display_power` module (`state`, `is_off`, `#[doc(hidden)]
+  override_state` for probes). Feature `Win32_System_Power` added.
 - `hdr` module (Nov 6 2026): `displays()`, `display_for_device()`, `display_for_monitor()`,
   `ScrgbToSrgb`, half/sRGB helpers. Feature `Win32_Devices_Display` added.
 - `clipboard::get_text()`, `get_image()`, `has_dibv5()`: read-back helpers (used by tests).

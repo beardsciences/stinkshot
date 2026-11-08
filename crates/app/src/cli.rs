@@ -209,7 +209,6 @@ pub fn run_headless(job: HeadlessJob) -> anyhow::Result<()> {
             monitor,
             cursor,
         } => {
-            let frozen = capture::freeze_all(cursor)?;
             let mons = monitors::list();
             let rect = match monitor {
                 Some(i) => {
@@ -221,10 +220,11 @@ pub fn run_headless(job: HeadlessJob) -> anyhow::Result<()> {
                 }
                 None => monitors::at_point(input::cursor_pos())
                     .map(|m| m.rect)
-                    .unwrap_or(frozen.bounds),
+                    .unwrap_or_else(monitors::virtual_bounds),
             };
-            let local = rect.translate(-frozen.bounds.x, -frozen.bounds.y);
-            let img = frozen.image.crop(local);
+            // One shot: GDI for just this monitor. A duplication session (what the running
+            // app keeps warm) would cost far more to build than it saves here.
+            let img = capture::capture_rect_once(rect, cursor)?;
             if img.width == 0 || img.height == 0 {
                 return Err(anyhow!("monitor rectangle is outside the captured desktop"));
             }

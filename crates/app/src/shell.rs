@@ -1035,6 +1035,10 @@ impl Shell {
         if self.capture_blocked() {
             return;
         }
+        if !self.shared.config.capture.open_editor_after_capture {
+            self.capture_fullscreen_quick();
+            return;
+        }
         let Some((frozen, windows)) = self.freeze() else {
             return;
         };
@@ -1051,10 +1055,6 @@ impl Shell {
             );
             return;
         }
-        if !self.shared.config.capture.open_editor_after_capture {
-            self.finish_quick(base, mon, source, "fullscreen");
-            return;
-        }
         let doc = Doc::new(base.width, base.height);
         self.open_overlay(
             OverlayMode::Annotate {
@@ -1067,6 +1067,39 @@ impl Shell {
             frozen,
             windows,
         );
+    }
+
+    /// Full-screen capture with the editor off: no overlay needs the whole desktop, so only
+    /// the monitor under the cursor is read back.
+    fn capture_fullscreen_quick(&mut self) {
+        let t0 = Instant::now();
+        let windows = windows_enum::visible_windows();
+        let cursor = stinkshot_platform::input::cursor_pos();
+        let mon =
+            capture_ops::monitor_rect_at(cursor, stinkshot_platform::monitors::virtual_bounds());
+        let res = capture::freeze_rect(mon, self.shared.config.capture.include_cursor);
+        timing::point(format_args!(
+            "freeze done: monitor {}x{} in {:.1} ms",
+            mon.w,
+            mon.h,
+            t0.elapsed().as_secs_f64() * 1000.0
+        ));
+        let base = match res {
+            Ok(img) => img,
+            Err(e) => {
+                let body = report(
+                    "freeze_rect",
+                    &e,
+                    "Windows did not hand over the screen image. Try again; if it keeps failing, restart Stinkshot.",
+                );
+                self.notify("Could Not Capture the Screen", body, true);
+                return;
+            }
+        };
+        let source = capture_ops::target_from(&windows)
+            .map(|w| capture_ops::source_of(&w))
+            .unwrap_or_default();
+        self.finish_quick(base, mon, source, "fullscreen");
     }
 
     fn repeat_last_region(&mut self) {
@@ -1118,8 +1151,10 @@ impl Shell {
     fn finish_quick(&mut self, base: Rgba, rect: PxRect, source: SourceInfo, mode: &'static str) {
         let doc = Doc::new(base.width, base.height);
         let out = CaptureOutput {
-            flattened: base.clone(),
-            base,
+            // Nothing is drawn on a quick capture, so the unannotated base is never read (it
+            // only feeds the re-edit sidecar, which needs shapes): skip a full-size copy.
+            base: Rgba::new(0, 0),
+            flattened: base,
             doc,
             rect,
             action: FinishAction::Quick,
