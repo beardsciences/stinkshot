@@ -49,7 +49,8 @@ impl DisplayPower {
 }
 
 static STATE: AtomicI32 = AtomicI32::new(-1);
-/// Incremented on every reported change after the first report.
+/// Incremented when the displays go off or come back (not on dimming: a dimmed display still
+/// gets every frame, so a picture validated before dimming is still good).
 static EPOCH: AtomicU64 = AtomicU64::new(0);
 /// Called (on a new thread) when the displays come back on after being off.
 static ON_WAKE: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
@@ -58,7 +59,7 @@ static START: Once = Once::new();
 /// Apply one reported raw state. Returns true when the displays came back on from off.
 fn apply(raw: i32) -> bool {
     let old = STATE.swap(raw, Ordering::SeqCst);
-    if old != raw && old >= 0 {
+    if old >= 0 && (old == 0) != (raw == 0) {
         EPOCH.fetch_add(1, Ordering::SeqCst);
     }
     old == 0 && raw != 0
@@ -146,8 +147,8 @@ pub fn is_off() -> bool {
     state() == DisplayPower::Off
 }
 
-/// Changes seen so far; a picture validated under another epoch may predate a display-off
-/// period.
+/// Transitions into or out of Off seen so far; a picture validated under another epoch may
+/// predate a display-off period.
 pub(crate) fn epoch() -> u64 {
     EPOCH.load(Ordering::SeqCst)
 }
@@ -174,8 +175,14 @@ mod tests {
         assert!(!apply(2), "on -> dimmed is not a wake");
         assert_eq!(state(), DisplayPower::Dimmed);
         assert!(!is_off());
+        assert_eq!(epoch(), e0 + 2, "dimming does not invalidate pictures");
+        assert!(!apply(1));
+        assert_eq!(epoch(), e0 + 2, "dimmed -> on neither");
+        assert!(!apply(2));
         assert!(!apply(0));
+        assert_eq!(epoch(), e0 + 3, "dimmed -> off does");
         assert!(apply(2), "off -> dimmed is a wake");
+        assert_eq!(epoch(), e0 + 4);
         STATE.store(-1, Ordering::SeqCst);
     }
 }

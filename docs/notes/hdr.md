@@ -100,6 +100,18 @@ On the SDR monitor every path returns the exact source colors, before and after.
   idle-off, so these frames came from the recorder's GDI fallback, not from FP16 duplication
   frames; the FP16 duplication path was not re-measured.
 
+## Smaller warm session (Nov 7 2026, late)
+
+- The HDR shadow stays FP16 (the duplication delivers FP16 and `CopyResource` needs the same
+  format); SDR outputs keep BGRA8. What changed is around it: no persistent FP16 staging texture
+  (each read-back makes one the size of the rect it reads), the GDI seed is lifted into scRGB
+  and uploaded in 270-row bands instead of one 66 MB buffer, and the driver is trimmed after
+  every warm-up and capture. Shadows are dropped after 30 s without a capture and refilled by
+  the next frame. Details and numbers in platform.md ("Review fixes and a smaller warm
+  session").
+- Colors were not re-measured with the swatch window after this change; the conversion code
+  (`convert_into`, `srgb8_to_scrgb_half`) is unchanged and unit tested.
+
 ## Not verified
 
 - WGC FP16 pools (recorder) on an HDR monitor: WGC session creation hangs on this PC, so only

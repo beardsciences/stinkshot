@@ -970,7 +970,9 @@ fn screen_shows_mark(r: PxRect) -> bool {
 /// `freeze_all`, `freeze_rect` and `capture_rect`, and be gone again after it closes.
 /// `first_frame_timeout_ms` 0 makes the warm-up miss each output's first duplication frame
 /// (a busy start-up), the case where the warm-up picture could stick.
-fn assert_fresh_after_warm_up(first_frame_timeout_ms: u32) {
+/// `release_shadows`: drop the session's shadow textures (`release_idle_shadows`) before each
+/// check, so the capture has to refill them from a pending frame or a GDI seed.
+fn assert_fresh_after_warm_up(first_frame_timeout_ms: u32, release_shadows: bool) {
     dpi::init();
     println!(
         "display power: {:?}",
@@ -984,6 +986,9 @@ fn assert_fresh_after_warm_up(first_frame_timeout_ms: u32) {
         capture::release_cached_capture();
         capture::warm_up_with(first_frame_timeout_ms);
         std::thread::sleep(Duration::from_millis(800));
+        if release_shadows {
+            capture::release_idle_shadows(Duration::ZERO);
+        }
         let close = open_markers(rects.clone());
         std::thread::sleep(Duration::from_millis(1200));
         let visible: Vec<PxRect> = rects
@@ -1015,6 +1020,9 @@ fn assert_fresh_after_warm_up(first_frame_timeout_ms: u32) {
         }
         let _ = close.send(());
         std::thread::sleep(Duration::from_millis(1200));
+        if release_shadows {
+            capture::release_idle_shadows(Duration::ZERO);
+        }
         let f = capture::freeze_all(false).expect("freeze_all after close");
         for r in visible.iter().filter(|r| !screen_shows_mark(**r)) {
             let (x, y) = (r.x + r.w / 2 - f.bounds.x, r.y + r.h / 2 - f.bounds.y);
@@ -1030,11 +1038,17 @@ fn assert_fresh_after_warm_up(first_frame_timeout_ms: u32) {
 #[test]
 #[ignore = "needs a desktop session"]
 fn capture_is_fresh_after_warm_up() {
-    assert_fresh_after_warm_up(300);
+    assert_fresh_after_warm_up(300, false);
+}
+
+#[test]
+#[ignore = "needs a desktop session"]
+fn capture_is_fresh_after_idle_shadow_release() {
+    assert_fresh_after_warm_up(300, true);
 }
 
 #[test]
 #[ignore = "needs a desktop session"]
 fn capture_is_fresh_when_the_first_frame_comes_late() {
-    assert_fresh_after_warm_up(0);
+    assert_fresh_after_warm_up(0, false);
 }

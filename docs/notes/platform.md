@@ -173,7 +173,78 @@ exists (show/resize). `stale_probe timing 50` on a warm session (duplication pat
 `PROBE_ASSUME_ON=1`): 32-110 ms, median 50-54 ms. The GPU part of a 4K FP16 read-back is
 itself bimodal (copy + map 2.7 ms or 20.6 ms, apparently GPU clock state), worth at most about
 18 ms. One instance crashed during the overlay test in `egui-wgpu` 0.37 `renderer.rs:1033`
-("Failed to create staging buffer for index data"); not investigated (overlay track).
+("Failed to create staging buffer for index data"): a lost wgpu device, see app-shell.md
+("GPU device loss, memory and cold start").
+
+### Review fixes and a smaller warm session (Nov 7 2026, late)
+
+**Capture source decision is a pure function now.** `prime_output(state, displays, source,
+timeout)` holds every rule that decides whether an output's shadow can serve a capture: the
+first-frame placeholder, mouse-only updates, real frames, display off, and the re-seed when the
+shadow may predate the screen (`ShadowState::must_seed`: no picture, `needs_seed`, or the display
+epoch moved). It talks to the world through two traits: `Displays` (`is_off`, `epoch`;
+`SystemDisplays` reads `display_power`) and `FrameSource` (`acquire(timeout, placeholder)` ->
+`Frame::{None, Placeholder, PointerOnly, Copied}`, and `seed`; `OutputDup` implements it).
+`session_source(displays, any_dup)` is the `Session::capture` branch (displays off -> one GDI
+copy of the whole rect). Unit tests with a fake display state and a scripted frame source
+(`capture::tests`) cover both stale-frame causes: displays off (GDI while off, one re-seed after
+the wake, also when they went off and on between two captures) and the late first frame
+(placeholder after the warm-up's seed -> second seed, not copied), plus a static screen, real
+frames, a failed seed and a released shadow.
+
+**A warm-up never blocks a capture.** Warm-ups (start-up, re-warm-up, display wake) hold the
+session through `WarmGuard`, which raises `WARMING`. A capture first `try_lock`s the session;
+when that fails and a warm-up holds it (`on_lock_busy`), GDI serves the capture at once instead
+of waiting up to several hundred ms (session creation, a 300 ms wait for each first frame, GDI
+seeds). A capture that finds another capture in the lock still waits (it is quick, and the
+session stays warm). `revalidate_after_wake` no longer waits for first frames: it uses the
+cached 2 ms timeout (the duplications exist already) and skips the re-seed when a capture or
+warm-up is running right then (that one validates the session itself).
+
+**Display epoch** only moves on transitions into or out of Off. Dimming no longer invalidates
+shadows (a dimmed display still gets frames); off -> dimmed and dimmed -> off still count.
+
+**Gaps between monitors** are found with the union of the captured parts (`union_covers`, cuts
+the rect at every part edge and checks each cell) instead of their summed area: overlapping
+outputs (a duplicated display) could add up to the rect's area and leave a gap transparent.
+
+**Memory of the warm session: 300 MB -> 133 MB, and 54 MB when idle.** Measured with
+`examples/mem_probe` (private bytes after each step, `PROBE_LOG=trace` adds the session's own
+`mem:` trace lines; displays on, 4K HDR + 1440p SDR):
+
+| Step (fresh process) | Before | After |
+|---|---|---|
+| D3D11 device | 52 MB | 52 MB |
+| 4K FP16 shadow / staging | +64 / +63 MB | +64 MB / none kept |
+| HDR GDI seed (transient peak) | +158 MB | +40 MB |
+| Warm session at rest | 286-300 MB | 133 MB |
+| Warm session after 30 s idle (shadows released) | - | 54 MB |
+| `freeze_all` right after the release | - | 38.5 ms (warm: 38-40 ms) |
+
+- `IDXGIDevice3::Trim` after every warm-up and capture (`Session::trim`): the driver kept the
+  GDI seed's upload buffers (about 80 MB) committed until trimmed.
+- No persistent staging textures: `read_back_into` makes a staging texture of exactly the
+  rect it reads and drops it (0.2-0.3 ms to create; the two full-output staging textures were
+  81 MB for a few ms of use per capture). Shadows were already FP16 only for HDR outputs and
+  BGRA8 for SDR ones.
+- The HDR seed converts and uploads in 270-row bands (8 MB) instead of one 66 MB half-float
+  buffer plus the runtime's 66 MB copy of it.
+- `release_idle_shadows(max_idle)` drops the shadow textures (78 MB here) of a session unused
+  for `max_idle`; the app calls it from housekeeping with 30 s. The device and duplications
+  stay, so the next capture still takes the duplication path: its frame is the whole desktop
+  as it is now and refills the shadow (`freeze_all` 37.6 ms on the first capture after a
+  release, same as warm). Only when nothing changed on an output since the last frame is it
+  seeded from GDI, like the first capture of a session: slower, never stale. Releasing the
+  whole session instead was rejected: the D3D11 driver keeps most of it (release gave back
+  35-65 MB) and the next capture would pay the 0.3-0.5 s rebuild or the GDI path (overlay above
+  the 180 ms target).
+- Desktop test `capture_is_fresh_after_idle_shadow_release` (`#[ignore]`) runs the marker
+  checks with the shadows dropped before each check. It and the two older freshness tests
+  pass with the displays on (Nov 7 2026), i.e. on the duplication path this time.
+
+What is left: the D3D11 device itself (about 52 MB, driver) and, while warm, the shadows. An
+8-bit HDR shadow would need the FP16 -> sRGB conversion on the GPU (a compute shader matching
+`hdr::ScrgbToSrgb` exactly); not done.
 
 ### Window capture (WGC) and a hang found on this machine
 - `capture_window` runs `Windows.Graphics.Capture` on a private MTA thread with a 5 s timeout

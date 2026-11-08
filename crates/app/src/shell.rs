@@ -92,6 +92,8 @@ const TRAY_CLICK_QUIET: Duration = Duration::from_millis(700);
 /// Overlay hint-bar notices (instead of toasts over the frozen screen).
 const WINDOW_CAPTURE_FALLBACK: &str =
     "Windows could not capture that window. Try again, or use Region capture.";
+/// How long the capture session keeps its shadow textures after the last capture.
+const SHADOW_IDLE: Duration = Duration::from_secs(30);
 const NOTICE_NO_LAST_REGION: &str = "No Region Remembered Yet: Select One";
 const NOTICE_LAST_REGION_OFF_SCREEN: &str = "Last Region Is Off Screen: Select a New One";
 
@@ -126,6 +128,8 @@ pub fn run() -> anyhow::Result<()> {
         } => (initial, forward_args),
     };
 
+    // A restart after a GPU device loss waits for the old process to let go of the mutex.
+    crate::gpu::wait_for_predecessor();
     let Some(guard) = system::acquire_single_instance() else {
         timing::point(format_args!("another instance holds the mutex; forwarding"));
         if forward_args.is_empty() {
@@ -231,8 +235,73 @@ fn start_ipc() -> Receiver<Vec<String>> {
     ipc_rx
 }
 
+/// A screen frozen while the app was still starting (`prefreeze_while_gpu_starts`).
+struct EarlyFreeze {
+    at: Instant,
+    frozen: Frozen,
+    windows: Vec<windows_enum::WinInfo>,
+}
+
+/// How long an early freeze stays usable for the command it was taken for.
+const EARLY_FREEZE_MAX_AGE: Duration = Duration::from_secs(3);
+
+/// Commands whose handler starts with `Shell::freeze`.
+fn freezes_first(cmd: &Command) -> bool {
+    matches!(
+        cmd,
+        Command::CaptureRegion
+            | Command::CaptureScrolling
+            | Command::OcrRegion
+            | Command::CaptureWindow
+    )
+}
+
+/// While the GPU device is still being made the main thread only waits for it. Take forwarded
+/// commands off the IPC channel meanwhile, and when one of them starts with a freeze, freeze
+/// the screen now: the overlay then opens as soon as eframe is up instead of freezing after
+/// it (a capture asked for at launch, e.g. by a hotkey tool or the bench).
+fn prefreeze_while_gpu_starts(
+    ipc_rx: &Receiver<Vec<String>>,
+    gpu: Option<&std::thread::JoinHandle<Option<eframe::egui_wgpu::WgpuSetupExisting>>>,
+    include_cursor: bool,
+) -> (Vec<Vec<String>>, Option<EarlyFreeze>) {
+    let mut queued = Vec::new();
+    let mut early = None;
+    let Some(gpu) = gpu else {
+        return (queued, early);
+    };
+    while !gpu.is_finished() {
+        match ipc_rx.recv_timeout(Duration::from_millis(5)) {
+            Ok(args) => {
+                let wants = cli::command_from_args(&args).is_some_and(|c| freezes_first(&c));
+                if wants && early.is_none() {
+                    let windows = windows_enum::visible_windows();
+                    match capture::freeze_all(include_cursor) {
+                        Ok(frozen) => {
+                            timing::point(format_args!("early freeze done (GPU still starting)"));
+                            early = Some(EarlyFreeze {
+                                at: Instant::now(),
+                                frozen,
+                                windows,
+                            });
+                        }
+                        Err(e) => log::debug!("early freeze failed: {e:#}"),
+                    }
+                }
+                queued.push(args);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    (queued, early)
+}
+
 struct Boot {
     ipc_rx: Receiver<Vec<String>>,
+    /// Forwarded commands taken off `ipc_rx` before eframe started, in order.
+    early_args: Vec<Vec<String>>,
+    early_freeze: Option<EarlyFreeze>,
     config: Config,
     fonts: Arc<Fonts>,
     history: Arc<History>,
@@ -298,6 +367,8 @@ fn run_app(
     );
     timing::point(format_args!("history opened"));
 
+    let (early_args, early_freeze) =
+        prefreeze_while_gpu_starts(&ipc_rx, gpu.as_ref(), config.capture.include_cursor);
     let wgpu_options = crate::gpu::options(gpu);
     timing::point(format_args!("gpu device joined"));
     let ocr: Option<Arc<dyn OcrEngine>> =
@@ -312,6 +383,8 @@ fn run_app(
 
     let boot = Boot {
         ipc_rx,
+        early_args,
+        early_freeze,
         config,
         fonts,
         history,
@@ -329,16 +402,28 @@ fn run_app(
         wgpu_options,
         ..Default::default()
     };
-    eframe::run_native(
-        "Stinkshot",
-        options,
-        Box::new(move |cc| {
-            Ok(Box::new(
-                Shell::new(cc, boot).map_err(|e| format!("{e:#}"))?,
-            ))
-        }),
-    )
-    .map_err(|e| anyhow!("{e}"))
+    // A device loss inside a paint ends in a panic in egui-wgpu (`gpu.rs`). winit hands panics
+    // back out of its event loop, so it lands here: start a fresh instance instead of dying.
+    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        eframe::run_native(
+            "Stinkshot",
+            options,
+            Box::new(move |cc| {
+                Ok(Box::new(
+                    Shell::new(cc, boot).map_err(|e| format!("{e:#}"))?,
+                ))
+            }),
+        )
+    }));
+    match run {
+        Ok(r) => r.map_err(|e| anyhow!("{e}")),
+        Err(payload) if crate::gpu::lost() || crate::gpu::is_device_panic(payload.as_ref()) => {
+            crate::gpu::relaunch();
+            log::logger().flush();
+            std::process::exit(0);
+        }
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
 
 fn root_viewport() -> egui::ViewportBuilder {
@@ -545,6 +630,12 @@ struct Shell {
     quitting: bool,
     /// Set by `quit()`; the window closes when in-flight jobs finish or this passes.
     quit_deadline: Option<Instant>,
+    /// Diagnostics (`STINKSHOT_TEST_GPU_LOSS`): the device, and the overlay number whose paint
+    /// destroys it.
+    test_gpu_loss: Option<(eframe::wgpu::Device, u32)>,
+    overlays_opened: u32,
+    /// Screen frozen during start-up for the first capture command (`freeze` uses it once).
+    early_freeze: Option<EarlyFreeze>,
     _guard: InstanceGuard,
 }
 
@@ -612,6 +703,8 @@ impl Shell {
 
         let Boot {
             ipc_rx,
+            early_args,
+            early_freeze,
             config,
             fonts,
             history,
@@ -697,9 +790,23 @@ impl Shell {
             needs_repaint: false,
             quitting: false,
             quit_deadline: None,
+            test_gpu_loss: None,
+            overlays_opened: 0,
+            early_freeze,
             _guard: guard,
         };
+        if let Some(rs) = cc.wgpu_render_state.as_ref() {
+            crate::gpu::install_handlers(&rs.device);
+            shell.test_gpu_loss =
+                crate::gpu::test_loss_plan(&rs.device).map(|n| (rs.device.clone(), n));
+        }
 
+        for args in early_args {
+            match cli::command_from_args(&args) {
+                Some(cmd) => shell.pending.push_back(cmd),
+                None => log::debug!("ignored forwarded args {args:?}"),
+            }
+        }
         shell.apply_autostart();
         if !shell.hotkey_errors.is_empty() {
             let body = shell.hotkey_errors.join("\n");
@@ -988,6 +1095,12 @@ impl Shell {
     }
 
     fn freeze(&mut self) -> Option<(Frozen, Vec<stinkshot_platform::windows_enum::WinInfo>)> {
+        if let Some(e) = self.early_freeze.take()
+            && e.at.elapsed() < EARLY_FREEZE_MAX_AGE
+        {
+            timing::point(format_args!("freeze: using the start-up freeze"));
+            return Some((e.frozen, e.windows));
+        }
         let t0 = Instant::now();
         let windows = windows_enum::visible_windows();
         let t1 = Instant::now();
@@ -1035,6 +1148,14 @@ impl Shell {
         self.tray_overlay_at = None;
         self.overlay = Some(Slot::new(Overlay::new(req, &self.shared)));
         timing::point(format_args!("overlay constructed (layers + Overlay::new)"));
+        self.overlays_opened += 1;
+        if let Some((device, n)) = &self.test_gpu_loss
+            && *n == self.overlays_opened
+        {
+            // The overlay paints later in this pass, on the destroyed device.
+            log::warn!("test: destroying the GPU device before overlay {n} paints");
+            device.destroy();
+        }
         self.touch();
     }
 
@@ -1246,6 +1367,23 @@ impl Shell {
         }
         self.settings = Some(Slot::new(w));
         self.touch();
+    }
+
+    /// The wgpu device is gone (`gpu.rs`): no surface can paint again, and egui-wgpu panics
+    /// on the next mesh upload. Hand over to a fresh instance before this frame paints.
+    fn restart_after_gpu_loss(&mut self) -> ! {
+        if let Rec::Active { .. } = &self.rec
+            && let Rec::Active { rec, .. } = std::mem::replace(&mut self.rec, Rec::Idle)
+            && let Err(e) = rec.stop()
+        {
+            // The recorder does not use wgpu; finish its file so the recording is kept.
+            log::warn!("stop before restart failed: {e:#}");
+        }
+        self.hotkeys.shutdown();
+        self.tray = None;
+        crate::gpu::relaunch();
+        log::logger().flush();
+        std::process::exit(0);
     }
 
     fn quit(&mut self) {
@@ -2198,7 +2336,15 @@ impl Shell {
                 crate::logo_anim::prewarm_cache(&self.ctx, system_scale());
             }
         }
-        self.ctx.request_repaint_after(Duration::from_secs(60));
+        // The capture session's shadow textures are dropped after a quiet spell
+        // (`release_idle_shadows`); come back when the next one is due.
+        let next = if self.overlay.is_some() {
+            SHADOW_IDLE
+        } else {
+            capture::release_idle_shadows(SHADOW_IDLE)
+        };
+        self.ctx
+            .request_repaint_after(next.clamp(Duration::from_secs(1), Duration::from_secs(60)));
     }
 
     fn show_all(&mut self, ctx: &egui::Context) {
@@ -2253,6 +2399,9 @@ impl Shell {
 
 impl eframe::App for Shell {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if crate::gpu::lost() {
+            self.restart_after_gpu_loss();
+        }
         if !self.first_frame_seen {
             self.first_frame_seen = true;
             timing::point(format_args!("first frame"));

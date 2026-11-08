@@ -333,7 +333,9 @@ The client itself reaches `main` 27-46 ms after process creation.
 - After the first overlay about 85-90 MB stays committed (483-491 vs 397 MB; before: 654 vs
   619). It is the same with the GL backend and does not happen for full-screen captures, so it
   is tied to the overlay's viewport rather than wgpu's allocator; polling the device after the
-  window closed did not release it. Cause not found.
+  window closed did not release it. Cause not found. (Found later the same day: gpu-allocator
+  keeps the last block of each memory type, a 64 MB write-combined upload block with the
+  `MemoryUsage` hint; see "GPU device loss, memory and cold start".)
 - Countdown and recording frame transparency were not looked at on screen (the pin was).
 
 ## Benchmark re-run (Nov 7 2026, evening)
@@ -360,3 +362,137 @@ Not verified / open:
   not measured in this run; the earlier app-track figure was 400 MB idle private bytes.
 - The slow overlay runs (0.5-0.95 s) are still there for CLI triggers; hotkey and tray
   triggers were not measured (no synthetic input).
+
+## GPU device loss, memory and cold start (Nov 7 2026, late)
+
+Follow-up to the benchmark: one instance had panicked in `egui-wgpu` 0.37 `renderer.rs:1033`
+("Failed to create staging buffer for index data") during repeated overlays; idle private bytes
+were about 400 MB with the displays on (ShareX 113, Greenshot 45); a cold launch took 0.7-1.0 s
+to the first overlay. Harness: `C:\dev\stinkshot-bench\harness-mem` (copy of the bench harness;
+`SS_ROOT`, `SS_PROFILE`, `BENCH_OUT`, `IDLE_SECS`, `SETTLE_SECS`, `KEEP`; new commands `cycles N`
+(overlay open + `WM_CLOSE` N times in one instance, memory after each), `cold N DELAY` (launch ->
+first overlay ready, the region command sent 30 ms after launch or DELAY ms after the tray is
+up) and `regions PID` (committed private regions by allocation)). `results-mem\run-set.sh`
+runs a set; raw results in `C:\dev\stinkshot-bench\results-mem\{before,after}`. Release builds
+in `C:\dev\stinkshot-bench\stinkshot-target`, profile `bench`. **Displays on** for every
+before/after number below (console display state 1, logged before each step); background CPU
+outside the tool 13-36 % (the PC was in use).
+
+### The crash: a lost wgpu device
+
+`Queue::write_buffer_with` returns None without reporting an error when the device is lost
+(wgpu 30: `DeviceError::Lost` maps to `ErrorType::DeviceLost`, which the error sink swallows
+because it "will be surfaced via callback"), and egui-wgpu panics on None. wgpu-core loses the
+device on any hal `OutOfMemory`, `Lost` (`DXGI_ERROR_DEVICE_REMOVED` / `RESET`) or `Unexpected`
+(any other failed HRESULT in a D3D12 call: Present, fence signal, `SetMaximumFrameLatency`,
+swapchain `GetBuffer`). An out-of-memory error would have panicked earlier with "wgpu error: Out
+of Memory" through wgpu's default error handler, so the device was lost through a removed /
+reset device or an unexpected HRESULT. Neither memory hint sets a memory budget
+(`memory_budget_thresholds` stays default), so the hint did not make allocations fail.
+
+Not reproduced naturally: 300 open/close cycles in the old build with the displays on ran
+without a crash and without growth (private 650-670 MB median per 50 cycles, flat). The crash
+happened in an unattended run with the displays off; the log of that instance was not kept, so
+the failing call is unknown. wgpu-hal logs it (`... failed: <HRESULT>`, target `wgpu_hal`, error
+level, which the file logger keeps), and the new handlers log the loss, so a next occurrence
+names it.
+
+Reproduced exactly with a test hook: `STINKSHOT_TEST_GPU_LOSS=3` destroys the device while the
+third overlay paints -> the same panic at `renderer.rs:1033`.
+
+Fix (`gpu.rs`, `shell.rs`): a lost device cannot be revived and eframe 0.37 cannot swap its
+device, so the process restarts itself.
+
+- `install_handlers`: `set_device_lost_callback` and `on_uncaptured_error` (wgpu's default
+  handler panics on every uncaptured error: validation errors are now logged, out-of-memory
+  marks the device lost).
+- Loss between frames: `logic()` sees `gpu::lost()` before anything paints, stops a recording
+  in progress (the recorder does not use wgpu, the file is kept), drops tray and hotkeys,
+  starts `stinkshot --tray` with `STINKSHOT_RESTART_AFTER=<pid>` and exits.
+- Loss inside a paint (the reported case): winit hands the panic back out of its event loop,
+  `run_app` catches it around `eframe::run_native` (`catch_unwind`), recognizes it
+  (`gpu::lost()` or the panic text, `is_device_panic`) and restarts the same way. Other panics
+  are re-raised.
+- The new instance waits (up to 10 s) for the old process to exit before taking the
+  single-instance mutex (`wait_for_predecessor`).
+- Verified: `STINKSHOT_TEST_GPU_LOSS=3` (in-paint) -> panic logged, "restarting after GPU device
+  loss", new instance up in 0.2 s and answering `region`; `idle:6` (device destroyed between
+  frames) -> restart. An overlay that was open when the device went is lost (it cannot paint).
+
+### Memory: 399 -> 134 MB idle private bytes
+
+Where it went, from timing points and `bench regions` (committed private regions):
+
+| Piece | Before | After |
+|---|---|---|
+| App before the GPU (config, fonts, history, tray) | 12 MB | 12 MB |
+| D3D11 capture device (driver) | 52 MB | 52 MB |
+| Capture shadows (4K FP16 + 1440p BGRA) | 78 MB | 0 when idle (released after 30 s) |
+| Capture staging textures (4K FP16 + 1440p BGRA) | 77 MB | none kept |
+| Driver upload buffers left by the GDI seed | about 80 MB | trimmed |
+| D3D12 CBV/SRV/UAV descriptor heap (1 M x 32 B) | 30.5 MB | 2 MB (64 K) |
+| gpu-allocator blocks kept after the first overlay | 64 MB WC upload block | 8 MB |
+
+Capture side: platform.md, "Review fixes and a smaller warm session". App side (`gpu.rs`):
+`max_non_sampler_bindings` 65,536 (wgpu-hal sizes the shader-visible descriptor heap from that
+limit; the default 1,000,000 was 30.5 MB committed), `MemoryHints::Manual` with 4-16 MB device
+blocks (4-8 MB host): gpu-allocator keeps the last block of each memory type, and with
+`MemoryUsage` that was the 64 MB upload block holding the overlay's texture upload, which is the
+85-90 MB that stayed committed after the first overlay (with the descriptor heap's share
+gone the rest is about 19 MB now: a bigger driver region and an 8 MB block). The shell calls
+`capture::release_idle_shadows(30 s)` from housekeeping (and schedules its next wake-up from the
+answer).
+
+Releasing the whole warm session when idle and re-warming on a hint was measured and rejected:
+the D3D11 driver keeps most of the memory after the session is dropped (35-65 MB came back), a
+re-warm takes 0.3-0.5 s, and a hotkey or CLI trigger gives no lead time, so the first overlay
+after idle would take the GDI path (about 250 ms, above the 180 ms target). Dropping only the
+shadows keeps the duplication path: the first capture after the release took 37.6 ms in
+`freeze_all`, the same as a warm one.
+
+### Cold start: 807 -> 650 ms
+
+Timeline of a cold launch with `region` sent 30 ms after it (`STINKSHOT_LOG=debug`): GPU adapter
+at +310-375 ms (D3D12 driver load; wgpu also creates a WARP device while enumerating, which it
+offers no way to skip), device +45-75 ms, eframe +110-145 ms (root window 35 ms, egui's two
+shaders), then the overlay about 105 ms. Changes:
+
+- `instance_flags`: without `VALIDATION_INDIRECT_CALL` (wgpu's release default; egui never draws
+  indirect) the device no longer compiles two compute shaders (about 30 ms); with `DEBUG` on
+  DX12 FXC skips optimizing egui's shaders (eframe start 132 -> 114 ms average over 6 launches).
+- `prefreeze_while_gpu_starts`: the main thread only waits for the GPU there, so it takes
+  forwarded commands off the IPC channel meanwhile and freezes the screen at once for one that
+  starts with a freeze (region, scrolling, OCR, window). The freeze runs during the warm-up, so
+  it takes the GDI path (about 100 ms), off the critical path; `Shell::freeze` uses it once
+  (within 3 s). Hotkeys and tray clicks queued before the event loop are not seen there.
+- A capture never waits for a warm-up any more (GDI instead, platform.md), so a capture that
+  arrives while the session is being built is not held up by it.
+- Measured and not done: starting the capture warm-up after the GPU device (GPU ready only
+  25-40 ms sooner, first freeze then 200 ms).
+
+### Results (release, displays on, before = b5409a9 build, after = this change)
+
+| Metric | Before | After |
+|---|---|---|
+| Idle private bytes after 60 s, 2 runs | 399.3 / 398.8 MB | 134.2 / 134.3 MB |
+| Idle working set | 200 MB | 124 MB |
+| Overlay ready, 30 runs, median / p90 | 154 / 630 ms | 154 / 213 ms |
+| Peak private bytes during an overlay (median) | 659 MB | 476 MB |
+| Cold launch -> first overlay ready, region at +30 ms, 8 runs, median (range) | 807 ms (721-968) | 650 ms (609-811) |
+| Same, region 1 ms after the tray is up | 714 ms (679-853) | 636 ms (610-699) |
+| 300 overlay cycles: crash / private median per 50 cycles (250 ms after each close) | none / 647-677 MB | none / 347-354 MB (drift about 6 MB over 300) |
+| Private bytes 5 s after the 300 cycles (start) | 506 MB (399) | 305 MB (212, shadows still held at both points) |
+
+The overlay p90 before includes 11 slow runs (0.5-1.2 s) during heavier background load; the
+median is what compares. The slow mode outside the instance (process creation of the forwarding
+client, "The slow overlay mode") is unchanged.
+
+### Not verified / open
+
+- The natural cause of the device loss (see above); the recovery was tested with the hook only.
+- Hybrid-GPU laptops and machines without DX12 (the descriptor-heap limit and memory hint also
+  apply to the Vulkan and GL fallbacks; there the limit only caps bind groups).
+- Hotkey and tray triggers during start-up still freeze after eframe is up (the early freeze
+  only sees IPC commands).
+- An idle desktop where nothing at all changes between two captures takes the GDI seed after
+  the shadows were released (slower, correct); how often that happens was not measured.
