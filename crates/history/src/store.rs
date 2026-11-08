@@ -487,6 +487,20 @@ impl History {
         Ok(())
     }
 
+    /// The file was re-compressed losslessly (same pixels, fewer bytes): refresh only its
+    /// size. OCR text and the thumbnail stay valid.
+    pub fn refresh_bytes(&self, id: ItemId) -> anyhow::Result<()> {
+        let Some(item) = self.get(id)? else {
+            bail!("history item {id} not found");
+        };
+        let bytes = std::fs::metadata(&item.path)
+            .with_context(|| format!("stat {}", item.path.display()))?
+            .len() as i64;
+        self.lock()
+            .execute("UPDATE items SET bytes=?2 WHERE id=?1", params![id, bytes])?;
+        Ok(())
+    }
+
     /// Images with ocr_text NULL, newest first. `limit` 0 = no limit.
     pub fn pending_ocr(&self, limit: usize) -> anyhow::Result<Vec<ItemMeta>> {
         let sql = format!(

@@ -511,6 +511,28 @@ pub fn play_capture_sound() {
     }
 }
 
+/// Hand this process's working set back to Windows (`SetProcessWorkingSetSizeEx(-1, -1)`):
+/// the pages move to the standby list, other programs can use the RAM, and the next touch
+/// faults them back in (from RAM while they are still on the standby list). Private bytes
+/// (commit) do not change. The shell calls it once per long idle spell.
+pub fn trim_working_set() {
+    use windows::Win32::System::Memory::{
+        SETPROCESSWORKINGSETSIZEEX_FLAGS, SetProcessWorkingSetSizeEx,
+    };
+    use windows::Win32::System::Threading::GetCurrentProcess;
+    // SAFETY: the pseudo handle of this process; (-1, -1) means "trim".
+    if let Err(e) = unsafe {
+        SetProcessWorkingSetSizeEx(
+            GetCurrentProcess(),
+            usize::MAX,
+            usize::MAX,
+            SETPROCESSWORKINGSETSIZEEX_FLAGS(0),
+        )
+    } {
+        log::debug!("trim working set: {e}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

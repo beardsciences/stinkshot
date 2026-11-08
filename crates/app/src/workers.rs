@@ -261,12 +261,13 @@ fn encode_save(img: &Rgba, path: &Path, cfg: &Config) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
-    img.save(
-        path,
-        filedialog::format_for_path(path),
-        cfg.capture.jpeg_quality,
-    )
-    .with_context(|| format!("write {}", path.display()))
+    let bytes = img
+        .encode(filedialog::format_for_path(path), cfg.capture.jpeg_quality)
+        .with_context(|| format!("encode {}", path.display()))?;
+    // A queued re-compression of this file must not swap in an older picture after this.
+    let _g = crate::recompress::write_lock();
+    stinkshot_core::image::write_atomic(path, &bytes)
+        .with_context(|| format!("write {}", path.display()))
 }
 
 /// Write the flattened image (+ re-edit sidecar) into the history folder and index it.
@@ -287,6 +288,7 @@ fn save_to_history(
         encode_save(flat, &path, cfg)?;
         write_sidecar(cfg, &path, base, doc, true);
         env.history.touch(id, flat.width, flat.height)?;
+        crate::recompress::enqueue(&path, Some((env.history.clone(), id)));
         return Ok((id, path));
     }
     let fmt = cfg.capture.format;
@@ -322,6 +324,7 @@ fn save_to_history(
         window_title: source.window_title.clone(),
         mode: mode.to_string(),
     })?;
+    crate::recompress::enqueue(&path, Some((env.history.clone(), id)));
     Ok((id, path))
 }
 
@@ -403,6 +406,7 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
             match filedialog::save_image(&stem, env.cfg.capture.format, Some(&start_dir)) {
                 Ok(Some(target)) => match encode_save(&flattened, &target, &env.cfg) {
                     Ok(()) => {
+                        crate::recompress::enqueue(&target, None);
                         if let (Some(parent), Ok(mut g)) = (target.parent(), LAST_SAVE_DIR.lock()) {
                             *g = Some(parent.to_path_buf());
                         }

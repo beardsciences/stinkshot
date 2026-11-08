@@ -46,7 +46,10 @@ from the crate root, so the public path is unchanged.
 
 ## Contract changes
 
-None. Only an added `image` dependency in `crates/history/Cargo.toml`.
+- Only an added `image` dependency in `crates/history/Cargo.toml`.
+- `History::refresh_bytes(id)` (Nov 8 2026, additive): re-read the stored file size only,
+  after the app's background PNG re-compression swapped in a smaller file with the same
+  pixels (OCR text and thumbnail stay).
 
 ## Contract requests
 

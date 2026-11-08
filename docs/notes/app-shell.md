@@ -564,3 +564,155 @@ Verdicts:
 
 Still open: a real (not hook-made) device loss; whether the restarted instance should add a
 recording kept during a restart to history; the restart cap was not exercised live.
+
+## Perf track (Nov 8 2026): idle memory frontier, smaller PNGs, cold start
+
+Goals from the benchmark's measured losses: idle private bytes 134 MB (Greenshot 45,
+Flameshot 8), PNGs 1.3-1.9x larger per pixel, cold launch to first overlay about 0.6 s.
+
+**Displays off for every measurement in this section** (console display state 0 in every
+harness log line, 00:30-01:55; nothing was done to wake them). With the displays off the
+duplication session gets no frames, so every capture took the GDI path, and the warm
+session's shadows were never filled. Relative numbers (before / after in the same
+conditions) hold; the displays-on figures of the benchmark were not re-measured.
+
+Tools: release builds in `C:\dev\stinkshot-bench\target-perf`, copied to `perf-base`
+(f334f45, the benchmark's build) and `perf-v*`; profile `perf` (bench config, history in
+`captures\perf`). A copy of the bench harness with one new command, `idleoverlay N GAP`
+(start, settle 5 s, then N times: idle GAP s, record the footprint, open the region overlay,
+measure ready), and a scratch probe that creates D3D11 / D3D12 / wgpu devices one step at a
+time and prints private bytes and committed regions.
+
+### Idle memory: the GPU driver sets the floor
+
+Probe, one fresh process per line, private bytes (displays do not matter here):
+
+| Step | Private |
+|---|---|
+| Process start | 1.3 MB |
+| D3D11 device + duplication of both outputs (the capture session) | 50-53 MB |
+| Same, then the device dropped | 17 MB |
+| Raw D3D12 device on the RTX 3060 Ti | 60 MB |
+| + one direct command queue | 81 MB (+21) |
+| + shader-visible descriptor heaps (64 K views, 2 K samplers) | 83 MB |
+| Raw D3D12 device, then dropped | 24 MB |
+| wgpu DX12 device with the app's settings (`gpu.rs`) | 92-94 MB |
+| D3D11 session + wgpu device (what the app holds) | 106-108 MB |
+| Both, then wgpu dropped | 102 MB |
+| Both, then D3D11 dropped | 105.7 MB |
+| Both, then both dropped | 68 MB |
+| D3D11On12 device on the D3D12 device + duplication | `DuplicateOutput` fails (E_INVALIDARG); 114 MB |
+
+About a third of each device is not in any private region: it is the commit charge of the
+NVIDIA user-mode driver's writable image sections (relocations, data), and it stays until the
+DLL unloads. The two APIs share that driver, so the second device costs only 14 MB, and
+dropping one of them gives back 2-6 MB. Even with both devices dropped the process keeps
+68 MB. The app before any GPU work is 5 MB after this change (fonts mapped).
+
+So the 60 MB target is not reachable in a process that has used the GPU once, whatever is
+released after idle. The frontier, from the measurements above and the existing notes:
+
+| Option | Idle private (displays on, est.) | First overlay after idle |
+|---|---|---|
+| Both devices warm (default, this change) | about 123 MB (displays off: 135.5 -> 124.7 MB) | unchanged, 134 ms median (benchmark) |
+| Release the capture session after idle (measured Nov 7) | 134 - 14 to -35 MB | GDI path, about +100 ms; re-warm 0.3-0.5 s |
+| Release the wgpu device after idle | about 128 MB (gives back 6 MB) | eframe 0.37 cannot swap its device: needs a full eframe restart, about +250 ms |
+| Release both | about 75-80 MB | about +350 ms |
+| GPU work in a child process that exits after idle | 5-15 MB (tray process only) | cold engine start: frozen screen about 0.25 s (quick overlay), full overlay about 0.7 s |
+
+Nothing below the default stays within +30 ms, so the default stays: both devices warm.
+What changed:
+
+- Fonts are memory-mapped (`core::fonts`): 7 MB less private (app before the GPU 12 -> 5 MB).
+- The working set is handed back after 60 s with nothing open (`trim_when_idle`,
+  `system::trim_working_set`): Task Manager's figure (private working set) drops to about
+  8 MB; private bytes (commit) do not change. Cost on the next overlay: see "Results".
+  Windows does this anyway under memory pressure or with the displays off (the user's own
+  instance showed 147 MB private / 22 MB working set this morning).
+- Not done: a smaller descriptor heap (2 MB; a history grid with thousands of thumbnails
+  could run out, which loses the device), and the separate-process design (the only way under
+  60 MB; a large change with the latency cost above).
+
+### Smaller PNGs: background re-compression
+
+`recompress.rs` (new) + `core::png_opt` (new; algorithm in docs/notes/core.md) +
+`platform::files::replace_if_unchanged`:
+
+- The save path is unchanged except that opaque images are written as RGB (no alpha
+  channel): the file exists at once for clipboard, toast and history.
+- Each PNG saved into history (new capture or re-edit) and each Save As target is queued.
+  One thread in Windows background mode (lowest CPU, very low I/O and memory priority) waits
+  2 s, re-reads the file, optimizes it (miniz level 10; zopfli, 1 iteration, for images up to
+  1 MP) and writes `<name>.<pid>.stinkshot-tmp` beside it (flushed).
+- The swap happens only if the file still has the size and modification time it had when
+  saved and nobody else has it open (opened without read/write sharing during the check, then
+  an atomic POSIX rename over it); creation and modification times are kept. Moved,
+  re-edited or deleted: dropped. Open in another program: retried once after 20 s, then
+  dropped. The new bytes must decode to the same pixels (`png_opt` checks). Stinkshot's own
+  writes to capture files take `recompress::write_lock`, so a re-edit cannot land between
+  the check and the swap.
+- Quitting does not wait for it; a temp file left by an exit or crash mid-write is deleted
+  when the next instance opens history. The history index's size is refreshed
+  (`History::refresh_bytes`); OCR text and thumbnail stay.
+- The clipboard is not involved (it gets pixels, not the file). Separately, the clipboard's
+  own PNG copy now uses the fast encoder and every payload is built before the clipboard is
+  opened: the default-level encode took about 1.8 s for a 4K image with the clipboard held
+  open, so a paste right after a capture could miss the image.
+- Not re-compressed: the headless CLI (`stinkshot full --out`, the process exits at once),
+  edit sidecars, JPEG and WebP.
+
+### Cold start: a frozen screen at about 0.25 s
+
+The GPU path cannot get under 0.4 s: the D3D driver load alone is 0.25-0.35 s (any API),
+then eframe 0.12 s and the overlay window 0.13 s. The screen is frozen with GDI within about
+0.15 s of the launch (`prefreeze_while_gpu_starts`), so that picture now goes on display at
+once in a plain GDI window (`platform::quick_overlay`): dimmed like the overlay, the window
+under the cursor clear, crosshair cursor, topmost, excluded from capture. It takes the first
+input so nothing reaches the apps underneath: a drag draws a clear rectangle with the accent
+border; Esc cancels. When the region overlay is uncloaked the shell hands over
+(`settle_quick_overlay`, `Overlay::take_quick_input`): a drag still in progress continues
+in the overlay, a finished one becomes the selection, Esc cancels; a plain click is dropped.
+The quick overlay never stays longer than 10 s. Only region, scrolling and OCR commands that
+arrive while the GPU starts get it (window capture does not show the frozen screen).
+
+### Results
+
+Release builds, displays off, profile `perf`. Before = `perf-base` (f334f45, the benchmark's
+build), after = this change (`perf-v3`; the cold rows `perf-v4`, which adds the same-pass
+hand-over and fewer fill threads).
+
+| Metric | Before | After |
+|---|---|---|
+| Overlay ready, 30 runs, median / p90 (GDI freeze: displays off) | 218 / 249 ms | 228 / 248 ms |
+| Cold launch, region about 40 ms later, 8 runs: frozen screen shown (first window) | 563 ms; again 548 ms (the overlay) | **204 ms** (201-206, one 587) |
+| Same: region overlay ready | 563 / 548 ms | 592 ms (579-612, one 1001) |
+| Idle 60 s, 2 runs: private bytes | 135.2 / 135.8 MB | 124.5 / 124.9 MB |
+| Same: working set at 60 s / at 120 s | 124 / 124 MB | 116 / **8** MB |
+| First overlay after 70 s idle, 6 runs, median (range) | - | trimmed 276 ms (253-403), trimming off 282 ms (249-301) |
+| Private bytes at idle after one overlay | not compared | 154-157 MB (trim on or off) |
+
+- Cold start: the frozen screen is up 0.35 s sooner (well under 0.4 s); the full overlay
+  comes about 45 ms later than before (contention from the quick overlay's 110 MB of DIBs and
+  their fill while the driver loads; it was 75 ms later before the hand-over moved into the
+  same pass and the fill went to 4 threads).
+- The trim has no measurable cost on the next overlay (medians 276 vs 282 ms, within the
+  noise). The first sample after start-up (403 ms) was the slowest of either set.
+- Private bytes after the first overlay stay about 30 MB above the never-used figure in both
+  trim settings (egui and allocator state); the benchmark's idle figure is the never-used one.
+- PNG sizes and times: docs/benchmark/README.md, "Follow-up: perf track". In the app, a
+  full-screen capture through the running instance (displays off, so a mostly dark picture)
+  was re-compressed 940,494 -> 393,710 bytes 2 s after the save (711 ms of work), swapped in
+  with its modification time kept, no temp file left.
+
+### Not verified / open
+
+- Displays-on numbers for everything here.
+- The quick overlay's look and the drag handover were not seen on screen: the displays were
+  off, the window is excluded from capture, and no synthetic input may be sent. The handover
+  code paths were exercised only by the harness (open, `WM_CLOSE`).
+- Re-compression with another program holding the file, on a non-NTFS history folder, and
+  racing a re-edit were covered by unit tests of `replace_if_unchanged` only.
+- Laptops (battery, hybrid GPUs): the background pass costs about 1 s of one core per
+  megapixel (zopfli about 13 s per megapixel up to 1 MP).
+- The separate-process design that could reach the 60 MB target was not built (see the
+  frontier table); it is the remaining lever.
