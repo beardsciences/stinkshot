@@ -859,3 +859,182 @@ fn snip_hook_swallows_and_routes_win_shift_s() {
         "nothing (Start, Snipping Tool) took the foreground"
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// Capture freshness (stale-frame regression, Nov 7 2026)
+// ---------------------------------------------------------------------------------------
+
+const MARK: [u8; 3] = [19, 199, 90];
+
+unsafe extern "system" fn marker_wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wp: windows::Win32::Foundation::WPARAM,
+    lp: windows::Win32::Foundation::LPARAM,
+) -> windows::Win32::Foundation::LRESULT {
+    // SAFETY: default processing.
+    unsafe { windows::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, msg, wp, lp) }
+}
+
+/// Solid, non-activating topmost marker windows (this process's own) at `rects`, shown on a
+/// private thread with a message loop until the returned sender is signalled or dropped.
+fn open_markers(rects: Vec<PxRect>) -> std::sync::mpsc::Sender<()> {
+    use windows::Win32::Graphics::Gdi::{CreateSolidBrush, HBRUSH};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, RegisterClassW, SW_SHOWNOACTIVATE,
+        ShowWindow, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    };
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _aware = dpi::ThreadPerMonitorAware::new();
+        // SAFETY: window class registration, creation and a message loop on this thread; the
+        // windows are destroyed before the thread ends.
+        unsafe {
+            let hinst = GetModuleHandleW(None).expect("module");
+            let brush = CreateSolidBrush(COLORREF(
+                MARK[0] as u32 | (MARK[1] as u32) << 8 | (MARK[2] as u32) << 16,
+            ));
+            let wc = WNDCLASSW {
+                lpfnWndProc: Some(marker_wndproc),
+                hInstance: hinst.into(),
+                lpszClassName: w!("StinkshotTestFreshnessMarker"),
+                hbrBackground: HBRUSH(brush.0),
+                ..Default::default()
+            };
+            RegisterClassW(&wc);
+            let mut hwnds = Vec::new();
+            for r in &rects {
+                let h = CreateWindowExW(
+                    WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                    w!("StinkshotTestFreshnessMarker"),
+                    w!("freshness marker"),
+                    WS_POPUP,
+                    r.x,
+                    r.y,
+                    r.w,
+                    r.h,
+                    None,
+                    None,
+                    Some(hinst.into()),
+                    None,
+                )
+                .expect("marker window");
+                let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
+                hwnds.push(h);
+            }
+            let _ = ready_tx.send(());
+            let mut msg = MSG::default();
+            loop {
+                while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                    DispatchMessageW(&msg);
+                }
+                match rx.try_recv() {
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                    _ => break,
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            for h in hwnds {
+                let _ = DestroyWindow(h);
+            }
+        }
+    });
+    let _ = ready_rx.recv();
+    tx
+}
+
+fn is_mark(p: [u8; 4]) -> bool {
+    p[..3]
+        .iter()
+        .zip(MARK)
+        .all(|(&a, b)| (a as i32 - b as i32).abs() <= 2)
+}
+
+/// Whether the live screen shows the marker at the centre of `r` (GDI, the reference).
+fn screen_shows_mark(r: PxRect) -> bool {
+    use windows::Win32::Graphics::Gdi::GetPixel;
+    let _aware = dpi::ThreadPerMonitorAware::new();
+    // SAFETY: screen DC acquired and released here.
+    unsafe {
+        let dc = GetDC(None);
+        let c = GetPixel(dc, r.x + r.w / 2, r.y + r.h / 2).0;
+        ReleaseDC(None, dc);
+        is_mark([c as u8, (c >> 8) as u8, (c >> 16) as u8, 255])
+    }
+}
+
+/// A warm capture session must never hand back pixels older than the request: a window
+/// opened after the warm-up (with nothing else changing on screen) has to show up in
+/// `freeze_all`, `freeze_rect` and `capture_rect`, and be gone again after it closes.
+/// `first_frame_timeout_ms` 0 makes the warm-up miss each output's first duplication frame
+/// (a busy start-up), the case where the warm-up picture could stick.
+fn assert_fresh_after_warm_up(first_frame_timeout_ms: u32) {
+    dpi::init();
+    println!(
+        "display power: {:?}",
+        stinkshot_platform::display_power::state()
+    );
+    let rects: Vec<PxRect> = monitors::list()
+        .iter()
+        .map(|m| PxRect::new(m.rect.x + 240, m.rect.y + 240, 160, 160))
+        .collect();
+    for round in 0..2 {
+        capture::release_cached_capture();
+        capture::warm_up_with(first_frame_timeout_ms);
+        std::thread::sleep(Duration::from_millis(800));
+        let close = open_markers(rects.clone());
+        std::thread::sleep(Duration::from_millis(1200));
+        let visible: Vec<PxRect> = rects
+            .iter()
+            .copied()
+            .filter(|r| screen_shows_mark(*r))
+            .collect();
+        if visible.is_empty() {
+            let _ = close.send(());
+            panic!("no marker is visible on screen (covered by another topmost window?)");
+        }
+        let f = capture::freeze_all(false).expect("freeze_all");
+        for r in &visible {
+            let (x, y) = (r.x + r.w / 2 - f.bounds.x, r.y + r.h / 2 - f.bounds.y);
+            assert!(
+                is_mark(f.image.pixel(x as u32, y as u32)),
+                "round {round}: freeze_all misses the marker at {r:?} (stale picture)"
+            );
+            let one = capture::freeze_rect(*r, false).expect("freeze_rect");
+            assert!(
+                is_mark(one.pixel(r.w as u32 / 2, r.h as u32 / 2)),
+                "round {round}: freeze_rect misses the marker at {r:?}"
+            );
+            let live = capture::capture_rect(*r, false).expect("capture_rect");
+            assert!(
+                is_mark(live.pixel(r.w as u32 / 2, r.h as u32 / 2)),
+                "round {round}: capture_rect misses the marker at {r:?}"
+            );
+        }
+        let _ = close.send(());
+        std::thread::sleep(Duration::from_millis(1200));
+        let f = capture::freeze_all(false).expect("freeze_all after close");
+        for r in visible.iter().filter(|r| !screen_shows_mark(**r)) {
+            let (x, y) = (r.x + r.w / 2 - f.bounds.x, r.y + r.h / 2 - f.bounds.y);
+            assert!(
+                !is_mark(f.image.pixel(x as u32, y as u32)),
+                "round {round}: freeze_all still shows the closed marker at {r:?}"
+            );
+        }
+    }
+    capture::release_cached_capture();
+}
+
+#[test]
+#[ignore = "needs a desktop session"]
+fn capture_is_fresh_after_warm_up() {
+    assert_fresh_after_warm_up(300);
+}
+
+#[test]
+#[ignore = "needs a desktop session"]
+fn capture_is_fresh_when_the_first_frame_comes_late() {
+    assert_fresh_after_warm_up(0);
+}

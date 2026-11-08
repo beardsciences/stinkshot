@@ -127,9 +127,14 @@ impl Rgba {
         let mut buf: Vec<u8> = Vec::with_capacity(self.data.len() / 3);
         match format {
             ImageFormat::Png => {
+                // `Fast` is the png crate's fdeflate path. On real 3840x2160 screenshots it
+                // encodes in about 0.12 s against 1.8 s for `Default` (zlib level 6), for
+                // files about 17 % larger (measured Nov 7 2026, `examples/encode_bench`).
+                // Adaptive filtering keeps the size close: `Up` alone was faster but 40 %
+                // larger than `Default`.
                 let enc = ::image::codecs::png::PngEncoder::new_with_quality(
                     &mut buf,
-                    ::image::codecs::png::CompressionType::Default,
+                    ::image::codecs::png::CompressionType::Fast,
                     ::image::codecs::png::FilterType::Adaptive,
                 );
                 enc.write_image(
@@ -205,16 +210,31 @@ impl Rgba {
         let nh = ((self.height as f64 * scale).round() as u32).clamp(1, max_h);
         // Resample premultiplied so transparent pixels do not bleed their color.
         let has_alpha = self.data.chunks_exact(4).any(|p| p[3] != 255);
-        let mut data = self.data.clone();
-        if has_alpha {
-            for p in data.chunks_exact_mut(4) {
-                let a = p[3] as u32;
-                for c in &mut p[..3] {
-                    *c = ((*c as u32 * a + 127) / 255) as u8;
+        // Lanczos over a whole screenshot is slow (75 ms for 3840x2160, 144 ms for
+        // 6400x2160, measured Nov 7 2026), so a big reduction first averages k x k blocks,
+        // keeping at least twice the target size for the Lanczos pass.
+        let k = ((self.width / nw).min(self.height / nh) / 2) as usize;
+        let (data, sw, sh) = if k >= 2 {
+            box_reduce(
+                &self.data,
+                self.width as usize,
+                self.height as usize,
+                k,
+                has_alpha,
+            )
+        } else {
+            let mut data = self.data.clone();
+            if has_alpha {
+                for p in data.chunks_exact_mut(4) {
+                    let a = p[3] as u32;
+                    for c in &mut p[..3] {
+                        *c = ((*c as u32 * a + 127) / 255) as u8;
+                    }
                 }
             }
-        }
-        let Some(buf) = ::image::RgbaImage::from_raw(self.width, self.height, data) else {
+            (data, self.width, self.height)
+        };
+        let Some(buf) = ::image::RgbaImage::from_raw(sw, sh, data) else {
             return Rgba::new(0, 0);
         };
         let out = ::image::imageops::resize(&buf, nw, nh, ::image::imageops::FilterType::Lanczos3);
@@ -238,6 +258,46 @@ impl Rgba {
             data,
         }
     }
+}
+
+/// Average `k` x `k` blocks of a `w` x `h` RGBA8 image (edge blocks average the pixels they
+/// have). With `premultiply`, colors are weighted by alpha, so the result is premultiplied.
+fn box_reduce(data: &[u8], w: usize, h: usize, k: usize, premultiply: bool) -> (Vec<u8>, u32, u32) {
+    let (ow, oh) = (w.div_ceil(k), h.div_ceil(k));
+    let mut out = vec![0u8; ow * oh * 4];
+    let mut sums = vec![0u32; ow * 4];
+    for oy in 0..oh {
+        sums.fill(0);
+        let rows = (oy * k)..((oy + 1) * k).min(h);
+        let nrows = rows.len() as u32;
+        for y in rows {
+            let row = &data[y * w * 4..(y + 1) * w * 4];
+            for (x, p) in row.chunks_exact(4).enumerate() {
+                let s = &mut sums[(x / k) * 4..][..4];
+                if premultiply {
+                    let a = p[3] as u32;
+                    s[0] += (p[0] as u32 * a + 127) / 255;
+                    s[1] += (p[1] as u32 * a + 127) / 255;
+                    s[2] += (p[2] as u32 * a + 127) / 255;
+                    s[3] += a;
+                } else {
+                    s[0] += p[0] as u32;
+                    s[1] += p[1] as u32;
+                    s[2] += p[2] as u32;
+                    s[3] += p[3] as u32;
+                }
+            }
+        }
+        for ox in 0..ow {
+            let n = ((ox + 1) * k).min(w) - ox * k;
+            let count = n as u32 * nrows;
+            let d = &mut out[(oy * ow + ox) * 4..][..4];
+            for c in 0..4 {
+                d[c] = ((sums[ox * 4 + c] + count / 2) / count) as u8;
+            }
+        }
+    }
+    (out, ow as u32, oh as u32)
 }
 
 /// Write `bytes` to `path` atomically: create the parent folder, write a sibling temp
@@ -392,6 +452,49 @@ mod tests {
         let t = img.thumbnail(8, 8);
         let p = t.pixel(1, 4);
         assert!(p[0] > 240 && p[2] < 15, "{p:?}");
+    }
+
+    #[test]
+    fn box_reduce_averages_blocks_and_edges() {
+        // 5x3 image, k = 2: blocks of 2x2, 1x2 (right edge), 2x1 (bottom), 1x1 (corner).
+        let mut img = Rgba::new(5, 3);
+        for y in 0..3 {
+            for x in 0..5 {
+                img.set_pixel(x, y, [(x * 10 + y) as u8, 100, 0, 255]);
+            }
+        }
+        let (d, w, h) = box_reduce(&img.data, 5, 3, 2, false);
+        assert_eq!((w, h), (3, 2));
+        let px = |x: usize, y: usize| &d[(y * 3 + x) * 4..][..4];
+        // (0 + 10 + 1 + 11) / 4, (40 + 41) / 2, (22 + 32) / 2, rounded.
+        assert_eq!(px(0, 0), &[6, 100, 0, 255]);
+        assert_eq!(px(2, 0), &[41, 100, 0, 255]);
+        assert_eq!(px(1, 1), &[27, 100, 0, 255]);
+        assert_eq!(px(2, 1), &[42, 100, 0, 255]);
+        // Premultiplied: a transparent pixel adds nothing to the color.
+        let mut t = Rgba::new(2, 1);
+        t.set_pixel(0, 0, [200, 0, 0, 255]);
+        t.set_pixel(1, 0, [0, 0, 200, 0]);
+        let (d, _, _) = box_reduce(&t.data, 2, 1, 2, true);
+        assert_eq!(&d[..4], &[100, 0, 0, 128]);
+    }
+
+    #[test]
+    fn thumbnail_of_a_large_gradient_stays_smooth() {
+        // Takes the box pre-reduction (k = 5): the result still follows the gradient.
+        let img = gradient(1000, 500);
+        let t = img.thumbnail(100, 50);
+        assert_eq!((t.width, t.height), (100, 50));
+        let direct = |x: u32, y: u32| img.pixel(x * 10 + 5, y * 10 + 5);
+        for (x, y) in [(10, 10), (50, 25), (90, 40)] {
+            let (a, b) = (t.pixel(x, y), direct(x, y));
+            for c in 0..3 {
+                assert!(
+                    (a[c] as i32 - b[c] as i32).abs() <= 3,
+                    "{x},{y}: {a:?} vs {b:?}"
+                );
+            }
+        }
     }
 
     #[test]

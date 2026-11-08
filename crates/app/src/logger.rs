@@ -109,11 +109,15 @@ pub fn init() {
         written: Mutex::new(written),
     };
     if log::set_boxed_logger(Box::new(logger)).is_ok() {
-        log::set_max_level(if cfg!(debug_assertions) {
-            LevelFilter::Debug
-        } else {
-            LevelFilter::Info
-        });
+        // `STINKSHOT_LOG=debug|trace` raises the level of a release build (timing points,
+        // capture session decisions) for diagnosis.
+        let level = match std::env::var("STINKSHOT_LOG").ok().as_deref() {
+            Some("trace") => LevelFilter::Trace,
+            Some("debug") => LevelFilter::Debug,
+            _ if cfg!(debug_assertions) => LevelFilter::Debug,
+            _ => LevelFilter::Info,
+        };
+        log::set_max_level(level);
     }
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {

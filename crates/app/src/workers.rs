@@ -303,7 +303,15 @@ fn save_to_history(
         &parts,
         fmt.extension(),
     );
+    let t0 = std::time::Instant::now();
     encode_save(flat, &path, cfg)?;
+    log::debug!(
+        "saved {}x{} {:?} in {:.1} ms (encode + write)",
+        flat.width,
+        flat.height,
+        fmt,
+        t0.elapsed().as_secs_f64() * 1000.0
+    );
     write_sidecar(cfg, &path, base, doc, false);
     let id = env.history.add(NewItem {
         path: path.clone(),

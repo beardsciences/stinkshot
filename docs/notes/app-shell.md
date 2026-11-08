@@ -152,6 +152,8 @@ Report: right after start-up the first `stinkshot region` sometimes showed no ov
 3 s while later ones did; once the client gave up with "another instance owns the mutex but
 did not answer IPC".
 
+`STINKSHOT_LOG=debug` (or `trace`) raises a release build to that level (Nov 7 2026).
+
 Measured with `timing::point` trace lines (debug level, `grep timing: stinkshot.log`, time
 since process start): mutex, IPC listener ready, eframe up, first frame, IPC received, IPC
 command taken by the shell, dispatch, freeze (window list and `freeze_all` separately),

@@ -56,6 +56,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{Interface, factory};
 
 use crate::Hwnd;
+use crate::display_power;
 use crate::hdr::{self, DisplayColor};
 use crate::monitors::{self, rect_from_win};
 
@@ -91,6 +92,26 @@ pub fn freeze_all(include_cursor: bool) -> anyhow::Result<Frozen> {
     })
 }
 
+/// `freeze_all` limited to `rect` (virtual coords): the same source and freshness rules, but
+/// only the outputs under `rect` are read back and converted. For a capture of one monitor
+/// that needs no overlay (full-screen capture with the editor off).
+pub fn freeze_rect(rect: PxRect, include_cursor: bool) -> anyhow::Result<Rgba> {
+    if rect.is_empty() {
+        anyhow::bail!("capture rect is empty");
+    }
+    let mut image = capture_region(rect, false)?;
+    if include_cursor {
+        draw_cursor(
+            &mut image,
+            PxPoint {
+                x: rect.x,
+                y: rect.y,
+            },
+        );
+    }
+    Ok(image)
+}
+
 /// Live capture of a virtual-desktop rect (used by scrolling capture each step).
 /// Fast path: reuse a cached duplication session between calls.
 pub fn capture_rect(rect: PxRect, include_cursor: bool) -> anyhow::Result<Rgba> {
@@ -98,6 +119,28 @@ pub fn capture_rect(rect: PxRect, include_cursor: bool) -> anyhow::Result<Rgba> 
         anyhow::bail!("capture rect is empty");
     }
     let mut image = capture_region(rect, true)?;
+    if include_cursor {
+        draw_cursor(
+            &mut image,
+            PxPoint {
+                x: rect.x,
+                y: rect.y,
+            },
+        );
+    }
+    Ok(image)
+}
+
+/// One-shot capture of a virtual-desktop rect with GDI only: no duplication session is
+/// created or used. For short-lived processes (the headless CLI), where building a session
+/// (device, duplication, first frame, and a GDI seed anyway) costs 0.2 to 1 s against about
+/// 60 ms for one GDI copy of a 4K monitor. GDI returns correct SDR values on HDR displays.
+pub fn capture_rect_once(rect: PxRect, include_cursor: bool) -> anyhow::Result<Rgba> {
+    if rect.is_empty() {
+        anyhow::bail!("capture rect is empty");
+    }
+    let _dpi = crate::dpi::ThreadPerMonitorAware::new();
+    let mut image = gdi_capture(rect)?;
     if include_cursor {
         draw_cursor(
             &mut image,
@@ -127,17 +170,22 @@ fn bytes_per_pixel(fmt: DXGI_FORMAT) -> Option<usize> {
     }
 }
 
-/// Convert `rows` rows of source pixels into RGBA8 (`dst` holds exactly those rows).
+#[allow(clippy::too_many_arguments)]
+/// Convert `rows` rows of source pixels into RGBA8 rows `dst_stride` bytes apart (`dst`
+/// starts at the first destination row; its last row may end right after `w * 4` bytes).
 fn convert_rows(
     fmt: DXGI_FORMAT,
     src: &[u8],
     pitch: usize,
     w: usize,
+    rows: usize,
     dst: &mut [u8],
+    dst_stride: usize,
     keep_alpha: bool,
 ) {
-    for (y, drow) in dst.chunks_exact_mut(w * 4).enumerate() {
+    for y in 0..rows {
         let srow = &src[y * pitch..];
+        let drow = &mut dst[y * dst_stride..][..w * 4];
         match fmt {
             DXGI_FORMAT_B8G8R8A8_UNORM
             | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
@@ -165,7 +213,7 @@ fn convert_rows(
                     d[3] = 255;
                 }
             }
-            // FP16 is handled by `hdr::ScrgbToSrgb` in `convert_to_rgba_hdr`.
+            // FP16 is handled by `hdr::ScrgbToSrgb` in `convert_into`.
             _ => {}
         }
     }
@@ -199,20 +247,45 @@ pub(crate) fn convert_to_rgba_hdr(
 ) -> Option<Rgba> {
     bytes_per_pixel(fmt)?;
     let mut out = Rgba::new(w as u32, h as u32);
+    convert_into(
+        fmt,
+        src,
+        pitch,
+        w,
+        h,
+        keep_alpha,
+        sdr_white_nits,
+        &mut out.data,
+        w * 4,
+    )
+    .then_some(out)
+}
+
+/// Convert a mapped `w` x `h` surface into `dst` (RGBA8 rows `dst_stride` bytes apart, e.g. a
+/// sub-rectangle of a larger image), splitting rows across threads. False for formats this
+/// module does not understand.
+#[allow(clippy::too_many_arguments)]
+fn convert_into(
+    fmt: DXGI_FORMAT,
+    src: &[u8],
+    pitch: usize,
+    w: usize,
+    h: usize,
+    keep_alpha: bool,
+    sdr_white_nits: f32,
+    dst: &mut [u8],
+    dst_stride: usize,
+) -> bool {
+    if bytes_per_pixel(fmt).is_none() {
+        return false;
+    }
     if w == 0 || h == 0 {
-        return Some(out);
+        return true;
     }
     if fmt == DXGI_FORMAT_R16G16B16A16_FLOAT {
-        hdr::ScrgbToSrgb::shared(sdr_white_nits).convert_parallel(
-            src,
-            pitch,
-            w,
-            h,
-            &mut out.data,
-            w * 4,
-            false,
-        );
-        return Some(out);
+        hdr::ScrgbToSrgb::shared(sdr_white_nits)
+            .convert_parallel(src, pitch, w, h, dst, dst_stride, false);
+        return true;
     }
     let threads = if w * h < 300_000 {
         1
@@ -223,17 +296,29 @@ pub(crate) fn convert_to_rgba_hdr(
             .clamp(1, 8)
     };
     if threads == 1 {
-        convert_rows(fmt, src, pitch, w, &mut out.data, keep_alpha);
-    } else {
-        let rows_per = h.div_ceil(threads);
-        std::thread::scope(|s| {
-            for (i, chunk) in out.data.chunks_mut(rows_per * w * 4).enumerate() {
-                let src = &src[i * rows_per * pitch..];
-                s.spawn(move || convert_rows(fmt, src, pitch, w, chunk, keep_alpha));
-            }
-        });
+        convert_rows(fmt, src, pitch, w, h, dst, dst_stride, keep_alpha);
+        return true;
     }
-    Some(out)
+    let rows_per = h.div_ceil(threads);
+    std::thread::scope(|s| {
+        let mut rest = dst;
+        let mut y0 = 0;
+        while y0 < h {
+            let rows = rows_per.min(h - y0);
+            // The last band may end right after its last row's pixels.
+            let take = if y0 + rows == h {
+                rest.len()
+            } else {
+                rows * dst_stride
+            };
+            let (band, tail) = rest.split_at_mut(take);
+            rest = tail;
+            let src = &src[y0 * pitch..];
+            s.spawn(move || convert_rows(fmt, src, pitch, w, rows, band, dst_stride, keep_alpha));
+            y0 += rows;
+        }
+    });
+    true
 }
 
 /// Premultiplied -> straight alpha. If nothing is opaque the source did not carry alpha at all
@@ -362,6 +447,12 @@ struct OutputDup {
     image_at: Option<std::time::Instant>,
     /// Whether the first (untrusted) duplication frame has been consumed.
     seen_first: bool,
+    /// The shadow must be (re)filled from GDI before it is used: no picture yet, the first
+    /// duplication frame arrived after an earlier seed, or the displays were off.
+    needs_seed: bool,
+    /// `display_power::epoch()` when the shadow was last seeded. A different epoch means the
+    /// displays turned off (and maybe on again) since: frames may have been missed.
+    seed_epoch: u64,
     /// HDR state and SDR white level. With advanced color on, the duplication delivers FP16
     /// scRGB and the shadow texture is FP16 too.
     color: DisplayColor,
@@ -370,6 +461,11 @@ struct OutputDup {
 impl OutputDup {
     fn hdr(&self) -> bool {
         self.color.advanced_color
+    }
+
+    /// Whether the shadow cannot be trusted to show the screen as it is now.
+    fn must_seed(&self) -> bool {
+        !self.has_image || self.needs_seed || self.seed_epoch != display_power::epoch()
     }
 
     /// Texture format the shadow holds for this output.
@@ -487,6 +583,8 @@ impl Session {
                         has_image: false,
                         image_at: None,
                         seen_first: false,
+                        needs_seed: true,
+                        seed_epoch: display_power::epoch(),
                         color,
                     });
                 }
@@ -523,18 +621,40 @@ impl Session {
 
     /// `live`: the caller needs the screen as it is now (scrolling capture), not the last
     /// picture the duplication delivered; see `OutputDup::grab`.
+    ///
+    /// Each output converts straight into its part of the result (no per-output tile and no
+    /// copy into a pre-filled canvas: for the 6400x2160 desktop that was a 55 MB fill plus
+    /// 48 MB of copies per freeze). The result starts zeroed (cheap: fresh pages); only when
+    /// the outputs leave gaps are those made opaque black.
     fn capture(&mut self, rect: PxRect, first: bool, live: bool) -> anyhow::Result<Rgba> {
-        let mut img = Rgba::filled(rect.w as u32, rect.h as u32, [0, 0, 0, 255]);
+        if display_power::is_off() && self.outputs.iter().any(|o| o.dup.is_some()) {
+            // No duplication frames while the displays are off (see `OutputDup::prime`): one
+            // GDI copy of the whole rect, and every shadow is re-seeded once they are back.
+            for out in &mut self.outputs {
+                out.needs_seed = true;
+            }
+            return gdi_capture(rect);
+        }
+        let mut img = Rgba::new(rect.w as u32, rect.h as u32);
+        let stride = rect.w as usize * 4;
+        let mut covered = 0i64;
         for out in &mut self.outputs {
             let Some(inter) = out.rect.intersect(&rect) else {
                 continue;
             };
             let local = inter.translate(-out.rect.x, -out.rect.y);
-            let tile = out.grab(local, inter, first, live)?;
-            if inter == rect {
-                return Ok(tile);
+            let off =
+                ((inter.y - rect.y) as usize * rect.w as usize + (inter.x - rect.x) as usize) * 4;
+            out.grab_into(local, inter, first, live, &mut img.data[off..], stride)?;
+            covered += inter.w as i64 * inter.h as i64;
+        }
+        if covered < rect.w as i64 * rect.h as i64 {
+            // Every captured pixel is opaque, so alpha 0 marks a gap between monitors.
+            for p in img.data.chunks_exact_mut(4) {
+                if p[3] == 0 {
+                    p[3] = 255;
+                }
             }
-            img.blit(&tile, inter.x - rect.x, inter.y - rect.y);
         }
         Ok(img)
     }
@@ -616,11 +736,19 @@ impl OutputDup {
                     let tex: ID3D11Texture2D = res.cast()?;
                     // The very first frame of a new duplication is a placeholder (observed as an
                     // uninitialized FP16 surface even on SDR content), so it is never trusted;
-                    // `grab` seeds the shadow texture from GDI instead. Mouse-only updates carry
-                    // no new pixels either.
+                    // the shadow is seeded from GDI instead. That frame also stands for every
+                    // change since the duplication was made, so when it arrives after an
+                    // earlier seed (the warm-up's wait for it timed out on a busy start-up),
+                    // the seed is stale and is taken again: skipping it silently kept the
+                    // warm-up picture until the next change on screen. Mouse-only updates
+                    // carry no new pixels.
                     let first_ever = !self.seen_first;
                     self.seen_first = true;
-                    if first_ever || info.LastPresentTime == 0 {
+                    if first_ever {
+                        self.needs_seed = true;
+                        return Ok(());
+                    }
+                    if info.LastPresentTime == 0 {
                         return Ok(());
                     }
                     let mut fd = D3D11_TEXTURE2D_DESC::default();
@@ -635,7 +763,10 @@ impl OutputDup {
                         // SAFETY: both textures belong to this device and now have identical
                         // size and format.
                         unsafe { self.ctx.CopyResource(shadow, &tex) };
+                        // A real frame is the whole desktop as composed now.
                         self.has_image = true;
+                        self.needs_seed = false;
+                        self.seed_epoch = display_power::epoch();
                         self.image_at = Some(std::time::Instant::now());
                     }
                     Ok(())
@@ -708,44 +839,63 @@ impl OutputDup {
         Ok(())
     }
 
-    /// Pixels of `local` (output-local px). `virt` is the same rect in virtual coords, used
-    /// by the GDI fallback.
+    /// Bring the shadow up to date and make sure it can be trusted: pick up a pending frame,
+    /// then re-seed from GDI when `must_seed` says the shadow may predate the screen.
+    /// Ok(true) when the shadow holds the screen as it is now; Ok(false) when GDI has to
+    /// serve this capture (no duplication, displays off, nothing seedable).
+    ///
+    /// While the displays are off DWM feeds no frames, so a cached shadow keeps the picture
+    /// from before they went off however much the screen changes (measured Nov 7 2026: every
+    /// freeze of an idle-off session returned the warm-up picture, missing windows opened
+    /// since). Those captures use GDI, which still sees the desktop, and the shadow is
+    /// re-seeded once the displays are back.
+    fn prime(&mut self, timeout_ms: u32) -> anyhow::Result<bool> {
+        if self.dup.is_none() {
+            return Ok(false);
+        }
+        if display_power::is_off() {
+            self.needs_seed = true;
+            return Ok(false);
+        }
+        self.refresh(timeout_ms)?;
+        if self.must_seed() {
+            match self.seed_from_gdi() {
+                Ok(_) => {}
+                Err(e) => log::debug!("seeding {} failed: {e}", self.color.device),
+            }
+        }
+        Ok(self.has_image && !self.must_seed())
+    }
+
+    /// Write the pixels of `local` (output-local px) into `dst` (rows `dst_stride` bytes
+    /// apart). `virt` is the same rect in virtual coords, used by the GDI fallback.
     ///
     /// `live`: when the shadow has not been updated for `LIVE_MAX_AGE` the region is taken
     /// with GDI instead. A duplication delivers nothing while the screen is static, which
-    /// is fine for a freeze, but it also stays silent while the screen changes when the
-    /// displays are idle-off (DWM stops feeding duplications; measured Nov 7 2026): a
-    /// scrolling capture then saw the same picture every step and ended after one frame.
-    fn grab(
+    /// is fine for a freeze, but a scrolling capture must see the page as it is after each
+    /// scroll even if no frame has arrived yet.
+    fn grab_into(
         &mut self,
         local: PxRect,
         virt: PxRect,
         first: bool,
         live: bool,
-    ) -> anyhow::Result<Rgba> {
+        dst: &mut [u8],
+        dst_stride: usize,
+    ) -> anyhow::Result<()> {
         if self.dup.is_some() {
             let timeout = if first {
                 FIRST_FRAME_TIMEOUT_MS
             } else {
                 CACHED_FRAME_TIMEOUT_MS
             };
-            let mut state = self.refresh(timeout);
-            if matches!(state, Ok(false)) {
-                match self.seed_from_gdi() {
-                    Ok(true) => {
-                        self.image_at = Some(std::time::Instant::now());
-                        state = Ok(true)
-                    }
-                    Ok(false) => {}
-                    Err(e) => log::debug!("seeding duplication shadow failed: {e}"),
-                }
-            }
+            let state = self.prime(timeout);
             let stale = self.image_at.is_none_or(|t| t.elapsed() > LIVE_MAX_AGE);
             match state {
                 Ok(true) if live && stale => {}
-                Ok(true) => match self.read_back(local) {
-                    Ok(Some(img)) => return Ok(img),
-                    Ok(None) => {}
+                Ok(true) => match self.read_back_into(local, dst, dst_stride) {
+                    Ok(true) => return Ok(()),
+                    Ok(false) => {}
                     Err(e) => log::debug!("duplication read-back failed: {e}"),
                 },
                 Ok(false) => {}
@@ -753,12 +903,18 @@ impl OutputDup {
                 Err(e) => log::debug!("duplication refresh failed: {e}"),
             }
         }
-        gdi_capture(virt)
+        let img = gdi_capture(virt)?;
+        let row = img.width as usize * 4;
+        for (y, src) in img.data.chunks_exact(row).enumerate() {
+            dst[y * dst_stride..][..row].copy_from_slice(src);
+        }
+        Ok(())
     }
 
     /// A static desktop never delivers a trustworthy first duplication frame, so fill the
-    /// shadow texture once from a GDI capture of the whole output. Later frames overwrite it.
-    /// Ok(false) when the format does not allow a direct upload.
+    /// shadow texture from a GDI capture of the whole output (again whenever `must_seed`
+    /// says so). Later frames overwrite it. Ok(false) when the format does not allow a direct
+    /// upload.
     fn seed_from_gdi(&mut self) -> anyhow::Result<bool> {
         if self.shadow.is_none() {
             self.ensure_textures(self.rect.w as u32, self.rect.h as u32, self.shadow_format())?;
@@ -796,7 +952,7 @@ impl OutputDup {
                     0,
                 );
             }
-            self.has_image = true;
+            self.seeded();
             return Ok(true);
         }
         if desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM
@@ -819,18 +975,35 @@ impl OutputDup {
                 0,
             );
         }
-        self.has_image = true;
+        self.seeded();
         Ok(true)
     }
 
-    fn read_back(&self, local: PxRect) -> anyhow::Result<Option<Rgba>> {
+    /// The shadow now holds a GDI picture taken just now.
+    fn seeded(&mut self) {
+        self.has_image = true;
+        self.needs_seed = false;
+        self.seed_epoch = display_power::epoch();
+        self.image_at = Some(std::time::Instant::now());
+    }
+
+    /// Copy `local` of the shadow to the CPU and convert it into `dst` (rows `dst_stride`
+    /// bytes apart). Ok(false) when the shadow cannot serve that rect.
+    fn read_back_into(
+        &self,
+        local: PxRect,
+        dst: &mut [u8],
+        dst_stride: usize,
+    ) -> anyhow::Result<bool> {
         let (Some(shadow), Some(staging), Some(desc)) = (&self.shadow, &self.staging, &self.desc)
         else {
-            return Ok(None);
+            return Ok(false);
         };
-        let local = local
-            .intersect(&PxRect::new(0, 0, desc.Width as i32, desc.Height as i32))
-            .ok_or_else(|| anyhow::anyhow!("region outside output"))?;
+        if local.intersect(&PxRect::new(0, 0, desc.Width as i32, desc.Height as i32)) != Some(local)
+        {
+            // The surface does not cover the whole output rect (size change in flight).
+            return Ok(false);
+        }
         let b = D3D11_BOX {
             left: local.x as u32,
             top: local.y as u32,
@@ -855,7 +1028,7 @@ impl OutputDup {
             let pitch = mapped.RowPitch as usize;
             let len = pitch * (h - 1) + w * bpp;
             let src = std::slice::from_raw_parts(mapped.pData as *const u8, len);
-            let img = convert_to_rgba_hdr(
+            let ok = convert_into(
                 desc.Format,
                 src,
                 pitch,
@@ -863,6 +1036,8 @@ impl OutputDup {
                 h,
                 false,
                 self.color.sdr_white_nits,
+                dst,
+                dst_stride,
             );
             self.ctx.Unmap(staging, 0);
             log::trace!(
@@ -872,31 +1047,55 @@ impl OutputDup {
                 desc.Format,
                 t0.elapsed() - t_map
             );
-            Ok(img)
+            Ok(ok)
         }
     }
 }
 
+/// Why a cached session cannot be used as it is, if it cannot.
+fn session_invalid(session: &mut Option<Session>) -> Option<&'static str> {
+    let Some(s) = session.as_mut() else {
+        return Some("no session");
+    };
+    if s.layout != current_layout() {
+        Some("monitor layout changed")
+    } else if !s.recheck_colors() {
+        Some("HDR state changed")
+    } else {
+        None
+    }
+}
+
+fn new_session(context: &str) -> Option<Session> {
+    let t0 = std::time::Instant::now();
+    let s = match Session::create() {
+        Ok(s) if !s.outputs.is_empty() => Some(s),
+        Ok(_) => None,
+        Err(e) => {
+            log::debug!("{context}: duplication session unavailable: {e}");
+            None
+        }
+    };
+    log::debug!(
+        "{context}: duplication session created in {:.1} ms",
+        t0.elapsed().as_secs_f64() * 1000.0
+    );
+    s
+}
+
 fn capture_region(rect: PxRect, live: bool) -> anyhow::Result<Rgba> {
+    display_power::watch(revalidate_after_wake);
     // Aware for the whole capture, not just DuplicateOutput1: a duplication made from an
     // aware thread delivers no frames to an unaware one, and GDI coordinates on a scaled
     // monitor are rescaled for unaware callers (tools and tests have no manifest).
     let _dpi = crate::dpi::ThreadPerMonitorAware::new();
     let mut guard = SESSION.lock().unwrap_or_else(|p| p.into_inner());
     for attempt in 0..2 {
-        let stale = guard
-            .as_mut()
-            .is_none_or(|s| s.layout != current_layout() || !s.recheck_colors());
-        let first = stale;
-        if stale {
-            *guard = match Session::create() {
-                Ok(s) if !s.outputs.is_empty() => Some(s),
-                Ok(_) => None,
-                Err(e) => {
-                    log::debug!("duplication session unavailable: {e}");
-                    None
-                }
-            };
+        let invalid = session_invalid(&mut guard);
+        let first = invalid.is_some();
+        if let Some(why) = invalid {
+            log::debug!("capture: building a duplication session ({why})");
+            *guard = new_session("capture");
         }
         let Some(session) = guard.as_mut() else {
             return gdi_capture(rect);
@@ -905,6 +1104,7 @@ fn capture_region(rect: PxRect, live: bool) -> anyhow::Result<Rgba> {
             Ok(img) => return Ok(img),
             Err(e) if e.is::<AccessLost>() && attempt == 0 => {
                 // Mode change, secure desktop, or driver reset: rebuild the session once.
+                log::debug!("capture: duplication access lost; rebuilding the session");
                 *guard = None;
             }
             Err(e) => {
@@ -917,6 +1117,23 @@ fn capture_region(rect: PxRect, live: bool) -> anyhow::Result<Rgba> {
     gdi_capture(rect)
 }
 
+/// The displays came back on after being off: frames shown meanwhile never reached the
+/// duplication, so re-seed the warm session (if there is one) now instead of on the next
+/// capture. Runs on its own thread (`display_power` spawns it).
+fn revalidate_after_wake() {
+    // Let the desktop finish repainting after the wake.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let warm = SESSION
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_ref()
+        .is_some_and(|s| s.outputs.iter().any(|o| o.dup.is_some()));
+    if warm {
+        log::debug!("displays back on: re-seeding the capture session");
+        warm_up();
+    }
+}
+
 /// Create (or re-create) the duplication session ahead of time, from a worker thread: at
 /// start-up and again after events that invalidate it (unlock, display change, resume; see
 /// `system::start_session_watcher`). Session creation plus each output's first frame (a
@@ -926,42 +1143,33 @@ fn capture_region(rect: PxRect, live: bool) -> anyhow::Result<Rgba> {
 /// A session that reports access lost (desktop switch, mode change) is rebuilt once. Failure
 /// is harmless: captures create the session themselves or fall back to GDI.
 pub fn warm_up() {
+    warm_up_with(FIRST_FRAME_TIMEOUT_MS);
+}
+
+/// `warm_up` with another wait for each output's first duplication frame. Diagnostics and
+/// tests only: a 0 ms wait simulates a start-up where the first frame arrives late.
+#[doc(hidden)]
+pub fn warm_up_with(first_frame_timeout_ms: u32) {
     if duplication_lent() {
         log::debug!("capture warm-up skipped: duplication lent to the recorder");
         return;
     }
+    display_power::watch(revalidate_after_wake);
     let _dpi = crate::dpi::ThreadPerMonitorAware::new();
     let t0 = std::time::Instant::now();
     let mut guard = SESSION.lock().unwrap_or_else(|p| p.into_inner());
     for attempt in 0..2 {
-        let stale = guard
-            .as_mut()
-            .is_none_or(|s| s.layout != current_layout() || !s.recheck_colors());
-        if stale {
-            *guard = match Session::create() {
-                Ok(s) if !s.outputs.is_empty() => Some(s),
-                Ok(_) => None,
-                Err(e) => {
-                    log::debug!("capture warm-up: duplication session unavailable: {e}");
-                    None
-                }
-            };
+        if let Some(why) = session_invalid(&mut guard) {
+            log::debug!("capture warm-up: building a duplication session ({why})");
+            *guard = new_session("capture warm-up");
         }
         let Some(session) = guard.as_mut() else {
             return;
         };
         let mut lost = false;
         for out in &mut session.outputs {
-            if out.dup.is_none() {
-                continue;
-            }
-            match out.refresh(FIRST_FRAME_TIMEOUT_MS) {
-                Ok(true) => {}
-                Ok(false) => {
-                    if let Err(e) = out.seed_from_gdi() {
-                        log::debug!("capture warm-up: seeding {} failed: {e}", out.color.device);
-                    }
-                }
+            match out.prime(first_frame_timeout_ms) {
+                Ok(_) => {}
                 Err(e) if e.is::<AccessLost>() => lost = true,
                 Err(e) => log::debug!("capture warm-up: {} refresh failed: {e}", out.color.device),
             }
@@ -1577,8 +1785,38 @@ mod tests {
         }
         let par = convert_to_rgba(DXGI_FORMAT_B8G8R8A8_UNORM, &src, pitch, w, h, false).unwrap();
         let mut ser = vec![0u8; w * h * 4];
-        convert_rows(DXGI_FORMAT_B8G8R8A8_UNORM, &src, pitch, w, &mut ser, false);
+        convert_rows(
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            &src,
+            pitch,
+            w,
+            h,
+            &mut ser,
+            w * 4,
+            false,
+        );
         assert_eq!(par.data, ser);
+        // Into a sub-rectangle of a wider image: same pixels, the rest untouched.
+        let (dw, ox, oy) = (w + 50, 20usize, 3usize);
+        let mut big = vec![7u8; dw * 4 * (h + 5)];
+        let off = (oy * dw + ox) * 4;
+        assert!(convert_into(
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            &src,
+            pitch,
+            w,
+            h,
+            false,
+            80.0,
+            &mut big[off..],
+            dw * 4
+        ));
+        for y in 0..h {
+            let row = &big[((oy + y) * dw + ox) * 4..][..w * 4];
+            assert_eq!(row, &ser[y * w * 4..][..w * 4]);
+        }
+        assert_eq!(big[off - 1], 7);
+        assert_eq!(big[off + w * 4], 7);
     }
 
     #[test]
