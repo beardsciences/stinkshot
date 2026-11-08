@@ -86,6 +86,8 @@ const SHAPE_TOL_PT: f32 = 4.0;
 const CLICK_SLOP_PT: f32 = 4.0;
 /// Ctrl+D / Ctrl+V offset, in screen points.
 const COPY_OFFSET_PT: f32 = 16.0;
+/// Frames presented on the cloaked overlay window before it is uncloaked (`prepare_window`).
+const REVEAL_AFTER_PRESENTS: u8 = 2;
 /// Most recent colors kept.
 const RECENT_COLORS: usize = 6;
 
@@ -260,6 +262,15 @@ pub struct Overlay {
     fonts: Arc<Fonts>,
     /// Monitor rects in overlay-local (screen) px with their DPI scale.
     monitors: Vec<(PxRect, f32)>,
+    /// DPI scale of the primary monitor, where winit creates new windows before moving them:
+    /// the viewport builder divides the physical rect by it so the window is created at its
+    /// final size (no oversized first frame, see `viewport_builder`).
+    create_scale: f32,
+    /// The overlay window once `prepare_window` has styled and shown it.
+    window: Option<Hwnd>,
+    /// Set while the window is shown but still cloaked (`prepare_window`), with the number of
+    /// frames presented on it since; `after_paint` uncloaks it after `REVEAL_AFTER_PRESENTS`.
+    reveal: Option<(Hwnd, u8)>,
     annotate_meta: Option<(&'static str, Option<stinkshot_history::ItemId>, SourceInfo)>,
 
     // Selection (canvas px). In Annotate mode this is the crop of the displayed image.
@@ -519,6 +530,13 @@ impl Overlay {
             last_region,
             fonts: shared.fonts.clone(),
             monitors: monitors_local,
+            create_scale: mon_list
+                .iter()
+                .find(|m| m.primary)
+                .map_or(1.0, |m| m.scale)
+                .max(0.1),
+            window: None,
+            reveal: None,
             annotate_meta: None,
             sel: None,
             scale: 1.0,
@@ -1576,7 +1594,13 @@ impl Surface for Overlay {
 
     fn viewport_builder(&self, shared: &Shared) -> egui::ViewportBuilder {
         let _ = shared;
-        // Initial guess in points at 100%; `on_created` sets the exact physical rect.
+        // Created hidden, at its final physical rect: winit creates the window on the primary
+        // monitor and egui converts points with that monitor's scale, so dividing by it lands
+        // on the physical px. It used to be created visible with physical px as points, which
+        // showed an oversized window (8000x2700 for a 6400x2160 desktop at 125 %) until
+        // `on_created` resized it, and the tool-window restyle then hid and re-showed it.
+        // `prepare_window` styles the hidden window and shows it.
+        let s = self.create_scale;
         egui::ViewportBuilder::default()
             .with_title(self.title())
             .with_decorations(false)
@@ -1586,21 +1610,82 @@ impl Surface for Overlay {
             .with_has_shadow(false)
             .with_always_on_top()
             .with_active(true)
-            .with_position(Pos2::new(self.bounds.x as f32, self.bounds.y as f32))
-            .with_inner_size(Vec2::new(self.bounds.w as f32, self.bounds.h as f32))
+            .with_visible(false)
+            .with_position(Pos2::new(
+                self.bounds.x as f32 / s,
+                self.bounds.y as f32 / s,
+            ))
+            .with_inner_size(Vec2::new(
+                self.bounds.w as f32 / s,
+                self.bounds.h as f32 / s,
+            ))
     }
 
     fn on_created(&mut self, hwnd: Hwnd, shared: &Shared) {
         let _ = shared;
+        // Normally done already by `show` on the first frame.
+        self.prepare_window(hwnd);
+    }
+
+    fn after_paint(&mut self) {
+        let Some((hwnd, presented)) = &mut self.reveal else {
+            return;
+        };
+        *presented += 1;
+        crate::timing::point(format_args!("overlay: presented {presented} (cloaked)"));
+        if *presented >= REVEAL_AFTER_PRESENTS {
+            let hwnd = *hwnd;
+            self.reveal = None;
+            crate::sysutil::set_cloaked(hwnd, false);
+            window_util::force_foreground(hwnd);
+            crate::timing::point(format_args!("overlay: uncloaked"));
+        }
+    }
+
+    fn wants_frame_now(&self) -> bool {
+        self.reveal.is_some()
+    }
+
+    fn show(&mut self, ctx: &Context, shared: &mut Shared) -> SurfaceStatus {
+        // The window exists (hidden) before the first frame's UI runs, so it is styled and
+        // shown here and that same frame is painted onto it.
+        if self.window.is_none()
+            && let Some(hwnd) = crate::sysutil::find_own_window(&self.title())
+        {
+            self.prepare_window(hwnd);
+        }
+        if self.reveal.is_some() {
+            ctx.request_repaint();
+        }
+        self.frame(ctx, shared)
+    }
+}
+
+impl Overlay {
+    /// Style the hidden window and show it cloaked; `after_paint` uncloaks it once a frame
+    /// is on it. Runs once.
+    ///
+    /// Still hidden here, so the tool-window restyle does not hide and re-show it, and
+    /// `set_rect` changes nothing when the creation rect is already right (it is unless a DPI
+    /// change on the way moved it). The cloak: a freshly shown window is composited white
+    /// until DWM picks up a present, and the first present on a new swapchain is not always
+    /// the one it shows (measured with the overlay made capturable: a white frame in 3 of 6
+    /// opens when uncloaked after the first present, none in 16 after the second). Painting
+    /// while still hidden instead stalled the next frame by about 100 ms.
+    fn prepare_window(&mut self, hwnd: Hwnd) {
+        if self.window.is_some() {
+            return;
+        }
+        self.window = Some(hwnd);
         window_util::set_tool_window(hwnd, true);
         window_util::set_topmost(hwnd, true);
         window_util::set_rect(hwnd, self.bounds);
         window_util::exclude_from_capture(hwnd, true);
+        crate::sysutil::set_cloaked(hwnd, true);
+        crate::sysutil::show_window(hwnd);
         window_util::force_foreground(hwnd);
-    }
-
-    fn show(&mut self, ctx: &Context, shared: &mut Shared) -> SurfaceStatus {
-        self.frame(ctx, shared)
+        self.reveal = Some((hwnd, 0));
+        crate::timing::point(format_args!("overlay: window styled and shown (cloaked)"));
     }
 }
 

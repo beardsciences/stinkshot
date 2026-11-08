@@ -99,3 +99,64 @@ pub fn recycle(path: &std::path::Path) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+/// Top-level window of this process with exactly this title, without sending it any message.
+///
+/// `window_util::find_own_window` asks every window of the process for its text with
+/// `WM_GETTEXT` (100 ms timeout each), and windows whose thread is busy or blocked (a worker
+/// that owns a hidden helper window while it waits on a channel) cost the full timeout on
+/// every call while a new surface is being looked up. `FindWindowExW` compares the caption
+/// the window manager stores, so it never blocks.
+pub fn find_own_window(title: &str) -> Option<stinkshot_platform::Hwnd> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Threading::GetCurrentProcessId;
+    use windows::Win32::UI::WindowsAndMessaging::{FindWindowExW, GetWindowThreadProcessId};
+    let t: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: trivial query.
+    let me = unsafe { GetCurrentProcessId() };
+    let mut after: Option<HWND> = None;
+    // Bounded: another process can own windows with the same title.
+    for _ in 0..64 {
+        // SAFETY: `t` is NUL-terminated and outlives the call; `after` is a window handle
+        // returned by the previous call (or none).
+        let found =
+            unsafe { FindWindowExW(None, after, PCWSTR::null(), PCWSTR(t.as_ptr())) }.ok()?;
+        let mut pid = 0u32;
+        // SAFETY: the out pointer is a live local.
+        unsafe { GetWindowThreadProcessId(found, Some(&mut pid)) };
+        if pid == me {
+            return Some(found.0 as isize);
+        }
+        after = Some(found);
+    }
+    None
+}
+
+/// Show a window that was created hidden (and activate it).
+pub fn show_window(hwnd: stinkshot_platform::Hwnd) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{SW_SHOW, ShowWindow};
+    // SAFETY: plain window-management call on a window of this process.
+    let _ = unsafe { ShowWindow(HWND(hwnd as *mut core::ffi::c_void), SW_SHOW) };
+}
+
+/// DWM cloak: a cloaked window is shown (it gets frames and can take focus) but is not
+/// composited on screen.
+pub fn set_cloaked(hwnd: stinkshot_platform::Hwnd, cloaked: bool) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Dwm::{DWMWA_CLOAK, DwmSetWindowAttribute};
+    use windows::core::BOOL;
+    let v = BOOL::from(cloaked);
+    // SAFETY: the pointer and size describe a live BOOL, which DWMWA_CLOAK expects.
+    let r = unsafe {
+        DwmSetWindowAttribute(
+            HWND(hwnd as *mut core::ffi::c_void),
+            DWMWA_CLOAK,
+            &v as *const BOOL as *const core::ffi::c_void,
+            std::mem::size_of::<BOOL>() as u32,
+        )
+    };
+    if let Err(e) = r {
+        log::debug!("DWMWA_CLOAK({cloaked}): {e}");
+    }
+}

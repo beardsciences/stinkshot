@@ -109,9 +109,13 @@ pub fn init() {
         written: Mutex::new(written),
     };
     if log::set_boxed_logger(Box::new(logger)).is_ok() {
-        // `STINKSHOT_LOG=debug|trace` raises the level of a release build (timing points,
+        // `STINKSHOT_LOG=debug|trace` raises the level of a release build (timing trace points,
         // capture session decisions) for diagnosis.
-        let level = match std::env::var("STINKSHOT_LOG").ok().as_deref() {
+        let level = match std::env::var("STINKSHOT_LOG")
+            .ok()
+            .map(|v| v.to_ascii_lowercase())
+            .as_deref()
+        {
             Some("trace") => LevelFilter::Trace,
             Some("debug") => LevelFilter::Debug,
             _ if cfg!(debug_assertions) => LevelFilter::Debug,

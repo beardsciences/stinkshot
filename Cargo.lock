@@ -3142,6 +3142,7 @@ dependencies = [
  "global-hotkey",
  "image",
  "log",
+ "pollster",
  "serde",
  "serde_json",
  "stinkshot-core",

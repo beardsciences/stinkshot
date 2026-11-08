@@ -68,6 +68,8 @@ Files: `crates/app/src/{main,shell,cli,tray,hotkeys,update,theme,state}.rs`, new
 
 ## Contract changes (additive, `state.rs`)
 
+- `Surface::after_paint`, `Surface::wants_frame_now` (Nov 7 2026, see "Idle memory, start-up
+  and overlay open").
 - `Command::OpenUrl(String)` (http/https only).
 - `Command::SetHotkeysSuspended(bool)`: settings window should send `true` while capturing a
   combo and `false` after.
@@ -226,3 +228,110 @@ fast. Global hotkeys (PrtSc included) are registered in `Shell::new`, so a PrtSc
 eframe is up still goes to Windows; after that the hotkey path is the same as IPC (bridge ->
 `pending` -> `begin_overlay` -> `freeze_all`) and gets the warm session. The first PrtSc was
 not pressed live (no synthetic input; hotkeys are disabled in the dev profile).
+
+## Idle memory, start-up and overlay open (Nov 7 2026)
+
+Follow-up to the benchmark (`docs/benchmark/`, raw data in `C:\dev\stinkshot-bench\results`):
+620 MB idle private bytes, 843 ms launch to tray, an overlay that first appeared oversized and
+then re-showed, and a slow mode in about 1 run in 5. Measured with a copy of the bench harness
+(`C:\dev\stinkshot-bench\harness-app`: `SS_ROOT`, `SS_PROFILE`, `BENCH_ONLY`, `BENCH_OUT`,
+`IDLE_SECS` select the build, profile, tools, output folder and idle wait), release builds in
+`C:\dev\stinkshot-bench\target-app`, profile `appbench` (bench config, own history folder).
+Same machine as the benchmark (4K HDR 125 % + 1440p 100 %, RTX 3060 Ti).
+
+Diagnostics added: `timing::point` lines now carry the process's private bytes, the first one
+says how long the kernel took from process creation to `main`, and `STINKSHOT_LOG=debug` (or `trace`,
+case-insensitive; the same switch the capture track added)
+turns the debug lines on in release builds (`grep timing: stinkshot.log`).
+
+### Where the 620 MB went
+
+Measured with timing points at each start-up step, and a scratch program for the capture
+session alone:
+
+| Piece | Private MB |
+|---|---|
+| Everything before the GPU (config, fonts, history, OCR engine, tray) | 10 |
+| wgpu device, default setup (Vulkan picked on NVIDIA, implicit Vulkan layers from Overwolf, OBS, GOG loaded) | 332-360 |
+| same, DX12 only | 337 |
+| same, GL only | 66-74 |
+| DX12 with `MemoryHints::MemoryUsage` | 139-149 |
+| Capture warm session (D3D11 device, duplications, 4K FP16 shadow + staging, GDI seed) | about 250 |
+
+The capture session numbers (scratch program, no wgpu): bare D3D11 device +52 MB; `warm_up`
++270 MB over process start; `release_cached_capture` gave back only 35 MB (the driver keeps
+the rest); a second `warm_up` after the release added another 100 MB. So releasing the warm
+session when idle would not save memory, it would only make the next capture slow. That part
+belongs to `capture.rs` (capture track); the staging textures alone are 81 MB of CPU memory
+(4K FP16 + 1440p BGRA).
+
+### Changes
+
+- `gpu.rs` (new): the wgpu instance, adapter and device are created on a `gpu-init` thread
+  started right after the mutex, and handed to eframe as `WgpuSetup::Existing`. DX12 first
+  (Vulkan, then GL as fallbacks; `WGPU_BACKEND` still overrides), `MemoryHints::MemoryUsage`,
+  low-power adapter preference (`WGPU_POWER_PREF` overrides), FXC instead of "Auto" (Auto
+  loaded the Vulkan SDK's `dxcompiler.dll` from `PATH`), and DirectComposition swapchains
+  (`DxgiFromVisual`): the default HWND swapchain has no alpha, which would have turned the
+  transparent pins, recording frame and countdown black (Vulkan had alpha; a pin was checked on
+  screen with rounded transparent corners after the change).
+- Tray icon and global hotkeys are created in `run_app` right after the config, before fonts,
+  history and the GPU. Their hidden windows live on the main thread, so a click or a hotkey
+  before the event loop runs waits in the thread's queue and is handled on the first frame,
+  like IPC commands (`Boot` carries them into `Shell::new`). The OCR engine is created on its
+  thread as before but joined after the GPU device, so the two overlap.
+- Surfaces' HWNDs are found with `sysutil::find_own_window` (`FindWindowExW`, compares the
+  stored caption) instead of `window_util::find_own_window`, which sends `WM_GETTEXT` with a
+  100 ms timeout to every window of the process and can stall on helper windows of busy
+  threads.
+- `Surface::after_paint` and `Surface::wants_frame_now` (additive, `state.rs`): called after
+  each painted frame / ask for another frame in the same shell pass. The overlay uses them to
+  reveal its window (docs/notes/app-overlay.md, "Opening without a flash").
+
+### Results (release, before = commit 3d3c876, after = this change)
+
+| Metric | Before | After |
+|---|---|---|
+| Launch to tray icon (`tray_icon_app` window), 15 runs, median / max | 781 / 1184 ms | 41 / 58 ms |
+| eframe up (`Shell::new`) | 912-1381 ms | 478-624 ms |
+| Idle private bytes after 60 s | 620.6 MB | 400.2 MB |
+| Idle working set | 258.5 MB | 200.1 MB |
+| Idle handles | 920 | 714 |
+| Private bytes after three region overlays | 654 MB | 483-491 MB |
+| Region overlay settled at final size, 50 runs, median / p90 / max | 228 / 244 / 621 ms | 167 / 182 / 190 ms |
+| Region overlay first visible (any size) | 120 ms (at 8000x2700) | 167 ms (at 6400x2160) |
+| Rect changes after first visible | 1-2 per run | 0 |
+| Peak private bytes during an overlay | 762 MB | 661 MB |
+| Tool CPU per overlay open + close | 250 ms | 172 ms |
+
+The overlay before/after pair was run back to back in the same session; an earlier baseline run
+had the same median (220 ms settled) but 12 of 50 slow runs, see below.
+
+The idle target of 150 MB is not reachable from the app side alone: with the capture warm-up
+skipped the app idles at about 150 MB (DX12 device about 140 of it), and the warm session adds
+about 250 MB. Dropping it would bring back the 0.8-1.2 s cold first capture, and releasing it
+later frees only 35 MB. A smaller warm session (no full-size staging textures until a capture
+needs them, or no FP16 duplication kept between captures) is the capture track's call.
+
+### The slow overlay mode (about 1 run in 5 in the benchmark) is process creation
+
+With the timing trace on, every one of 59 overlays spent 98-181 ms inside the instance (IPC
+received to window shown). For the slow harness runs the extra 236-587 ms was outside it:
+before the forwarding `stinkshot region` client reached `main`. The same tail shows up for an
+unrelated exe: 40 launches of `whoami.exe` took 55-71 ms 33 times and 138-485 ms 7 times;
+`stinkshot --version` 103-121 ms 29 times and 167-571 ms 11 times. It comes and goes with the
+machine's state (the back-to-back baseline run above had 1 slow run of 50, the earlier one 12).
+Nothing in the app can remove it for CLI triggers; hotkeys and the tray do not start a process.
+The client itself reaches `main` 27-46 ms after process creation.
+
+### Known limitations / not verified
+
+- A machine without DX12 (fallback to Vulkan, then GL) was not tested, nor the low-power
+  adapter on a hybrid-GPU laptop.
+- Tray clicks and hotkeys during the first 0.5 s (before the event loop runs) were not tried
+  live (no synthetic input; hotkeys are off in the bench profile).
+- After the first overlay about 85-90 MB stays committed (483-491 vs 397 MB; before: 654 vs
+  619). It is the same with the GL backend and does not happen for full-screen captures, so it
+  is tied to the overlay's viewport rather than wgpu's allocator; polling the device after the
+  window closed did not release it. Cause not found.
+- Countdown and recording frame transparency were not looked at on screen (the pin was).

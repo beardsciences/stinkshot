@@ -62,7 +62,8 @@ The public items in each crate's stub files are the contract. They compile today
 ## Overlay (app/src/overlay)
 
 - Opening: shell freezes all monitors first (target: hotkey -> overlay visible < 150 ms),
-  then creates the overlay viewport sized to `frozen.bounds` (physical) via `set_rect`.
+  then creates the overlay viewport hidden at `frozen.bounds` (physical), styles it, shows it
+  cloaked and uncloaks it after two presents (docs/notes/app-overlay.md).
 - States: Hover (window/element highlight + loupe) -> Selecting (drag) -> Selected
   (handles, size label, presets; toolbars visible) -> Annotating (a tool active) -> Finish.
 - Element snap: `ElementSnapper::request(hwnd_under_cursor, p)` on mouse move; draw

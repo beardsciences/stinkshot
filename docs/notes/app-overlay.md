@@ -422,3 +422,37 @@ and in the editor, recent colors after a restart, per-tool colors after a restar
 arrow and switch head styles, crop a window capture inward and save, Ctrl+wheel zoom to 800 %
 and draw / resize / type there, middle-drag and Space-drag pans, a 4K capture with many shapes
 stays smooth while editing.
+
+## Opening without a flash (Nov 7 2026)
+
+Benchmark finding: the overlay first appeared at 8000x2700 (the 6400x2160 desktop scaled by
+125 %), then `on_created` resized it, and the tool-window restyle hid and re-showed it 80-140 ms
+later. The viewport builder passed physical px as points, and the window was created visible.
+
+Now (`viewport_builder`, `Surface::show`, `prepare_window`, `after_paint`):
+
+1. The viewport is created **hidden**, with position and size divided by the primary monitor's
+   scale (`create_scale`): winit creates new windows on the primary monitor and egui converts
+   points with that monitor's scale, so the window is born at the final physical rect.
+2. The window exists before the first frame's UI runs, so `show` finds it (no-message
+   `FindWindowExW`) and `prepare_window` sets tool window, topmost, the exact rect (no-op unless
+   a DPI change moved it), exclude-from-capture, then **cloaks** it (DWM) and shows it. Still
+   hidden at the restyle, so nothing is hidden and re-shown.
+3. That first frame is painted onto the shown, cloaked window; `wants_frame_now` makes the
+   shell paint a second frame in the same pass, and `after_paint` uncloaks after the second
+   present and brings the window to the foreground.
+
+Why the cloak and two presents: checked by temporarily making the overlay capturable and
+grabbing the screen right after it became visible. Shown uncloaked after a frame painted while
+hidden: a white frame in 3 of 4 opens (that hidden present is not kept). Uncloaked after the
+first present on the shown window: white in 3 of 6. After the second present: no white frame
+in 16 opens. Waiting for the second frame in the next shell pass instead cost 35-117 ms (the
+next pass started late); painting it in the same pass costs about 1 ms. Shown to uncloaked is
+about 28 ms (first frame's UI, tile upload, two presents).
+
+Result (50 runs, release, back to back with the old build): settled at final size 228 -> 167 ms
+median, p90 244 -> 182 ms; no size change after the window becomes visible (was 1-2 per open).
+The harness's "visible" moved from 120 ms (oversized window) to 167 ms because the window is now
+only visible once correct. Not verified: a layout whose primary monitor's DPI differs from the
+monitor holding most of the desktop (the hidden window is corrected by `set_rect` before it is
+shown, but that path was not exercised on this machine).
