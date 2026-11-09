@@ -677,3 +677,59 @@ See docs/notes/l10n.md for the framework.
 - Cheat sheet: Shift+Drag "Other Highlighter Mode".
 - Not verified live: drawing both modes, Shift flip mid-drag, To Box and undo, reopening a
   saved capture with box highlights.
+
+## Editor Window (Forgejo #4, #5, #9, Nov 9 2026)
+
+`overlay/window_host.rs`. The annotation editor in a normal top-level window (taskbar, Task
+View, movable, resizable, title "Stinkshot Editor", or "file.png - Stinkshot Editor" for a
+history item; a second untitled window is "Stinkshot Editor (2)"). Several can be open at once,
+at most one per history item.
+
+- How: the same `Overlay` runs in Annotate mode with `windowed` set. Its `bounds` are the
+  client rect (origin = the client's screen position, so pins open where the picture was) and
+  `monitors` is that one rect with the window's scale, so every bar, chip, popup and panel is
+  laid out and clamped inside the window. Each frame `EditorWindow::sync_layout` re-fits the
+  picture (`window_host::fit`: never scaled up, 16 pt sides, 88 pt on top for the hint bar
+  and size chip, one or two bar rows under it) when the client size, DPI or bar rows change;
+  the crop, annotations (image px) and history are untouched, a zoomed view is re-clamped.
+  Overlay hooks for `windowed`: no frozen screen (window background instead, dimming only the
+  cropped-away picture), close button handled by the host, toolbar spot not remembered for
+  the screen overlay, no Edit in Window button, no UIA snapper (now skipped for every
+  Annotate overlay).
+- Opening: created hidden on the primary monitor with its client size in points (the picture
+  at 100 % plus margins, at least 640 x 420 pt, at most 90 % of the work area), then cloaked,
+  shown and moved to the monitor under the cursor; Windows rescales it for that monitor's DPI;
+  once its rect is stable for a frame (2-20 frames) it is centred on that work area and
+  uncloaked. Moving it to another monitor later is plain Windows behavior (egui follows the
+  DPI, the picture re-fits).
+- History > Edit, the toast's Edit and a pin's Open in Editor (`Command::EditItem`) open an
+  Editor Window instead of freezing the screen; if that item is already open its window comes
+  to the front. Works during a recording, a scrolling capture or beside an open overlay.
+- Edit in Window (new action bar button, window icon, between Save and Cancel, screen overlay
+  and fullscreen editor): commits text, combines multi-regions, pushes
+  `Command::OpenEditor(EditorRequest)` with the cropped picture and its annotations, and
+  closes the overlay (the screen unfreezes). A fresh region keeps its virtual rect
+  (`fixed_rect`), so the finished capture still sets repeat-last-region and a pin opens on the
+  original spot; the measure tool keeps the monitor's scale.
+- Settings > Capture > After Selecting a Region (`[capture] after_region`): Annotate in Place
+  (default, `"annotate"`) or Open Editor Window (`"window"`). With the window choice Enter on
+  a selected region does Edit in Window (hint bar "Enter Edit in Window", "Ctrl+C Copy";
+  tooltips "Edit in Window (Enter)" and "Copy to Clipboard (Ctrl+C)"); Ctrl+C still copies
+  and closes. Window and full-screen captures still open in place.
+- Finishing (Copy, Save As, Pin, Copy Text) works as in the overlay and closes the window.
+  Closing with unsaved annotations (edits here, or annotations carried over from the overlay
+  that were never saved) asks "Discard Changes?" with Keep Editing / Discard (Esc keeps
+  editing); Esc's own discard prompt is unchanged. A close while a finish renders waits for it.
+  The `Command::Cancelled` an Editor Window pushes is dropped (it is not a screen capture).
+
+Tests: `overlay::window_host::tests` (fit at 100 % and scaled, tiny window, bar rows, initial
+size and limits, unique titles, centring), core `config::tests` (after_region default and
+round trip).
+
+Not verified live: no window was opened on the desktop in this session (the user's own copy
+runs with its hotkeys). Manual checks: History > Edit on two items (two windows, Task View
+shows both, Edit again focuses), resize and maximize (picture re-fits, bars stay inside),
+drag the window to a monitor with another scale, annotate and close (prompt), Ctrl+wheel zoom
+and pan, Save As / Pin from a window (pin opens over the picture), After Selecting a Region =
+Open Editor Window then Enter on a region (screen unfreezes, window opens with any
+annotations), Edit in Window button with three regions, and repeat-last-region afterwards.

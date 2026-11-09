@@ -38,7 +38,8 @@ impl Overlay {
         self.init_once(ctx);
         let ppp = ctx.pixels_per_point();
 
-        if !self.closed && ctx.input(|i| i.viewport().close_requested()) {
+        // An Editor Window asks before closing over unsaved edits (`window_host.rs`).
+        if !self.closed && !self.windowed && ctx.input(|i| i.viewport().close_requested()) {
             self.cancel(shared);
         }
         if self.closed {
@@ -580,12 +581,17 @@ impl Overlay {
         );
         let painter = ctx.layer_painter(LayerId::background());
         let zoomed = !self.view.is_identity();
-        if zoomed {
+        if self.windowed {
+            // Editor Window: no frozen screen behind the picture.
+            painter.rect_filled(screen, 0.0, pal.bg);
+        } else if zoomed {
             painter.rect_filled(screen, 0.0, Color32::from_rgb(0x10, 0x10, 0x12));
         }
         let origin_pt = Pos2::new(self.view.off.0 * k, self.view.off.1 * k);
         let kz = k * self.view.zoom;
-        if let Some(t) = &self.frozen_tex {
+        if !self.windowed
+            && let Some(t) = &self.frozen_tex
+        {
             t.paint(&painter, origin_pt, kz, Color32::WHITE);
         }
         // The editor shows the whole picture (cropped-away parts dim like the screen).
@@ -633,11 +639,18 @@ impl Overlay {
                 painter.rect_filled(r, 0.0, pal.overlay_dim);
             }
         } else {
+            // An Editor Window dims only the cropped-away picture, not its background.
+            let dim_area = if self.windowed {
+                self.canvas_rect_pt(self.sel_bounds(), ppp)
+                    .intersect(screen)
+            } else {
+                screen
+            };
             let clear_px = preview.or(self.sel).or(self.hover);
             let clear = clear_px.map(|r| self.canvas_rect_pt(r, ppp).intersect(screen));
             match clear {
                 Some(c) if c.is_positive() => {
-                    for r in around(screen, c) {
+                    for r in around(dim_area, c) {
                         painter.rect_filled(r, 0.0, pal.overlay_dim);
                     }
                 }
@@ -933,8 +946,13 @@ impl Overlay {
         };
         if self.annotating() && self.sel.is_some() && !self.selected.is_empty() {
             // Ctrl+C copies the shapes now; say so, and that Enter still copies the image.
+            let enter = if self.enter_opens_window() {
+                tr!("overlay.hint.edit_window")
+            } else {
+                tr!("overlay.hint.copy_image")
+            };
             return vec![
-                ("Enter", tr!("overlay.hint.copy_image")),
+                ("Enter", enter),
                 (keys::COPY.label, tr!("overlay.hint.copy_shapes")),
                 (keys::DUPLICATE.label, tr!("overlay.hint.duplicate")),
                 ("Del", tr!("overlay.hint.delete")),
@@ -963,13 +981,25 @@ impl Overlay {
                 help,
             ],
             (true, Kind::Capture) if !self.extra_regions.is_empty() => vec![
-                ("Enter", tr!("overlay.hint.copy_all")),
+                if self.enter_opens_window() {
+                    ("Enter", tr!("overlay.hint.edit_window"))
+                } else {
+                    ("Enter", tr!("overlay.hint.copy_all"))
+                },
                 (
                     tr!("overlay.keys.k.shift_drag"),
                     tr!("overlay.hint.add_region"),
                 ),
                 (click, tr!("overlay.hint.pick_region")),
                 ("Esc", tr!("overlay.hint.remove_region")),
+                help,
+            ],
+            (true, _) if self.enter_opens_window() => vec![
+                ("Enter", tr!("overlay.hint.edit_window")),
+                (keys::COPY.label, tr!("overlay.hint.copy")),
+                (keys::SAVE.label, tr!("overlay.hint.save")),
+                (keys::UNDO.label, tr!("overlay.hint.undo")),
+                esc,
                 help,
             ],
             (true, _) => vec![
@@ -1250,6 +1280,7 @@ impl Overlay {
                     scan: self.scan.is_some(),
                     beautify: self.beautify_open,
                     beautify_on: self.beautify.enabled,
+                    edit_window: (!self.windowed).then(|| self.enter_opens_window()),
                 },
                 lifted,
                 actions,

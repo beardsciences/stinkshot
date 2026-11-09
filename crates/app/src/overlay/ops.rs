@@ -538,7 +538,7 @@ impl Overlay {
         doc.base_width = base.width;
         doc.base_height = base.height;
         Self::drop_offscreen_cursors(&mut doc);
-        let rect = hover::local_to_virtual(sel, self.bounds);
+        let rect = self.output_rect(sel);
 
         // Beautify frames image exports (never Copy Text), on the worker below.
         let frame = (self.beautify.enabled && action != FinishAction::CopyText)
@@ -599,6 +599,64 @@ impl Overlay {
                 })
             }
         }
+    }
+
+    /// Virtual-desktop rect a finish reports: the selection on the screen, or in an Editor
+    /// Window the original region (moved and sized by the crop) when there is one.
+    fn output_rect(&self, sel: PxRect) -> PxRect {
+        match self.fixed_rect {
+            Some(r) => PxRect::new(
+                r.x + self.crop.x,
+                r.y + self.crop.y,
+                self.crop.w,
+                self.crop.h,
+            ),
+            None => hover::local_to_virtual(sel, self.bounds),
+        }
+    }
+
+    /// Edit in Window (button, or Enter with After Selecting a Region = Open Editor
+    /// Window): hand the picture and its annotations to an Editor Window and close, which
+    /// unfreezes the screen.
+    pub(super) fn open_in_window(&mut self, shared: &mut Shared) {
+        if self.finishing.is_some() || self.closed || self.windowed {
+            return;
+        }
+        self.commit_text();
+        self.place_pending_cursor();
+        self.combine_regions();
+        let Some(sel) = self.sel else { return };
+        let base = self.ensure_base();
+        let mut doc = self.doc.clone();
+        doc.base_width = base.width;
+        doc.base_height = base.height;
+        Self::drop_offscreen_cursors(&mut doc);
+        let (mode, editing, source, rect) = match &self.annotate_meta {
+            Some((m, e, s)) => (*m, *e, s.clone(), None),
+            None => {
+                let rect = hover::local_to_virtual(sel, self.bounds);
+                self.remember_region(shared, rect);
+                let mut source = self.source_info(sel);
+                // The measure tool's logical px readout, as on the frozen screen.
+                let c = (sel.x + sel.w / 2, sel.y + sel.h / 2);
+                source.scale = Some(self.monitor_at(c).1);
+                ("region", None, source, Some(rect))
+            }
+        };
+        self.persist_prefs(shared);
+        self.persist_beautify(shared);
+        shared
+            .outbox
+            .push(Command::OpenEditor(Box::new(crate::state::EditorRequest {
+                base: (*base).clone(),
+                doc,
+                mode,
+                editing,
+                source,
+                name: None,
+                rect,
+            })));
+        self.closed = true;
     }
 
     pub(super) fn poll_finish(&mut self, ctx: &Context, shared: &mut Shared) {
@@ -687,14 +745,19 @@ impl Overlay {
                 if moved && let (Some(origin), Some(sel)) = (self.bar_origin, self.sel) {
                     let (at, _, _) = self.undocked_bars(origin, ppp, self.canvas_rect_screen(sel));
                     self.bar_origin = Some(at);
-                    toolbar::remember(Some(toolbar::to_virtual(at, self.bounds)));
+                    // An Editor Window's spot is its own, not the screen overlay's.
+                    if !self.windowed {
+                        toolbar::remember(Some(toolbar::to_virtual(at, self.bounds)));
+                    }
                 }
             }
             GripEvent::Redock => {
                 self.grip_drag = None;
                 self.bar_origin = None;
                 self.bar_from_memory = false;
-                toolbar::remember(None);
+                if !self.windowed {
+                    toolbar::remember(None);
+                }
             }
         }
         ctx.request_repaint();
@@ -723,6 +786,7 @@ impl Overlay {
                 UiAction::Shape(o) => self.apply_shape_opt(o),
                 UiAction::HighlightBox(on) => self.set_highlight_box(on),
                 UiAction::ZoomFit => self.set_view(View::IDENTITY),
+                UiAction::EditInWindow => self.open_in_window(shared),
                 UiAction::ToggleAddRegions => {
                     self.add_regions = !self.add_regions;
                     if self.add_regions {

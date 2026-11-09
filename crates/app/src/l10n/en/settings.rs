@@ -121,6 +121,10 @@ pub fn get(key: &str) -> Option<&'static str> {
         "settings.capture.open_editor.desc" => {
             "Off: they save right away. Use Edit on the toast to annotate."
         }
+        "settings.capture.after_region" => "After Selecting a Region",
+        "settings.capture.after_region.desc" => "What Enter does. Ctrl+C always copies.",
+        "settings.capture.after_region.annotate" => "Annotate in Place",
+        "settings.capture.after_region.window" => "Open Editor Window",
         "settings.capture.window" => "Window Capture",
         "settings.capture.corners" => "Rounded Corners",
         "settings.capture.corners.desc" => {
@@ -411,6 +415,10 @@ pub const KEYS: &[&str] = &[
     "settings.capture.loupe.desc",
     "settings.capture.open_editor",
     "settings.capture.open_editor.desc",
+    "settings.capture.after_region",
+    "settings.capture.after_region.desc",
+    "settings.capture.after_region.annotate",
+    "settings.capture.after_region.window",
     "settings.capture.window",
     "settings.capture.corners",
     "settings.capture.corners.desc",

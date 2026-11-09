@@ -875,6 +875,8 @@ pub enum Icon {
     Qr,
     /// Beautify panel.
     Frame,
+    /// Edit in Window: a window with an arrow out of it.
+    OpenWindow,
 }
 
 /// Icon vector data (24x24 design grid, stroke 1.8) and the painter that draws it.
@@ -989,6 +991,13 @@ mod icons {
             Icon::Frame => &[
                 SoftRect(3.0, 3.0, 18.0, 18.0, 3.0),
                 Rect(7.5, 7.5, 9.0, 9.0, 1.5),
+            ],
+            Icon::OpenWindow => &[
+                Path(
+                    "M11 4H5.5A2.5 2.5 0 0 0 3 6.5V18.5A2.5 2.5 0 0 0 5.5 21H17.5A2.5 2.5 0 0 0 20 18.5V13",
+                ),
+                Path("M3 9h8"),
+                Path("M14 3h7v7M21 3l-8 8"),
             ],
         }
     }

@@ -55,6 +55,9 @@ pub enum Command {
     PinItem(ItemId),
     /// Overlay finished an image capture.
     CaptureDone(Box<CaptureOutput>),
+    /// Open a capture in an Editor Window (the overlay's Edit in Window, or Enter with
+    /// Settings > Capture > After Selecting a Region = Open Editor Window).
+    OpenEditor(Box<EditorRequest>),
     /// Overlay finished selecting a region for a non-image mode.
     RegionChosen {
         purpose: RegionPurpose,
@@ -157,6 +160,23 @@ pub struct CaptureOutput {
     pub mode: &'static str,
     /// Set when re-editing an existing history item: overwrite it instead of adding new.
     pub editing: Option<ItemId>,
+}
+
+/// A capture to open in an Editor Window (`overlay::EditorWindow`).
+#[derive(Debug)]
+pub struct EditorRequest {
+    pub base: Rgba,
+    pub doc: Doc,
+    /// "region" | "window" | "fullscreen" | "scrolling"
+    pub mode: &'static str,
+    /// Set when re-editing a history item: finishing overwrites it.
+    pub editing: Option<ItemId>,
+    pub source: SourceInfo,
+    /// File name for the window title (history items).
+    pub name: Option<String>,
+    /// Virtual-desktop rect the pixels came from (a fresh region capture): reported as the
+    /// capture's rect (repeat-last-region, pin placement) instead of the window's.
+    pub rect: Option<PxRect>,
 }
 
 /// How the overlay was opened.

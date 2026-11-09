@@ -45,13 +45,15 @@ pub enum WorkerMsg {
     },
     /// The window-capture worker crashed before it could report.
     WindowCaptureFailed(String),
-    /// Image + doc loaded for the overlay editor (re-edit).
+    /// Image + doc loaded for the editor (re-edit); opens an Editor Window.
     OpenAnnotate {
         base: Rgba,
         doc: Doc,
         mode: &'static str,
         editing: Option<ItemId>,
         source: SourceInfo,
+        /// File name for the window title.
+        name: Option<String>,
     },
     PinReady {
         image: Rgba,
@@ -990,7 +992,8 @@ pub fn pin_item(env: &Env, id: ItemId) {
 
 pub fn edit_item(env: &Env, id: ItemId) {
     job(env, "edit-item", move |env| {
-        let run = || -> anyhow::Result<(Rgba, Doc, SourceInfo)> {
+        let mut name = None;
+        let mut run = || -> anyhow::Result<(Rgba, Doc, SourceInfo)> {
             let meta = env
                 .history
                 .get(id)?
@@ -1004,6 +1007,10 @@ pub fn edit_item(env: &Env, id: ItemId) {
                 // History does not record the capture's scale: no logical px readout.
                 scale: None,
             };
+            name = meta
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned());
             if let Some((base, doc)) = annotate::load_editable(&meta.path)? {
                 return Ok((base, doc, source));
             }
@@ -1019,6 +1026,7 @@ pub fn edit_item(env: &Env, id: ItemId) {
                     mode: "region",
                     editing: Some(id),
                     source,
+                    name,
                 });
             }
             Err(e) => env.notify(

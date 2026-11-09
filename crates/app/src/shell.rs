@@ -53,7 +53,7 @@ use crate::errors::{self, report, report_str, report_str_with, report_with};
 use crate::history_ui::HistoryWindow;
 use crate::hotkeys::Hotkeys;
 use crate::l10n::tr;
-use crate::overlay::Overlay;
+use crate::overlay::{EditorWindow, Overlay};
 use crate::pin::Pin;
 use crate::record_ui::{Countdown, HudToggles, RecordFrame, RecordHud, ScrollHud, TrimWindow};
 use crate::settings_ui::SettingsWindow;
@@ -730,6 +730,8 @@ struct Shell {
     scroll_hud: Option<Slot<ScrollHud>>,
     toasts: Vec<ToastSlot>,
     pins: Vec<Slot<Pin>>,
+    /// Editor Windows (`overlay::EditorWindow`), at most one per history item.
+    editors: Vec<Slot<EditorWindow>>,
 
     /// Snapshot behind an OCR region selection (so the text comes from what the user saw).
     freeze_cache: Option<Frozen>,
@@ -915,6 +917,7 @@ impl Shell {
             scroll_hud: None,
             toasts: Vec::new(),
             pins: Vec::new(),
+            editors: Vec::new(),
             freeze_cache: None,
             queued_annotate: None,
             window_capture_pending: false,
@@ -1062,6 +1065,30 @@ impl Shell {
         }
     }
 
+    /// Title of the Editor Window editing history item `id`, if one is open.
+    fn editor_title(&self, id: ItemId) -> Option<String> {
+        self.editors
+            .iter()
+            .find(|e| e.s.item() == Some(id))
+            .map(|e| e.s.title())
+    }
+
+    /// Open a capture in a new Editor Window (or focus the one already editing that item).
+    /// No screen freeze: the window is a normal one beside the others.
+    fn open_editor(&mut self, req: crate::state::EditorRequest) {
+        if let Some(id) = req.editing
+            && let Some(t) = self.editor_title(id)
+        {
+            Self::focus_window(&t);
+            return;
+        }
+        let taken: Vec<String> = self.editors.iter().map(|e| e.s.title()).collect();
+        let title = crate::overlay::window_title(req.name.as_deref(), &taken);
+        self.editors
+            .push(Slot::new(EditorWindow::new(req, title, &self.shared)));
+        self.touch();
+    }
+
     fn apply_autostart(&self) {
         let enabled = self.shared.config.general.start_with_windows;
         let exe = match std::env::current_exe() {
@@ -1129,7 +1156,15 @@ impl Shell {
                 self.hotkeys.retry_now();
                 self.tick_hotkeys(true);
             }
-            Command::EditItem(id) => workers::edit_item(&self.env(), id),
+            Command::EditItem(id) => {
+                // Already open: bring that window up instead of loading it again.
+                if let Some(t) = self.editor_title(id) {
+                    Self::focus_window(&t);
+                } else {
+                    workers::edit_item(&self.env(), id)
+                }
+            }
+            Command::OpenEditor(req) => self.open_editor(*req),
             Command::PinItem(id) => workers::pin_item(&self.env(), id),
             Command::CaptureDone(out) => self.capture_done(*out),
             Command::RegionChosen {
@@ -1990,26 +2025,19 @@ impl Shell {
                 mode,
                 editing,
                 source,
+                name,
             } => {
-                // An Edit click must not freeze the screen under a scroll capture or a
-                // recording, nor replace an open overlay. Say so instead of dropping it.
-                if let Some(reason) = self.annotate_block_reason() {
-                    self.notify(tr!("shell.edit.not_yet"), reason, false);
-                    return;
-                }
-                if let Some((frozen, windows)) = self.freeze() {
-                    self.open_overlay(
-                        OverlayMode::Annotate {
-                            base,
-                            doc,
-                            mode,
-                            editing,
-                            source,
-                        },
-                        frozen,
-                        windows,
-                    );
-                }
+                // Re-edits open in an Editor Window: nothing freezes, so this works during
+                // a recording or a scroll capture and beside an open overlay (#5).
+                self.open_editor(crate::state::EditorRequest {
+                    base,
+                    doc,
+                    mode,
+                    editing,
+                    source,
+                    name,
+                    rect: None,
+                });
             }
             WorkerMsg::PinReady { image, title, item } => {
                 self.add_pin(image, title, Some(item), None)
@@ -2599,6 +2627,7 @@ impl Shell {
             || self.trim.is_some()
             || self.scroll_hud.is_some()
             || !self.toasts.is_empty()
+            || !self.editors.is_empty()
             || !matches!(self.rec, Rec::Idle)
             || workers::jobs_in_flight() > 0;
         if busy {
@@ -2653,6 +2682,10 @@ impl Shell {
         self.pins
             .retain_mut(|p| drive(ctx, shared, &mut p.s, &mut p.st, false) == SurfaceStatus::Open);
         closed |= self.pins.len() != before;
+        let before = self.editors.len();
+        self.editors
+            .retain_mut(|e| drive(ctx, shared, &mut e.s, &mut e.st, false) == SurfaceStatus::Open);
+        closed |= self.editors.len() != before;
         if closed {
             timing::point(format_args!("surface closed"));
             // One more pass so egui destroys the windows of surfaces that just closed.

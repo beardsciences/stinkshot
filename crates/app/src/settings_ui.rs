@@ -1245,6 +1245,26 @@ impl SettingsWindow {
             tr!("settings.capture.loupe.desc"),
             &mut c.show_loupe,
         );
+        {
+            use stinkshot_core::config::AfterRegion;
+            combo_row(
+                ui,
+                "after_region",
+                tr!("settings.capture.after_region"),
+                tr!("settings.capture.after_region.desc"),
+                &mut c.after_region,
+                &[
+                    (
+                        AfterRegion::Annotate,
+                        tr!("settings.capture.after_region.annotate"),
+                    ),
+                    (
+                        AfterRegion::Window,
+                        tr!("settings.capture.after_region.window"),
+                    ),
+                ],
+            );
+        }
         toggle_row(
             ui,
             tr!("settings.capture.open_editor"),

@@ -58,6 +58,15 @@ mod toolbar;
 mod ui;
 mod undo;
 mod view;
+mod window_host;
+
+pub use window_host::EditorWindow;
+
+/// Title for a new Editor Window: the file name (history items) or "Stinkshot Editor",
+/// numbered when another open window has it.
+pub fn window_title(name: Option<&str>, taken: &[String]) -> String {
+    window_host::unique_title(&window_host::base_title(name), taken)
+}
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -427,6 +436,18 @@ pub struct Overlay {
     /// button-up cannot fall through to the tray icon once the overlay is gone.
     tray_double_pending: bool,
     opened_at: Instant,
+
+    /// Hosted in an Editor Window (`window_host.rs`) instead of the fullscreen overlay: no
+    /// frozen screen, the window's client area is the canvas and its only "monitor".
+    windowed: bool,
+    /// Editor Window: the capture's virtual-desktop rect (a fresh region capture), reported
+    /// instead of where the window shows the picture.
+    fixed_rect: Option<PxRect>,
+    /// Editor Window: annotations came from the overlay (not saved anywhere yet), so closing
+    /// asks even before the first edit here.
+    carried_edits: bool,
+    /// Settings > Capture > After Selecting a Region is Open Editor Window.
+    after_region_window: bool,
 }
 
 /// A short message in the hint bar's leading slot.
@@ -673,9 +694,15 @@ impl Overlay {
             from_tray_click,
             tray_double_pending: false,
             opened_at: Instant::now(),
+            windowed: false,
+            fixed_rect: None,
+            carried_edits: false,
+            after_region_window: shared.config.capture.after_region
+                == stinkshot_core::config::AfterRegion::Window,
         };
 
-        if shared.config.capture.snap_to_elements {
+        // Element snapping picks regions on the screen; the editor never does.
+        if shared.config.capture.snap_to_elements && !matches!(mode, OverlayMode::Annotate { .. }) {
             match ElementSnapper::new() {
                 Ok(s) => o.snapper = Some(s),
                 Err(e) => log::warn!("overlay: element snapping unavailable: {e:#}"),
@@ -877,6 +904,15 @@ impl Overlay {
     /// region is the image).
     fn can_start_region(&self) -> bool {
         !matches!(self.kind, Kind::Annotate)
+    }
+
+    /// Enter opens the capture in an Editor Window instead of copying it (screen overlay
+    /// with a region, After Selecting a Region = Open Editor Window).
+    fn enter_opens_window(&self) -> bool {
+        self.after_region_window
+            && !self.windowed
+            && matches!(self.kind, Kind::Capture)
+            && self.sel.is_some()
     }
 
     fn annotating(&self) -> bool {
@@ -1367,6 +1403,10 @@ impl Overlay {
             self.copy_shapes();
             return;
         }
+        if k.enter && !k.copy_event && self.enter_opens_window() {
+            self.open_in_window(shared);
+            return;
+        }
         if k.enter || k.copy_event {
             match self.kind {
                 Kind::Select(_) => {
@@ -1625,7 +1665,9 @@ impl Overlay {
 
     /// Annotations the user drew or changed in this session (lost on cancel).
     fn has_unsaved_edits(&self) -> bool {
-        self.annotating() && !self.doc.shapes.is_empty() && self.undo.can_undo()
+        self.annotating()
+            && !self.doc.shapes.is_empty()
+            && (self.undo.can_undo() || self.carried_edits)
     }
 
     /// True while the discard prompt is showing.
