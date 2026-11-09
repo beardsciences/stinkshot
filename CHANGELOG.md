@@ -9,17 +9,23 @@ write entries for people who use Stinkshot, not for people who read the diff.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-09
+
+First public release. The full feature list is under 0.1.0, which was built but not published.
+
 ### Added
 
 - History cards show a Delete button next to the star on hover. Starred captures don't get one; delete them from the menu.
 
 ### Fixed
 
-- Tighter rows in the History and pin right-click menus.
+- Menus and dropdowns have even spacing and room around each item.
+- The Beautify preview shows captures that have no annotations yet.
+- The History star and Delete buttons stay readable on light thumbnails.
 
 ## [0.1.0] - 2026-11-08
 
-First public release.
+Built but not published.
 
 ### Added
 
@@ -57,5 +63,6 @@ First public release.
 - No upload targets, accounts or telemetry. The update check is the only network request and
   is off by default.
 
-[Unreleased]: https://code.mccullough.dev/christian/stinkshot/compare/v0.1.0...main
+[Unreleased]: https://code.mccullough.dev/christian/stinkshot/compare/v0.1.1...main
+[0.1.1]: https://code.mccullough.dev/christian/stinkshot/releases/tag/v0.1.1
 [0.1.0]: https://code.mccullough.dev/christian/stinkshot/releases/tag/v0.1.0
