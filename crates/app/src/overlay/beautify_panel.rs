@@ -106,9 +106,9 @@ impl Overlay {
         if !self.beautify_open {
             return;
         }
-        let Some(base) = self.base.clone() else {
-            return;
-        };
+        // The base is otherwise made only when something needs it (an annotation, measure,
+        // scan): without this the preview stayed blank on an unannotated capture.
+        let base = self.ensure_base();
         let busy = !matches!(self.drag, Drag::None | Drag::Ignore);
         let stale_base = self
             .beautify_preview

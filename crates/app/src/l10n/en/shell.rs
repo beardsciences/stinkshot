@@ -350,9 +350,7 @@ pub fn get(key: &str) -> Option<&'static str> {
         "shell.tour.tray.title" => "It Lives in the Tray",
         "shell.tour.tray.body" => "Click the tray icon to capture, double-click for History.",
         "shell.tour.privacy.title" => "Nothing Ever Leaves Your PC",
-        "shell.tour.privacy.body" => {
-            "Nothing is uploaded or tracked. Update checks are opt-in."
-        }
+        "shell.tour.privacy.body" => "Nothing is uploaded or tracked. Update checks are opt-in.",
         "shell.tour.files.title" => "Where Captures Go",
         "shell.tour.files.body" => {
             "Saved here and listed in History. Change it in Settings > History."
