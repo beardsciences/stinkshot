@@ -213,7 +213,7 @@ impl Encoder {
             }
             let mut raw: *mut core::ffi::c_void = std::ptr::null_mut();
             let got = self.writer.GetServiceForStream(
-                MF_SINK_WRITER_MEDIASINK.0 as u32,
+                MF_SINK_WRITER_MEDIASINK.0,
                 &GUID::zeroed(),
                 &IMFMediaSink::IID,
                 &mut raw,
