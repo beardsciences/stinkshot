@@ -705,6 +705,7 @@ struct Shell {
     overlay: Option<Slot<Overlay>>,
     history_win: Option<Slot<HistoryWindow>>,
     settings: Option<Slot<SettingsWindow>>,
+    tour: Option<Slot<crate::tour::TourWindow>>,
     countdown: Option<Slot<Countdown>>,
     record_frame: Option<Slot<RecordFrame>>,
     record_hud: Option<Slot<RecordHud>>,
@@ -886,6 +887,7 @@ impl Shell {
             overlay: None,
             history_win: None,
             settings: None,
+            tour: None,
             countdown: None,
             record_frame: None,
             record_hud: None,
@@ -967,6 +969,11 @@ impl Shell {
         if !launched_with_command && welcome {
             let body = welcome_body(&shell.shared.config.hotkeys.region);
             shell.notify("Stinkshot Is Running", body, false);
+        }
+        // First run: the short tour, once (it sets `general.tour_seen` when closed). Not over
+        // a capture the launch asked for.
+        if !launched_with_command && !shell.shared.config.general.tour_seen {
+            shell.pending.push_back(Command::OpenTour);
         }
         shell.maybe_check_updates(false);
         shell.ctx.request_repaint();
@@ -1095,6 +1102,7 @@ impl Shell {
             Command::OpenHistory => self.open_history(),
             Command::OpenSettings => self.open_settings(None),
             Command::OpenSettingsAt(section) => self.open_settings(Some(section)),
+            Command::OpenTour => self.open_tour(),
             Command::EditItem(id) => workers::edit_item(&self.env(), id),
             Command::PinItem(id) => workers::pin_item(&self.env(), id),
             Command::CaptureDone(out) => self.capture_done(*out),
@@ -1492,6 +1500,15 @@ impl Shell {
             return;
         }
         self.history_win = Some(Slot::new(HistoryWindow::new(&self.shared)));
+        self.touch();
+    }
+
+    fn open_tour(&mut self) {
+        if self.tour.is_some() {
+            Self::focus_window(crate::tour::TourWindow::TITLE);
+            return;
+        }
+        self.tour = Some(Slot::new(crate::tour::TourWindow::new()));
         self.touch();
     }
 
@@ -2537,6 +2554,7 @@ impl Shell {
         let busy = self.overlay.is_some()
             || self.history_win.is_some()
             || self.settings.is_some()
+            || self.tour.is_some()
             || self.countdown.is_some()
             || self.record_frame.is_some()
             || self.record_hud.is_some()
@@ -2579,6 +2597,7 @@ impl Shell {
         closed |= drive_opt(ctx, shared, &mut self.overlay, true);
         closed |= drive_opt(ctx, shared, &mut self.history_win, true);
         closed |= drive_opt(ctx, shared, &mut self.settings, true);
+        closed |= drive_opt(ctx, shared, &mut self.tour, true);
         closed |= drive_opt(ctx, shared, &mut self.countdown, false);
         closed |= drive_opt(ctx, shared, &mut self.record_frame, false);
         closed |= drive_opt(ctx, shared, &mut self.record_hud, false);

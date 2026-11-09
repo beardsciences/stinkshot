@@ -33,6 +33,8 @@ pub struct General {
     pub show_toast: bool,
     pub toast_seconds: u32,
     pub play_sound: bool,
+    /// The first-run tour was shown (or skipped). Settings > About > Show Tour reopens it.
+    pub tour_seen: bool,
 }
 
 /// Hotkey strings use the `global-hotkey` crate's format, e.g. "PrintScreen",
@@ -175,6 +177,7 @@ impl Default for General {
             show_toast: true,
             toast_seconds: 6,
             play_sound: false,
+            tour_seen: false,
         }
     }
 }

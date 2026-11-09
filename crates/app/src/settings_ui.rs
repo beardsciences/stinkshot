@@ -1780,6 +1780,15 @@ impl SettingsWindow {
         if copied {
             ui.ctx().request_repaint_after(Duration::from_millis(500));
         }
+        let mut show_tour = false;
+        widgets::setting_row(ui, "Tour", "The short intro from the first start.", |ui| {
+            if widgets::button(ui, "Show Tour").clicked() {
+                show_tour = true;
+            }
+        });
+        if show_tour {
+            shared.outbox.push(Command::OpenTour);
+        }
         let mut open_log = false;
         widgets::setting_row(
             ui,

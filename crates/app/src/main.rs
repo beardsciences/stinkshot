@@ -34,6 +34,7 @@ mod sysutil;
 mod theme;
 mod timing;
 mod toast;
+mod tour;
 mod tray;
 mod update;
 mod wake;
