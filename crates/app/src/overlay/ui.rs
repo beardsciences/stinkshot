@@ -10,6 +10,7 @@ use egui::{
 use super::paint::color32;
 use super::selection::Ratio;
 use super::shapes::Tool;
+use crate::l10n::tr;
 use crate::state::FinishAction;
 use crate::theme::{self, Icon, Palette};
 
@@ -226,7 +227,7 @@ pub fn tool_bar(
 
                     // Color swatch.
                     let (r, resp) = ui.allocate_exact_size(Vec2::splat(34.0), Sense::click());
-                    let resp = resp.on_hover_text("Color (1-8)");
+                    let resp = resp.on_hover_text(tr!("overlay.color"));
                     color_btn = r;
                     ui.painter().rect_filled(
                         r,
@@ -270,7 +271,7 @@ pub fn tool_bar(
                         egui::FontId::proportional(12.0),
                         pal.text,
                     );
-                    let wb = wb.on_hover_text("Stroke Width ([ and ])");
+                    let wb = wb.on_hover_text(tr!("overlay.stroke_width"));
                     width_btn = wb.rect;
                     if wb.clicked() {
                         out.push(UiAction::TogglePopup(Popup::Width));
