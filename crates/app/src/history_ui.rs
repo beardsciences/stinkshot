@@ -2241,15 +2241,15 @@ mod tests {
         let two_gb = 2_254_857_831;
         assert_eq!(
             retention_summary(90, 5.0, two_gb),
-            "Keeping 90 days or 5 GB, starred kept forever. 2.1 GB used."
+            "Keeping 90 days or 5 GB. Starred stay forever. 2.1 GB used."
         );
         assert_eq!(
             retention_summary(1, 0.0, 0),
-            "Keeping 1 day, starred kept forever. 0 B used."
+            "Keeping 1 day. Starred stay forever. 0 B used."
         );
         assert_eq!(
             retention_summary(0, 2.5, 0),
-            "Keeping up to 2.5 GB, starred kept forever. 0 B used."
+            "Keeping up to 2.5 GB. Starred stay forever. 0 B used."
         );
         assert_eq!(
             retention_summary(0, 0.0, two_gb),

@@ -30,10 +30,10 @@ pub fn get(key: &str) -> Option<&'static str> {
         "history.retention.day" => "1 day",
         "history.retention.days" => "{n} days",
         "history.retention.days_and_size" => {
-            "Keeping {days} or {size}, starred kept forever. {used} used."
+            "Keeping {days} or {size}. Starred stay forever. {used} used."
         }
-        "history.retention.days_only" => "Keeping {days}, starred kept forever. {used} used.",
-        "history.retention.size_only" => "Keeping up to {size}, starred kept forever. {used} used.",
+        "history.retention.days_only" => "Keeping {days}. Starred stay forever. {used} used.",
+        "history.retention.size_only" => "Keeping up to {size}. Starred stay forever. {used} used.",
         "history.retention.everything" => "Keeping everything. {used} used.",
         "history.retention.tip" => "Change History Retention",
         "history.results.one" => "1 capture",
