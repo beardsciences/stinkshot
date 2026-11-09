@@ -277,7 +277,8 @@ pub fn bounds(shape: &Shape, measure: Measure) -> RectF {
         ),
         ShapeKind::Blur { rect, .. }
         | ShapeKind::Pixelate { rect, .. }
-        | ShapeKind::Redact { rect } => *rect,
+        | ShapeKind::Redact { rect }
+        | ShapeKind::HighlightBox { rect } => *rect,
         ShapeKind::Magnifier { source, dest, .. } => union(*source, *dest),
         ShapeKind::Callout { rect, tail, .. } => union(*rect, RectF::new(tail.x, tail.y, 0.0, 0.0)),
         ShapeKind::Spotlight { rect, .. } => *rect,
@@ -349,7 +350,8 @@ pub fn hit(shape: &Shape, p: PtF, tol: f32, measure: Measure) -> bool {
         ShapeKind::Step { center, radius, .. } => dist(p, *center) <= radius + tol,
         ShapeKind::Blur { rect, .. }
         | ShapeKind::Pixelate { rect, .. }
-        | ShapeKind::Redact { rect } => rect.expand(tol).contains(p),
+        | ShapeKind::Redact { rect }
+        | ShapeKind::HighlightBox { rect } => rect.expand(tol).contains(p),
         ShapeKind::Magnifier {
             source,
             dest,
@@ -403,6 +405,7 @@ fn main_rect(shape: &Shape) -> Option<RectF> {
         | ShapeKind::Blur { rect, .. }
         | ShapeKind::Pixelate { rect, .. }
         | ShapeKind::Redact { rect }
+        | ShapeKind::HighlightBox { rect }
         | ShapeKind::Spotlight { rect, .. }
         | ShapeKind::Callout { rect, .. } => Some(*rect),
         ShapeKind::Magnifier { dest, .. } => Some(*dest),
@@ -623,6 +626,7 @@ pub fn drag_handle(
             | ShapeKind::Blur { rect, .. }
             | ShapeKind::Pixelate { rect, .. }
             | ShapeKind::Redact { rect }
+            | ShapeKind::HighlightBox { rect }
             | ShapeKind::Spotlight { rect, .. }
             | ShapeKind::Callout { rect, .. }
             | ShapeKind::Magnifier { dest: rect, .. },
@@ -694,6 +698,9 @@ pub struct ShapeOptions {
     pub arrow_head: ArrowHead,
     pub text_bold: bool,
     pub text_pill: bool,
+    /// Highlighter draws boxes (Shift while dragging draws the other mode). Saved in the
+    /// config as `editor.highlighter_box`.
+    pub highlight_box: bool,
 }
 
 impl Default for ShapeOptions {
@@ -703,6 +710,7 @@ impl Default for ShapeOptions {
             arrow_head: ArrowHead::Notched,
             text_bold: false,
             text_pill: false,
+            highlight_box: false,
         }
     }
 }
@@ -871,11 +879,44 @@ fn sized(r: RectF, small: bool) -> Option<RectF> {
     }
 }
 
+/// Does a highlighter drag draw a box? The sticky mode, flipped while Shift is held.
+pub fn highlight_box_mode(options: &ShapeOptions, shift: bool) -> bool {
+    options.highlight_box != shift
+}
+
+/// A box highlight from a drag from `a` to `b` (image px), styled like a highlighter stroke.
+/// None when the drag is too small.
+pub fn highlight_box_from_drag(a: PtF, b: PtF, params: &ToolParams) -> Option<(ShapeKind, Style)> {
+    let r = RectF::from_points(a, b);
+    if r.w < MIN_SHAPE || r.h < MIN_SHAPE {
+        return None;
+    }
+    Some((
+        ShapeKind::HighlightBox { rect: r },
+        style_for_tool(Tool::Highlighter, &params.style),
+    ))
+}
+
+/// To Box: the box highlight covering a freehand highlighter stroke (its painted extent,
+/// stroke width included). None for anything else.
+pub fn highlighter_to_box(shape: &Shape) -> Option<ShapeKind> {
+    annotate::highlighter_box_rect(&shape.kind, shape.style.width)
+        .map(|r| ShapeKind::HighlightBox { rect: min_size(r) })
+}
+
+/// Freehand highlighter stroke or box highlight.
+pub fn is_highlight(kind: &ShapeKind) -> bool {
+    matches!(
+        kind,
+        ShapeKind::Highlighter { .. } | ShapeKind::HighlightBox { .. }
+    )
+}
+
 /// Recolor a shape. Highlighters keep their translucency; callouts recolor their fill too;
 /// text on a pill recolors the pill and picks readable ink.
 pub fn recolor(shape: &mut Shape, color: [u8; 4]) {
     let mut c = color;
-    if matches!(shape.kind, ShapeKind::Highlighter { .. }) {
+    if is_highlight(&shape.kind) {
         c[3] = HIGHLIGHTER_ALPHA;
     }
     if let ShapeKind::Text {
@@ -912,7 +953,9 @@ pub fn display_color(shape: &Shape) -> [u8; 4] {
 /// The stroke width the toolbar shows for a shape (highlighters store 4x the setting).
 pub fn display_width(shape: &Shape) -> f32 {
     match shape.kind {
-        ShapeKind::Highlighter { .. } => (shape.style.width / 4.0).clamp(1.0, 64.0),
+        ShapeKind::Highlighter { .. } | ShapeKind::HighlightBox { .. } => {
+            (shape.style.width / 4.0).clamp(1.0, 64.0)
+        }
         _ => shape.style.width.clamp(1.0, 64.0),
     }
 }
@@ -1939,5 +1982,98 @@ mod tests {
             clip[0].kind,
             ShapeKind::Magnifier { source, dest, .. } if source.x == 10.0 && dest.y == 50.0
         ));
+    }
+
+    #[test]
+    fn highlight_box_mode_flips_with_shift() {
+        let mut o = ShapeOptions::default();
+        assert!(!highlight_box_mode(&o, false));
+        assert!(highlight_box_mode(&o, true));
+        o.highlight_box = true;
+        assert!(highlight_box_mode(&o, false));
+        assert!(!highlight_box_mode(&o, true));
+    }
+
+    #[test]
+    fn highlight_box_from_drag_is_styled_like_a_stroke() {
+        let p = params();
+        let (k, s) = highlight_box_from_drag(pt(80.0, 40.0), pt(20.0, 60.0), &p).unwrap();
+        assert_eq!(
+            k,
+            ShapeKind::HighlightBox {
+                rect: RectF::new(20.0, 40.0, 60.0, 20.0)
+            }
+        );
+        assert_eq!(s, style_for_tool(Tool::Highlighter, &p.style));
+        assert_eq!(s.fill, None, "no outline or extra fill");
+        assert!(highlight_box_from_drag(pt(5.0, 5.0), pt(6.0, 40.0), &p).is_none());
+    }
+
+    #[test]
+    fn to_box_covers_the_stroke_and_keeps_the_style() {
+        let hl_style = style_for_tool(Tool::Highlighter, &style());
+        let stroke = Shape {
+            id: 7,
+            kind: ShapeKind::Highlighter {
+                points: vec![pt(10.0, 30.0), pt(60.0, 34.0), pt(110.0, 28.0)],
+            },
+            style: hl_style.clone(),
+        };
+        let w = hl_style.width;
+        let k = highlighter_to_box(&stroke).unwrap();
+        assert_eq!(
+            k,
+            ShapeKind::HighlightBox {
+                rect: RectF::new(10.0 - w / 2.0, 28.0 - w / 2.0, 100.0 + w, 6.0 + w)
+            }
+        );
+        // The box is exactly the selection bounds the stroke had.
+        let boxed = Shape {
+            kind: k,
+            ..stroke.clone()
+        };
+        assert_eq!(bounds(&boxed, &measure), bounds(&stroke, &measure));
+        let pen = Shape {
+            kind: ShapeKind::Pen {
+                points: vec![pt(0.0, 0.0), pt(9.0, 9.0)],
+            },
+            ..stroke
+        };
+        assert!(highlighter_to_box(&pen).is_none());
+    }
+
+    #[test]
+    fn highlight_box_edits_like_a_rect() {
+        let mut s = Shape {
+            id: 1,
+            kind: ShapeKind::HighlightBox {
+                rect: RectF::new(20.0, 20.0, 100.0, 30.0),
+            },
+            style: style_for_tool(Tool::Highlighter, &style()),
+        };
+        let d = Doc {
+            shapes: vec![s.clone()],
+            ..Doc::new(400, 300)
+        };
+        assert_eq!(hit_test(&d, pt(70.0, 35.0), 0.0, &measure), Some(1));
+        assert_eq!(handles(&s, &measure).len(), 8);
+        drag_handle(
+            &mut s,
+            ShapeHandle::Rect(Handle8::BottomRight),
+            pt(150.0, 80.0),
+            false,
+            &measure,
+        );
+        assert_eq!(
+            s.kind,
+            ShapeKind::HighlightBox {
+                rect: RectF::new(20.0, 20.0, 130.0, 60.0)
+            }
+        );
+        translate(&mut s.kind, 10.0, 5.0);
+        assert_eq!(bounds(&s, &measure), RectF::new(30.0, 25.0, 130.0, 60.0));
+        recolor(&mut s, [1, 2, 3, 255]);
+        assert_eq!(s.style.color, [1, 2, 3, HIGHLIGHTER_ALPHA]);
+        assert_eq!(display_width(&s), (s.style.width / 4.0).clamp(1.0, 64.0));
     }
 }

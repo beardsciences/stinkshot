@@ -17,6 +17,8 @@ pub enum ShapeOpt {
     Double(bool),
     Head(ArrowHead),
     Straighten,
+    /// Replace a freehand highlighter stroke with the box it covers.
+    ToBox,
 }
 
 impl Overlay {
@@ -88,7 +90,9 @@ impl Overlay {
             if let Some(s) = self.doc.get_mut(id) {
                 match &mut s.kind {
                     ShapeKind::Step { radius, .. } => *radius = shapes::step_radius(self.width),
-                    ShapeKind::Highlighter { .. } => s.style.width = (self.width * 4.0).max(14.0),
+                    ShapeKind::Highlighter { .. } | ShapeKind::HighlightBox { .. } => {
+                        s.style.width = (self.width * 4.0).max(14.0)
+                    }
                     _ => s.style.width = self.width,
                 }
             }
@@ -284,12 +288,25 @@ impl Overlay {
                     self.options.arrow_head = h;
                 }
                 ShapeOpt::Straighten => shapes::straighten(&mut s.kind),
+                ShapeOpt::ToBox => {
+                    if let Some(k) = shapes::highlighter_to_box(s) {
+                        s.kind = k;
+                    }
+                }
             }
         }
         if let Some(e) = self.edit.as_mut() {
             e.blink_from = Instant::now();
         } else if self.doc != pre {
             self.undo.push(&pre);
+        }
+    }
+
+    /// Highlighter Freehand / Box mode (toolbar). Sticky and saved in the config.
+    pub(super) fn set_highlight_box(&mut self, on: bool) {
+        if self.options.highlight_box != on {
+            self.options.highlight_box = on;
+            self.prefs_dirty = true;
         }
     }
 
@@ -460,6 +477,10 @@ impl Overlay {
             }
             if (ed.font_size - self.font_size).abs() > 0.01 {
                 ed.font_size = self.font_size;
+                dirty = true;
+            }
+            if ed.highlighter_box != self.options.highlight_box {
+                ed.highlighter_box = self.options.highlight_box;
                 dirty = true;
             }
         }
@@ -689,6 +710,7 @@ impl Overlay {
                 }
                 UiAction::Eyedropper => self.toggle_eyedropper(),
                 UiAction::Shape(o) => self.apply_shape_opt(o),
+                UiAction::HighlightBox(on) => self.set_highlight_box(on),
                 UiAction::ZoomFit => self.set_view(View::IDENTITY),
                 UiAction::ToggleAddRegions => {
                     self.add_regions = !self.add_regions;

@@ -196,6 +196,10 @@ pub fn sheet(select_only: bool) -> Sheet {
             tr!("overlay.keys.straight"),
         ),
         (
+            tr!("overlay.keys.k.shift_drag").to_string(),
+            tr!("overlay.keys.highlight_mode"),
+        ),
+        (
             tr!("overlay.keys.k.alt_drag").to_string(),
             tr!("overlay.keys.no_snap"),
         ),
@@ -440,6 +444,11 @@ mod tests {
             s[2].1
                 .iter()
                 .any(|(k, v)| k == "Shift+Drag" && v.contains("Square"))
+        );
+        assert!(
+            s[2].1
+                .iter()
+                .any(|(k, v)| k == "Shift+Drag" && v.contains("Highlighter"))
         );
     }
 

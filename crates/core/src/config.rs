@@ -101,6 +101,9 @@ pub struct Editor {
     /// Color and stroke width each editor tool last used, keyed by tool ("arrow", "rect",
     /// "redact", ...). Tools without an entry start from `color` / `stroke_width`.
     pub tool_styles: std::collections::BTreeMap<String, ToolStyle>,
+    /// Highlighter draws boxes instead of freehand strokes (Shift while dragging draws the
+    /// other mode).
+    pub highlighter_box: bool,
     /// Color picker copy format: "hex", "rgb" or "hsl".
     pub picker_format: String,
     /// Colors picked with the color picker (C in the overlay, Pick Color), newest first, hex.
@@ -244,6 +247,7 @@ impl Default for Editor {
             smart_redact_style: "box".into(),
             recent_colors: Vec::new(),
             tool_styles: Default::default(),
+            highlighter_box: false,
             picker_format: "hex".into(),
             picker_recent: Vec::new(),
             beautify: Default::default(),
@@ -538,6 +542,7 @@ mod tests {
                 width: 6.0,
             },
         );
+        cfg.editor.highlighter_box = true;
         cfg.editor.picker_format = "hsl".into();
         cfg.editor.picker_recent = vec!["#abcdef".into()];
         cfg.editor.beautify.enabled = true;
@@ -577,6 +582,7 @@ mod tests {
         assert!(cfg.editor.recent_colors.is_empty() && cfg.editor.tool_styles.is_empty());
         assert_eq!(cfg.editor.picker_format, "hex");
         assert!(cfg.editor.picker_recent.is_empty());
+        assert!(!cfg.editor.highlighter_box);
         assert_eq!(cfg.editor.beautify, crate::beautify::Beautify::default());
         assert!(cfg.hotkeys.pick_color.is_empty());
         let _ = std::fs::remove_dir_all(&d);

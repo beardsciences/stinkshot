@@ -50,6 +50,8 @@ pub enum UiAction {
     Picker(super::picker::PickerAction),
     /// A context bar option on the selected arrow or text.
     Shape(super::ops::ShapeOpt),
+    /// Highlighter mode buttons: true = Box, false = Freehand.
+    HighlightBox(bool),
     /// The zoom chip: back to the fitted view.
     ZoomFit,
     /// Add Regions toggle (multi-region capture).
@@ -98,6 +100,8 @@ pub struct BarInfo {
     pub width: f32,
     /// The eyedropper is picking.
     pub picking: bool,
+    /// Highlighter tool active: its mode (true = Box). None hides the mode buttons.
+    pub highlight_box: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -280,6 +284,19 @@ pub fn tool_bar(
                     width_btn = wb.rect;
                     if wb.clicked() {
                         out.push(UiAction::TogglePopup(Popup::Width));
+                    }
+
+                    // Highlighter mode, trailing so it never shifts the tools.
+                    if let Some(boxed) = info.highlight_box {
+                        separator(ui, pal);
+                        let tip = tr!("overlay.tip.highlight_freehand");
+                        if opt_button(ui, tip, !boxed, freehand_glyph).clicked() {
+                            out.push(UiAction::HighlightBox(false));
+                        }
+                        let tip = tr!("overlay.tip.highlight_box");
+                        if opt_button(ui, tip, boxed, box_glyph).clicked() {
+                            out.push(UiAction::HighlightBox(true));
+                        }
                     }
                 });
             });
@@ -546,6 +563,8 @@ pub enum ContextBar {
         head: stinkshot_core::annotate::ArrowHead,
         curved: bool,
     },
+    /// A freehand highlighter stroke: To Box.
+    Highlighter,
 }
 
 /// A 30x30 option button styled like the icon buttons, its glyph drawn by `glyph`.
@@ -587,6 +606,74 @@ fn opt_button(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     resp.on_hover_text(tip)
+}
+
+/// A 30 px tall context bar button with a small glyph and a text label.
+fn label_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    width: f32,
+    glyph: impl FnOnce(&egui::Painter, Rect, Color32),
+) -> egui::Response {
+    let (dark, _) = theme::current(ui.ctx());
+    let pal = theme::palette(dark);
+    let (r, resp) = ui.allocate_exact_size(Vec2::new(width, 30.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Button, true, label));
+    let hover = ui
+        .ctx()
+        .animate_bool_with_time(resp.id.with("hover"), resp.hovered(), 0.1);
+    let bg = if resp.is_pointer_button_down_on() {
+        theme::subtle_fill(dark, 2)
+    } else {
+        theme::subtle_fill(dark, 1).gamma_multiply(hover)
+    };
+    ui.painter().rect_filled(r, 6.0, bg);
+    let icon = Rect::from_min_size(
+        Pos2::new(r.left() + 8.0, r.center().y - 8.0),
+        Vec2::splat(16.0),
+    );
+    glyph(ui.painter(), icon, pal.text);
+    ui.painter().text(
+        Pos2::new(icon.right() + 7.0, r.center().y),
+        Align2::LEFT_CENTER,
+        label,
+        FontId::proportional(13.0),
+        pal.text,
+    );
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp
+}
+
+/// Freehand highlight: a thick translucent squiggle.
+fn freehand_glyph(p: &egui::Painter, r: Rect, c: Color32) {
+    let pts: Vec<Pos2> = (0..=12)
+        .map(|i| {
+            let t = i as f32 / 12.0;
+            Pos2::new(
+                r.left() + r.width() * t,
+                r.center().y + (t * std::f32::consts::TAU).sin() * r.height() * 0.22,
+            )
+        })
+        .collect();
+    p.add(egui::Shape::line(
+        pts,
+        egui::Stroke::new(r.height() * 0.42, c.gamma_multiply(0.55)),
+    ));
+}
+
+/// Box highlight: a translucent band with a text line through it.
+fn box_glyph(p: &egui::Painter, r: Rect, c: Color32) {
+    let band = Rect::from_center_size(r.center(), Vec2::new(r.width(), r.height() * 0.62));
+    p.rect_filled(band, 1.5, c.gamma_multiply(0.55));
+    p.line_segment(
+        [
+            Pos2::new(band.left() + 2.5, band.center().y),
+            Pos2::new(band.right() - 2.5, band.center().y),
+        ],
+        egui::Stroke::new(1.4, c),
+    );
 }
 
 fn arrow_glyph(
@@ -641,6 +728,9 @@ fn arrow_glyph(
     }
 }
 
+/// Width of the context bar's To Box button (points).
+const TO_BOX_W: f32 = 78.0;
+
 /// Small floating bar of options for the selected arrow or text (or the text being typed),
 /// above `anchor` (the shape's screen rect, points), below it when there is no room.
 pub fn context_bar(
@@ -658,6 +748,7 @@ pub fn context_bar(
         ContextBar::Arrow { curved, .. } => {
             ((5.0 + f32::from(u8::from(curved))) * 32.0 + 22.0, 40.0)
         }
+        ContextBar::Highlighter => (TO_BOX_W + 10.0, 40.0),
     };
     let above = anchor.top() - 10.0 - h >= screen.top() + 4.0;
     let y = if above {
@@ -812,6 +903,14 @@ pub fn context_bar(
                                 .clicked()
                             {
                                 out.push(UiAction::Shape(ShapeOpt::Straighten));
+                            }
+                        }
+                        ContextBar::Highlighter => {
+                            if label_button(ui, tr!("overlay.ctx.to_box"), TO_BOX_W, box_glyph)
+                                .on_hover_text(tr!("overlay.ctx.to_box_tip"))
+                                .clicked()
+                            {
+                                out.push(UiAction::Shape(ShapeOpt::ToBox));
                             }
                         }
                     });

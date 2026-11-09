@@ -614,7 +614,10 @@ impl Overlay {
             palette,
             recent,
             tool_styles: load_tool_styles(cfg),
-            options: ShapeOptions::default(),
+            options: ShapeOptions {
+                highlight_box: cfg.highlighter_box,
+                ..ShapeOptions::default()
+            },
             selected: Vec::new(),
             clipboard: Vec::new(),
             pastes: 0,

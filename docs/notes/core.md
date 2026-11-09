@@ -136,6 +136,15 @@ All `todo!()` bodies in `crates/core` are implemented. `cargo test -p stinkshot-
     HSL edge cases; beautify layout / solid / gradient / shadow / blurred / serde / preview.
     Ignored: `codes_perf`, `beautify_perf`, `editor_showcase` (writes PNGs to
     `STINKSHOT_EDITOR_SHOWCASE`).
+- Box highlighter (Nov 9 2026, Forgejo #1): new `ShapeKind::HighlightBox { rect }`
+  (serialized `"type": "highlight_box"`). Older sidecars load as before; a doc containing one
+  does not load in builds older than this. Filled with the same translucent color as a
+  `Highlighter` stroke, no outline, hit anywhere inside, not destructive. New
+  `highlight_color(color)` (what highlighters paint with) and
+  `highlighter_box_rect(kind, width)` (the box over a stroke's painted extent).
+  `config::Editor::highlighter_box` (default false). Tests: `highlight_box_*`,
+  `render_highlight_box_fills_exactly_its_rect_like_a_stroke`,
+  `highlighter_box_rect_covers_the_painted_stroke`.
 - No signatures changed.
 - Perf track (Nov 8 2026):
   - `png_opt` (new): `optimize(png, Effort) -> (Outcome, Report)`, lossless re-compression

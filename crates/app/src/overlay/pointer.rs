@@ -1046,6 +1046,12 @@ impl Overlay {
 
     fn finish_draw(&mut self, tool: Tool, a: PtF, cur: PtF, points: Vec<PtF>, shift: bool) {
         match tool {
+            Tool::Highlighter if shapes::highlight_box_mode(&self.options, shift) => {
+                if let Some((kind, style)) = shapes::highlight_box_from_drag(a, cur, &self.params())
+                {
+                    self.create_shape(kind, style);
+                }
+            }
             Tool::Pen | Tool::Highlighter => {
                 let pts = shapes::smooth_points(&points);
                 if pts.is_empty() {

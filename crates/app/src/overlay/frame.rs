@@ -774,6 +774,13 @@ impl Overlay {
         } = &self.drag
         {
             match tool {
+                Tool::Highlighter if shapes::highlight_box_mode(&self.options, inp.shift) => {
+                    if let Some((kind, style)) =
+                        shapes::highlight_box_from_drag(*a, *cur, &self.params())
+                    {
+                        paint_shape(painter, m, &Shape { id: 0, kind, style }, false);
+                    }
+                }
                 Tool::Pen | Tool::Highlighter => {
                     let style = shapes::style_for_tool(*tool, &self.params().style);
                     let kind = if *tool == Tool::Pen {
@@ -994,6 +1001,7 @@ impl Overlay {
                 head: *head,
                 curved: ctrl.is_some(),
             },
+            ShapeKind::Highlighter { .. } => ui::ContextBar::Highlighter,
             _ => return None,
         };
         Some((id, bar))
@@ -1218,6 +1226,8 @@ impl Overlay {
                 color,
                 width,
                 picking: self.picking,
+                highlight_box: (self.tool == Tool::Highlighter)
+                    .then_some(self.options.highlight_box),
             };
             let lifted = self.grip_drag.is_some();
             let lay = ui::tool_bar(ctx, Pos2::new(tx * k, ty * k), &info, pal, lifted, actions);

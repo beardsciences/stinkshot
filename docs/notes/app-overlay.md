@@ -656,3 +656,24 @@ See docs/notes/l10n.md for the framework.
   the name now truncates with an ellipsis before the preview. Still to watch: the hint bar is
   one line (~1300 px in pseudo with the discard prompt), and the cheat sheet wraps to two rows
   of three at 1920 px in pseudo (same height as English on 1080p).
+
+## Box highlighter (Forgejo #1, Nov 9 2026)
+
+- The Highlighter has two modes, Freehand and Box. While the tool is active, two mode buttons
+  follow the width button at the end of the tool bar (tips "Freehand (Hold Shift for Box)" /
+  "Box (Hold Shift for Freehand)"); they sit last so showing them never moves the tool
+  buttons. The mode is sticky (`ShapeOptions::highlight_box`) and saved as
+  `editor.highlighter_box` in the config.
+- Holding Shift while dragging draws the other mode (`shapes::highlight_box_mode`); the
+  preview follows Shift live and the state at release wins. Box drags do not snap.
+- Box highlights are `ShapeKind::HighlightBox { rect }` with the highlighter style (alpha
+  0x99, width max(14, 4 x stroke)), filled with `annotate::highlight_color`, no outline. They
+  hit anywhere inside, have 8 rect handles, recolor and resize like rects, and the live
+  preview paints exactly the renderer's color.
+- A selected freehand stroke gets a context bar with To Box ("Replace with a Box
+  Highlight"): the stroke becomes the box over its painted extent (points' bounds grown by
+  half the marker width, which is its selection bounds), same id, style and z-order, one
+  undo step.
+- Cheat sheet: Shift+Drag "Other Highlighter Mode".
+- Not verified live: drawing both modes, Shift flip mid-drag, To Box and undo, reopening a
+  saved capture with box highlights.
