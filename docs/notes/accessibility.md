@@ -58,7 +58,10 @@ Screen readers (Narrator, NVDA), keyboard-only use, contrast themes and text siz
 - Run a test instance with `STINKSHOT_PROFILE=ux-<label>` (hotkeys "", no PrintScreen
   takeover, no clipboard).
 - Manual: Narrator (Ctrl+Win+Enter) on Settings: Tab moves through nav and rows, each toggle
-  reads as "Start with Windows, toggle switch, off". Overlay: arrows start a region, Narrator
+  reads its row title and on or off state. Overlay: arrows start a region, Narrator
   speaks the size.
+- Cost (debug build, Nov 8): idle 156.9 MB private with AccessKit inactive; History open
+  158.0 MB inactive, 159.0 MB once a UIA client activated it. Overlay open timing showed no
+  difference beyond debug-build noise; not measured on a release build.
 - Not verified here: NVDA, real contrast themes and text-size changes on screen (code path
   unit-tested only: `theme::hc_tests`).

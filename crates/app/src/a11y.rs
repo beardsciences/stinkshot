@@ -228,6 +228,11 @@ impl egui::Plugin for Bridge {
         if q.is_empty() {
             return;
         }
+        // Requests for a window that closed before its next pass are never taken.
+        if q.len() > 64 {
+            q.clear();
+            return;
+        }
         let mut i = 0;
         while i < q.len() {
             if q[i].0 == vp {
