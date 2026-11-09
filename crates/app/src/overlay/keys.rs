@@ -7,7 +7,7 @@ use super::shapes::Tool;
 use crate::l10n::tr;
 
 /// Plain-letter tool shortcuts (no Ctrl / Alt), in toolbar order.
-pub const TOOL_KEYS: [(Tool, Key); 16] = [
+pub const TOOL_KEYS: [(Tool, Key); 17] = [
     (Tool::Select, Key::V),
     (Tool::Arrow, Key::A),
     (Tool::Line, Key::L),
@@ -24,6 +24,7 @@ pub const TOOL_KEYS: [(Tool, Key); 16] = [
     (Tool::Callout, Key::O),
     (Tool::Spotlight, Key::S),
     (Tool::Measure, Key::U),
+    (Tool::SelectText, Key::W),
 ];
 
 /// Palette color keys 1-8.
@@ -85,6 +86,8 @@ pub const EYEDROPPER: Chord = Chord::plain(Key::I, "I");
 pub const SCAN: Chord = Chord::plain(Key::Q, "Q");
 /// Beautify panel (frame for sharing).
 pub const BEAUTIFY: Chord = Chord::plain(Key::F, "F");
+/// Select Text tool: every word of the capture.
+pub const SELECT_ALL: Chord = Chord::ctrl(Key::A, "Ctrl+A");
 pub const DUPLICATE: Chord = Chord::ctrl(Key::D, "Ctrl+D");
 /// Copy / paste shapes inside the editor (Ctrl+C copies the image when no shape is selected).
 pub const COPY: Chord = Chord::ctrl(Key::C, "Ctrl+C");
@@ -179,6 +182,10 @@ pub fn sheet(select_only: bool) -> Sheet {
         tr!("overlay.keys.k.shift_drag_outside").to_string(),
         tr!("overlay.keys.add_region"),
     ));
+    select.push((
+        tr!("overlay.keys.k.alt_drag").to_string(),
+        tr!("overlay.keys.free_resize"),
+    ));
     let tools = TOOL_KEYS
         .iter()
         .map(|(t, k)| (k.name().to_string(), tool_name(*t)))
@@ -219,6 +226,10 @@ pub fn sheet(select_only: bool) -> Sheet {
             tr!("overlay.keys.find_sensitive"),
         ),
         (SCAN.label.to_string(), tr!("overlay.keys.scan")),
+        (
+            SELECT_ALL.label.to_string(),
+            tr!("overlay.keys.select_all_text"),
+        ),
         (BEAUTIFY.label.to_string(), tr!("overlay.keys.beautify")),
         ("Esc".to_string(), tr!("overlay.keys.deselect_cancel")),
     ];
@@ -341,6 +352,7 @@ mod tests {
             ZOOM_FIT,
             ZOOM_ACTUAL,
             SCAN,
+            SELECT_ALL,
             BEAUTIFY,
         ] {
             let expect = if c.ctrl {
@@ -474,7 +486,12 @@ mod tests {
         assert!(space[0].contains("Pan") && space[0].contains("Move the Selection"));
         assert!(what("Wheel")[0].contains("Scroll When Zoomed"));
         let alt = what("Alt+Drag");
-        assert!(alt[0].contains("Draw") && alt[0].contains("Resize"));
+        assert!(
+            alt.iter()
+                .any(|a| a.contains("Draw") && a.contains("Resize"))
+        );
+        // Alt also frees a region snapped to an element.
+        assert!(alt.iter().any(|a| a.contains("Snapped Region")));
         // Undo and redo work while typing on the image too.
         assert!(what(UNDO.label)[0].contains("Typing"));
         assert!(what(REDO.label)[0].contains("Typing"));

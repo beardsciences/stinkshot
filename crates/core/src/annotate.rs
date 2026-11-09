@@ -122,6 +122,11 @@ pub enum ShapeKind {
         /// Bold face. Older sidecars load as regular.
         #[serde(default, skip_serializing_if = "is_false")]
         bold: bool,
+        /// Fixed box width in image px (pill padding not included): lines also wrap at
+        /// spaces to this width. None = the box grows with the text (breaks only at '\n').
+        /// Older sidecars have no field and load as None.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<f32>,
     },
     /// Numbered circle; `n` assigned at creation and renumbered by `Doc::renumber_steps`.
     Step {
@@ -488,19 +493,19 @@ pub fn text_layout(fonts: &Fonts, kind: &ShapeKind) -> Option<(f32, bool, Vec<Te
             text,
             size,
             bold,
+            width,
             ..
         } => {
             let size = size.max(1.0);
             let lh = size * crate::fonts::LINE_HEIGHT;
-            let mut lines = Vec::new();
-            let mut start = 0;
-            for (i, line) in text.split('\n').enumerate() {
-                lines.push(TextLine {
-                    range: start..start + line.len(),
+            let lines = text_line_ranges(text, *width, |s| fonts.line_width(s, size, *bold))
+                .into_iter()
+                .enumerate()
+                .map(|(i, range)| TextLine {
+                    range,
                     origin: PtF::new(pos.x, pos.y + i as f32 * lh),
-                });
-                start += line.len() + 1;
-            }
+                })
+                .collect();
             Some((size, *bold, lines))
         }
         ShapeKind::Callout {
@@ -534,6 +539,46 @@ pub(crate) fn wrap_ranges(
     size: f32,
     max_w: f32,
 ) -> Vec<std::ops::Range<usize>> {
+    wrap_with(text, max_w, |s| fonts.line_width(s, size, false))
+}
+
+/// Line byte ranges of a text shape: one per '\n' paragraph, and with a fixed box `width`
+/// also wrapped at spaces (`wrap_with`). `line_w` measures one line; the editor passes its
+/// own measure so its bounds match the renderer.
+pub fn text_line_ranges(
+    text: &str,
+    width: Option<f32>,
+    line_w: impl Fn(&str) -> f32,
+) -> Vec<std::ops::Range<usize>> {
+    match width {
+        Some(w) => wrap_with(text, w, line_w),
+        None => {
+            let mut out = Vec::new();
+            let mut start = 0;
+            for line in text.split('\n') {
+                out.push(start..start + line.len());
+                start += line.len() + 1;
+            }
+            out
+        }
+    }
+}
+
+/// The text a text shape shows, lines joined with '\n' (wrapped when it has a box width).
+pub fn shown_text(text: &str, width: Option<f32>, line_w: impl Fn(&str) -> f32) -> String {
+    let ranges = text_line_ranges(text, width, line_w);
+    let lines: Vec<&str> = ranges.into_iter().map(|r| &text[r]).collect();
+    lines.join("\n")
+}
+
+/// Greedy word wrap at single spaces to `max_w` (a word wider than that keeps its own line);
+/// every paragraph ('\n') starts a new line. Returns the byte range of each line (a break
+/// consumes the space it happens at).
+pub fn wrap_with(
+    text: &str,
+    max_w: f32,
+    line_w: impl Fn(&str) -> f32,
+) -> Vec<std::ops::Range<usize>> {
     let mut out = Vec::new();
     let mut para_start = 0;
     for para in text.split('\n') {
@@ -545,9 +590,7 @@ pub(crate) fn wrap_ranges(
                 None => w.clone(),
                 Some(l) => {
                     let candidate = l.start..w.end;
-                    if !text[l.clone()].is_empty()
-                        && fonts.line_width(&text[candidate.clone()], size, false) > max_w
-                    {
+                    if !text[l.clone()].is_empty() && line_w(&text[candidate.clone()]) > max_w {
                         out.push(l);
                         w.clone()
                     } else {
@@ -655,8 +698,23 @@ pub(crate) fn text_rect(
     size: f32,
     background: bool,
     bold: bool,
+    width: Option<f32>,
 ) -> RectF {
-    let (w, h) = fonts.measure(text, size, bold);
+    let (w, h) = match width {
+        None => fonts.measure(text, size, bold),
+        Some(bw) => {
+            let lw = |s: &str| fonts.line_width(s, size, bold);
+            let ranges = text_line_ranges(text, width, lw);
+            let widest = ranges
+                .iter()
+                .map(|r| lw(&text[r.clone()]))
+                .fold(0.0, f32::max);
+            (
+                bw.max(widest),
+                ranges.len() as f32 * crate::fonts::LINE_HEIGHT * size,
+            )
+        }
+    };
     let r = RectF::new(pos.x, pos.y, w, h);
     if background {
         r.expand(0.0).pad(size * TEXT_PAD_X, size * TEXT_PAD_Y)
@@ -813,16 +871,29 @@ fn shape_hit(shape: &Shape, p: PtF, tol: f32) -> bool {
             text,
             size,
             background,
+            width,
             ..
         } => {
             // Fonts are not available here; approximate with a conservative glyph box.
-            let lines = text.split('\n').count().max(1) as f32;
-            let longest = text
-                .split('\n')
-                .map(|l| l.chars().count())
-                .max()
-                .unwrap_or(0) as f32;
-            let w = longest * size * 0.52;
+            let glyph = size * 0.52;
+            let (w, lines) = match width {
+                Some(bw) => {
+                    let per_line = (bw / glyph).max(1.0);
+                    let lines: f32 = text
+                        .split('\n')
+                        .map(|l| (l.chars().count() as f32 / per_line).ceil().max(1.0))
+                        .sum();
+                    (*bw, lines)
+                }
+                None => {
+                    let longest = text
+                        .split('\n')
+                        .map(|l| l.chars().count())
+                        .max()
+                        .unwrap_or(0) as f32;
+                    (longest * glyph, text.split('\n').count().max(1) as f32)
+                }
+            };
             let h = lines * size * crate::fonts::LINE_HEIGHT;
             let mut r = RectF::new(pos.x, pos.y, w, h);
             if background.is_some() {
@@ -889,7 +960,16 @@ pub fn shape_bounds(shape: &Shape, fonts: &Fonts) -> RectF {
             size,
             background,
             bold,
-        } => text_rect(fonts, *pos, text, *size, background.is_some(), *bold),
+            width,
+        } => text_rect(
+            fonts,
+            *pos,
+            text,
+            *size,
+            background.is_some(),
+            *bold,
+            *width,
+        ),
         ShapeKind::Step { center, radius, .. } => RectF::new(
             center.x - radius,
             center.y - radius,

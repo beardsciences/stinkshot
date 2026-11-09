@@ -151,6 +151,42 @@ pub fn dim_except(outer: Rect, holes: &[Rect]) -> Vec<Rect> {
 }
 
 impl Overlay {
+    /// The snap tie of the active region (`selection::SnapTie`): it was made by clicking a
+    /// highlighted window or element and has not been changed by anything but tied drags.
+    pub(super) fn active_tie(&self) -> Option<&super::selection::SnapTie> {
+        let sel = self.sel?;
+        if !matches!(self.kind, Kind::Capture) {
+            return None;
+        }
+        self.snap_ties.iter().rev().find(|t| t.region == sel)
+    }
+
+    /// The active region was just made from the highlight: tie it to the element chain the
+    /// highlight came from (first region and added ones alike).
+    pub(super) fn tie_to_hover(&mut self) {
+        let Some(sel) = self.sel else { return };
+        if !matches!(self.kind, Kind::Capture) || !self.hover_chain.contains(&sel) {
+            return;
+        }
+        if let Some(t) = super::selection::SnapTie::new(sel, &self.hover_chain) {
+            self.snap_ties.retain(|o| o.region != sel);
+            self.snap_ties.push(t);
+        }
+    }
+
+    /// A tied drag ended with the region at `new`: keep the tie while it is still inside
+    /// its root (an Alt drag past it ends the tie).
+    pub(super) fn retie(&mut self, old: PxRect, new: PxRect) {
+        let Some(i) = self.snap_ties.iter().rposition(|t| t.region == old) else {
+            return;
+        };
+        if super::selection::rect_inside(new, self.snap_ties[i].root()) {
+            self.snap_ties[i].region = new;
+        } else {
+            self.snap_ties.remove(i);
+        }
+    }
+
     /// Regions to combine: the earlier ones, then the active selection.
     pub(super) fn regions(&self) -> Vec<PxRect> {
         let mut v = self.extra_regions.clone();
@@ -259,6 +295,7 @@ impl Overlay {
         doc.base_width = img.width;
         doc.base_height = img.height;
         self.extra_regions.clear();
+        self.snap_ties.clear();
         self.add_regions = false;
         self.adding_region = false;
         self.kind = Kind::Annotate;

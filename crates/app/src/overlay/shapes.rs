@@ -49,6 +49,8 @@ pub enum Tool {
     Spotlight,
     /// Ruler: measures, adds nothing to the image (`measure.rs`).
     Measure,
+    /// Selects OCR words of the capture to copy as text, adds nothing (`select_text.rs`).
+    SelectText,
 }
 
 impl Tool {
@@ -71,6 +73,7 @@ impl Tool {
             Tool::Callout => tr!("overlay.tool.callout"),
             Tool::Spotlight => tr!("overlay.tool.spotlight"),
             Tool::Measure => tr!("overlay.tool.measure"),
+            Tool::SelectText => tr!("overlay.tool.select_text"),
         }
     }
 
@@ -101,10 +104,11 @@ impl Tool {
             Tool::Callout => "callout",
             Tool::Spotlight => "spotlight",
             Tool::Measure => "measure",
+            Tool::SelectText => "select_text",
         }
     }
 
-    pub const ALL: [Tool; 16] = [
+    pub const ALL: [Tool; 17] = [
         Tool::Select,
         Tool::Arrow,
         Tool::Line,
@@ -121,6 +125,7 @@ impl Tool {
         Tool::Callout,
         Tool::Spotlight,
         Tool::Measure,
+        Tool::SelectText,
     ];
 
     pub fn from_config_key(k: &str) -> Option<Tool> {
@@ -137,6 +142,7 @@ impl Tool {
                 | Tool::Spotlight
                 | Tool::Magnifier
                 | Tool::Measure
+                | Tool::SelectText
         )
     }
 }
@@ -218,12 +224,47 @@ pub fn step_radius(width: f32) -> f32 {
     9.0 + width * 1.5
 }
 
-/// Rect covered by a text block anchored at `pos` (without its pill).
-pub fn text_rect(pos: PtF, text: &str, size: f32, bold: bool, measure: Measure) -> RectF {
+/// Rect covered by a text block anchored at `pos` (without its pill). With a fixed box
+/// `width` the lines wrap to it (`annotate::text_line_ranges`, the renderer's breaks) and
+/// the rect is the box: that width (or the widest unbreakable line) by the wrapped lines.
+pub fn text_rect(
+    pos: PtF,
+    text: &str,
+    size: f32,
+    bold: bool,
+    width: Option<f32>,
+    measure: Measure,
+) -> RectF {
+    if let Some(bw) = width {
+        let lw = |s: &str| measure(s, size, bold).0;
+        let ranges = annotate::text_line_ranges(text, width, lw);
+        let widest = ranges
+            .iter()
+            .map(|r| lw(&text[r.clone()]))
+            .fold(0.0, f32::max);
+        let line_h = measure("M", size, bold).1.max(size);
+        return RectF::new(
+            pos.x,
+            pos.y,
+            bw.max(widest).max(4.0),
+            line_h * ranges.len().max(1) as f32,
+        );
+    }
     let probe = if text.is_empty() { "M" } else { text };
     let (w, h) = measure(probe, size, bold);
     let w = if text.is_empty() { size * 0.6 } else { w };
     RectF::new(pos.x, pos.y, w.max(4.0), h.max(size))
+}
+
+/// Narrowest fixed text box, image px (a drag narrower than this is a click).
+pub const MIN_TEXT_BOX: f32 = 16.0;
+
+/// A text box from a Text tool drag from `a` to `b` (image px): the box starts at the
+/// left of the drag, at the top, and is as wide as the drag. None when the drag is
+/// narrower than `min_w` (a click: the text sizes itself).
+pub fn text_box_from_drag(a: PtF, b: PtF, min_w: f32) -> Option<(PtF, f32)> {
+    let w = (b.x - a.x).abs();
+    (w >= min_w.max(MIN_TEXT_BOX)).then(|| (pt(a.x.min(b.x), a.y.min(b.y)), w))
 }
 
 /// Axis-aligned visual bounds including stroke (image px).
@@ -256,8 +297,9 @@ pub fn bounds(shape: &Shape, measure: Measure) -> RectF {
             size,
             background,
             bold,
+            width,
         } => {
-            let r = text_rect(*pos, text, *size, *bold, measure);
+            let r = text_rect(*pos, text, *size, *bold, *width, measure);
             if background.is_some() {
                 RectF::new(
                     r.x - size * TEXT_PAD_X,
@@ -436,11 +478,17 @@ pub fn handles(shape: &Shape, measure: Measure) -> Vec<(ShapeHandle, PtF)> {
             out.push((ShapeHandle::P2, *to));
         }
         ShapeKind::Text { .. } => {
+            // Corner: font size. Side edges: box width (a drag fixes it and wraps).
             let b = bounds(shape, measure);
             out.push((
                 ShapeHandle::Rect(Handle8::BottomRight),
                 pt(b.x + b.w, b.y + b.h),
             ));
+            out.push((
+                ShapeHandle::Rect(Handle8::Right),
+                pt(b.x + b.w, b.y + b.h / 2.0),
+            ));
+            out.push((ShapeHandle::Rect(Handle8::Left), pt(b.x, b.y + b.h / 2.0)));
         }
         ShapeKind::Step { center, radius, .. } => {
             out.push((
@@ -622,6 +670,32 @@ pub fn drag_handle(
         }
         (ShapeKind::Step { center, radius, .. }, ShapeHandle::Rect(_)) => {
             *radius = dist(*center, p).clamp(6.0, 120.0);
+        }
+        (
+            ShapeKind::Text {
+                pos,
+                text,
+                size,
+                bold,
+                width,
+                background,
+            },
+            ShapeHandle::Rect(h @ (Handle8::Left | Handle8::Right)),
+        ) => {
+            let pad = if background.is_some() {
+                *size * TEXT_PAD_X
+            } else {
+                0.0
+            };
+            let cur = text_rect(*pos, text, *size, *bold, *width, measure);
+            let right = cur.x + cur.w;
+            if h == Handle8::Right {
+                *width = Some((p.x - pad - pos.x).max(MIN_TEXT_BOX));
+            } else {
+                let x = (p.x + pad).min(right - MIN_TEXT_BOX);
+                *width = Some(right - x);
+                pos.x = x;
+            }
         }
         (ShapeKind::Text { pos, size, .. }, ShapeHandle::Rect(_)) if text_h > 1.0 => {
             let new_h = (p.y - pos.y).max(4.0);
@@ -809,6 +883,7 @@ pub fn new_text(pos: PtF, params: &ToolParams) -> (ShapeKind, Style) {
             size: params.font_size,
             background,
             bold: params.options.text_bold,
+            width: None,
         },
         style,
     )
@@ -903,7 +978,8 @@ pub fn shape_from_drag(
         | Tool::Text
         | Tool::Step
         | Tool::Magnifier
-        | Tool::Measure => return None,
+        | Tool::Measure
+        | Tool::SelectText => return None,
     };
     Some((kind, style))
 }
@@ -1317,6 +1393,7 @@ mod tests {
                 size: 20.0,
                 background: None,
                 bold: false,
+                width: None,
             },
             ShapeKind::Step {
                 center: pt(200.0, 200.0),
@@ -1420,8 +1497,9 @@ mod tests {
                 size: 12.0,
                 background: None,
                 bold: false,
+                width: None,
             }),
-            1
+            3
         );
         assert_eq!(
             n(ShapeKind::Pen {
@@ -1517,6 +1595,7 @@ mod tests {
                 size: 20.0,
                 background: None,
                 bold: false,
+                width: None,
             },
             style: style(),
         };
@@ -1714,12 +1793,109 @@ mod tests {
             size: 16.0,
             background: None,
             bold: false,
+            width: None,
         };
         assert!(is_textual(&k));
         set_text(&mut k, "multi\nline");
         assert_eq!(text_of(&k), Some("multi\nline"));
-        let r = text_rect(pt(0.0, 0.0), "", 20.0, false, &measure);
+        let r = text_rect(pt(0.0, 0.0), "", 20.0, false, None, &measure);
         assert!(r.w >= 4.0 && r.h >= 20.0);
+    }
+
+    fn text_shape(text: &str, width: Option<f32>, pill: bool) -> Shape {
+        Shape {
+            id: 1,
+            kind: ShapeKind::Text {
+                pos: pt(10.0, 20.0),
+                text: text.into(),
+                size: 20.0,
+                background: pill.then_some([0, 0, 0, 255]),
+                bold: false,
+                width,
+            },
+            style: style(),
+        }
+    }
+
+    #[test]
+    fn fixed_text_box_wraps_to_its_width() {
+        // Fake measure: 10 px per char at size 20, 25 px lines.
+        let auto = text_shape("aaaa bbbb cccc", None, false);
+        assert_eq!(bounds(&auto, &measure), RectF::new(10.0, 20.0, 140.0, 25.0));
+        // 100 px box: "aaaa bbbb" (90) fits, "cccc" wraps.
+        let boxed = text_shape("aaaa bbbb cccc", Some(100.0), false);
+        assert_eq!(
+            bounds(&boxed, &measure),
+            RectF::new(10.0, 20.0, 100.0, 50.0)
+        );
+        // Narrower than a word: the word overflows the box on its own line.
+        let tight = text_shape("aaaa bbbb", Some(30.0), false);
+        assert_eq!(bounds(&tight, &measure), RectF::new(10.0, 20.0, 40.0, 50.0));
+        // Empty boxed text keeps its box and one line.
+        let empty = text_shape("", Some(80.0), false);
+        assert_eq!(bounds(&empty, &measure), RectF::new(10.0, 20.0, 80.0, 25.0));
+        // The pill pads the box like auto text.
+        let pill = text_shape("aaaa", Some(100.0), true);
+        assert_eq!(bounds(&pill, &measure), RectF::new(2.0, 16.0, 116.0, 33.0));
+    }
+
+    #[test]
+    fn text_drag_draws_a_box_and_a_click_does_not() {
+        assert_eq!(text_box_from_drag(pt(5.0, 5.0), pt(9.0, 30.0), 12.0), None);
+        assert_eq!(
+            text_box_from_drag(pt(200.0, 50.0), pt(80.0, 10.0), 12.0),
+            Some((pt(80.0, 10.0), 120.0))
+        );
+        // The minimum never drops below MIN_TEXT_BOX, even zoomed in.
+        assert_eq!(text_box_from_drag(pt(0.0, 0.0), pt(10.0, 0.0), 1.0), None);
+    }
+
+    #[test]
+    fn text_side_handles_set_the_box_width() {
+        let mut s = text_shape("aaaa bbbb cccc", None, false);
+        let hs: Vec<ShapeHandle> = handles(&s, &measure).into_iter().map(|(h, _)| h).collect();
+        assert!(hs.contains(&ShapeHandle::Rect(Handle8::Right)));
+        assert!(hs.contains(&ShapeHandle::Rect(Handle8::Left)));
+        // Right edge: auto text becomes a fixed box and wraps.
+        drag_handle(
+            &mut s,
+            ShapeHandle::Rect(Handle8::Right),
+            pt(110.0, 30.0),
+            false,
+            &measure,
+        );
+        assert!(matches!(s.kind, ShapeKind::Text { width: Some(w), .. } if w == 100.0));
+        assert_eq!(bounds(&s, &measure).h, 50.0);
+        // Left edge: the right edge stays, the box grows to the left.
+        drag_handle(
+            &mut s,
+            ShapeHandle::Rect(Handle8::Left),
+            pt(0.0, 30.0),
+            false,
+            &measure,
+        );
+        assert!(
+            matches!(s.kind, ShapeKind::Text { pos, width: Some(w), .. } if pos.x == 0.0 && w == 110.0)
+        );
+        // Never narrower than the minimum box.
+        drag_handle(
+            &mut s,
+            ShapeHandle::Rect(Handle8::Right),
+            pt(-50.0, 30.0),
+            false,
+            &measure,
+        );
+        assert!(matches!(s.kind, ShapeKind::Text { width: Some(w), .. } if w == MIN_TEXT_BOX));
+        // The corner still scales the font.
+        let before = bounds(&s, &measure);
+        drag_handle(
+            &mut s,
+            ShapeHandle::Rect(Handle8::BottomRight),
+            pt(before.x + before.w, before.y + before.h * 2.0),
+            false,
+            &measure,
+        );
+        assert!(matches!(s.kind, ShapeKind::Text { size, .. } if size > 20.0));
     }
 
     fn redact_doc(n: usize) -> Doc {
@@ -1985,6 +2161,7 @@ mod tests {
             size: 20.0,
             background: None,
             bold: false,
+            width: None,
         };
         assert!(bump_text_size(&mut k, true));
         assert!(matches!(k, ShapeKind::Text { size, .. } if size == 24.0));

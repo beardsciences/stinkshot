@@ -579,6 +579,7 @@ mod tests {
                 size: 40.0,
                 background: None,
                 bold: false,
+                width: None,
             },
             Style::default(),
         );

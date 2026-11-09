@@ -205,6 +205,97 @@ pub fn resize_px_rect(
     clamp_rect(PxRect::new(x0, y0, x1 - x0, y1 - y0), bounds)
 }
 
+/// `inner` lies entirely inside `outer`.
+pub fn rect_inside(inner: PxRect, outer: PxRect) -> bool {
+    inner.x >= outer.x
+        && inner.y >= outer.y
+        && inner.right() <= outer.right()
+        && inner.bottom() <= outer.bottom()
+}
+
+/// A region made by clicking a snapped window or UI element. Moving and resizing it stay
+/// inside the chain's root (its outermost rect: the top-level window, e.g. the whole taskbar
+/// for a taskbar button), and resize handles snap to the edges of every element in the chain
+/// (children, the element, its parents). Alt drags ignore the tie. `region` is the rect the
+/// tie belongs to: any other change of the region (arrow keys, Exact size, a free drag) no
+/// longer matches it, which ends the tie.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SnapTie {
+    pub region: PxRect,
+    /// Element rects, innermost first; the last one is the root.
+    pub chain: Vec<PxRect>,
+}
+
+impl SnapTie {
+    /// None without a chain, or when the region is not inside its root.
+    pub fn new(region: PxRect, chain: &[PxRect]) -> Option<SnapTie> {
+        let root = *chain.last()?;
+        rect_inside(region, root).then(|| SnapTie {
+            region,
+            chain: chain.to_vec(),
+        })
+    }
+
+    pub fn root(&self) -> PxRect {
+        self.chain.last().copied().unwrap_or(self.region)
+    }
+
+    /// Where the region may go: its root, within `outer` (the overlay).
+    pub fn bounds(&self, outer: PxRect) -> PxRect {
+        self.root().intersect(&outer).unwrap_or(outer)
+    }
+
+    /// Resize the tied region: `resize_px_rect` clamped to the root, then the moved edges
+    /// snap to chain edges within `tol` px (not with an aspect preset, which owns the size).
+    pub fn resize(
+        &self,
+        start: PxRect,
+        handle: Handle8,
+        p: (i32, i32),
+        outer: PxRect,
+        aspect: Option<Ratio>,
+        tol: i32,
+    ) -> PxRect {
+        let b = self.bounds(outer);
+        let r = resize_px_rect(start, handle, p, b, aspect);
+        if aspect.is_some() {
+            return r;
+        }
+        clamp_rect(snap_to_chain(r, handle, &self.chain, tol), b)
+    }
+
+    /// Move the tied region by (dx, dy) without leaving its root.
+    pub fn move_by(&self, start: PxRect, dx: i32, dy: i32, outer: PxRect) -> PxRect {
+        move_rect(start, dx, dy, self.bounds(outer))
+    }
+}
+
+/// Snap the edges `handle` moves to the nearest chain edge on that axis within `tol` px.
+/// An edge that would cross its opposite edge stays where it is.
+pub fn snap_to_chain(r: PxRect, handle: Handle8, chain: &[PxRect], tol: i32) -> PxRect {
+    let nearest = |v: i32, edges: &mut dyn Iterator<Item = i32>| {
+        edges
+            .map(|e| (e, (e - v).abs()))
+            .filter(|(_, d)| *d <= tol)
+            .min_by_key(|(_, d)| *d)
+            .map_or(v, |(e, _)| e)
+    };
+    let (mut x0, mut y0, mut x1, mut y1) = (r.x, r.y, r.right(), r.bottom());
+    let xs = || chain.iter().flat_map(|c| [c.x, c.right()]);
+    let ys = || chain.iter().flat_map(|c| [c.y, c.bottom()]);
+    match handle.h_dir() {
+        -1 => x0 = nearest(x0, &mut xs()).min(x1 - 1),
+        1 => x1 = nearest(x1, &mut xs()).max(x0 + 1),
+        _ => {}
+    }
+    match handle.v_dir() {
+        -1 => y0 = nearest(y0, &mut ys()).min(y1 - 1),
+        1 => y1 = nearest(y1, &mut ys()).max(y0 + 1),
+        _ => {}
+    }
+    PxRect::new(x0, y0, x1 - x0, y1 - y0)
+}
+
 /// Shift (never resize) `r` so it lies inside `bounds`; if larger than bounds it is shrunk.
 pub fn clamp_rect(r: PxRect, bounds: PxRect) -> PxRect {
     let w = r.w.clamp(1, bounds.w.max(1));
@@ -403,6 +494,62 @@ mod tests {
     use super::*;
 
     const B: PxRect = PxRect::new(0, 0, 1000, 800);
+
+    /// A taskbar button (sub element) inside the taskbar (root) at the bottom of B.
+    const TASKBAR: PxRect = PxRect::new(0, 760, 1000, 40);
+    const BUTTON: PxRect = PxRect::new(300, 764, 40, 32);
+
+    fn tie() -> SnapTie {
+        SnapTie::new(BUTTON, &[BUTTON, TASKBAR]).unwrap()
+    }
+
+    #[test]
+    fn snapped_region_never_grows_past_its_root() {
+        let t = tie();
+        assert_eq!(t.root(), TASKBAR);
+        // Dragging far out stops at the taskbar, on every side.
+        let r = t.resize(BUTTON, Handle8::BottomRight, (5000, 5000), B, None, 6);
+        assert_eq!(r, PxRect::new(300, 764, 700, 36));
+        let r = t.resize(BUTTON, Handle8::TopLeft, (-50, 10), B, None, 6);
+        assert_eq!(r, PxRect::new(0, 760, 340, 36));
+        let r = t.resize(BUTTON, Handle8::Top, (320, 0), B, None, 6);
+        assert_eq!(r, PxRect::new(300, 760, 40, 36));
+        // Moving keeps it inside the taskbar too.
+        assert_eq!(t.move_by(BUTTON, 0, -500, B), PxRect::new(300, 760, 40, 32));
+        assert_eq!(t.move_by(BUTTON, 900, 0, B), PxRect::new(960, 764, 40, 32));
+        // A root partly off the overlay is cut to it.
+        let off = SnapTie::new(BUTTON, &[BUTTON, PxRect::new(0, 700, 1000, 300)]).unwrap();
+        assert_eq!(off.bounds(B), PxRect::new(0, 700, 1000, 100));
+    }
+
+    #[test]
+    fn snapped_region_handles_snap_to_the_chain() {
+        let t = tie();
+        let wide = PxRect::new(300, 764, 200, 32);
+        // Near the button's own right edge: back onto it; near the root's edge: onto that.
+        let r = t.resize(wide, Handle8::Right, (343, 780), B, None, 6);
+        assert_eq!(r, BUTTON);
+        let r = t.resize(BUTTON, Handle8::Bottom, (320, 799), B, None, 6);
+        assert_eq!(r, PxRect::new(300, 764, 40, 36));
+        // Out of reach of every edge: where the pointer is.
+        let r = t.resize(BUTTON, Handle8::Right, (360, 780), B, None, 6);
+        assert_eq!(r, PxRect::new(300, 764, 60, 32));
+        // An aspect preset owns the size: no edge snapping.
+        let r = t.resize(BUTTON, Handle8::Right, (337, 780), B, Some((1, 1)), 6);
+        assert_eq!(r.right(), 337);
+        // Snapping never flips the rect.
+        let thin = PxRect::new(300, 764, 2, 32);
+        let r = snap_to_chain(thin, Handle8::Left, &[PxRect::new(302, 0, 10, 10)], 6);
+        assert!(r.w >= 1 && r.right() == 302, "{r:?}");
+    }
+
+    #[test]
+    fn ties_need_a_chain_that_holds_the_region() {
+        assert!(SnapTie::new(BUTTON, &[]).is_none());
+        assert!(SnapTie::new(TASKBAR, &[BUTTON]).is_none());
+        assert!(SnapTie::new(TASKBAR, &[TASKBAR]).is_some());
+        assert!(rect_inside(BUTTON, TASKBAR) && !rect_inside(TASKBAR, BUTTON));
+    }
 
     #[test]
     fn hit_handles_on_corners_and_edges() {

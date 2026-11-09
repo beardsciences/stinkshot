@@ -129,6 +129,7 @@ pub fn paint_shape(painter: &Painter, m: ImgToPt, shape: &Shape, skip_text: bool
             size,
             background,
             bold,
+            width,
         } => {
             let p = m.p(*pos);
             let font = if *bold {
@@ -136,11 +137,14 @@ pub fn paint_shape(painter: &Painter, m: ImgToPt, shape: &Shape, skip_text: bool
             } else {
                 FontId::proportional(m.len(*size).max(1.0))
             };
-            let galley = painter.layout_no_wrap(text.clone(), font, col);
+            // A fixed box wraps (egui's wrap: an approximation of the renderer's breaks).
+            let galley = match width {
+                Some(w) => painter.layout(text.clone(), font, col, m.len(*w).max(1.0)),
+                None => painter.layout_no_wrap(text.clone(), font, col),
+            };
             if let Some(bg) = background {
-                let sz = galley
-                    .size()
-                    .max(Vec2::new(m.len(size * 0.6), m.len(*size)));
+                let min_w = width.map_or(size * 0.6, |w| w.max(size * 0.6));
+                let sz = galley.size().max(Vec2::new(m.len(min_w), m.len(*size)));
                 let r = Rect::from_min_size(p, sz)
                     .expand2(Vec2::new(m.len(size * 0.4), m.len(size * 0.2)));
                 painter.rect_filled(r, (r.height() / 2.0).min(m.len(size * 0.7)), color32(*bg));

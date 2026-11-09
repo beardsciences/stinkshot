@@ -737,3 +737,36 @@ drag the window to a monitor with another scale, annotate and close (prompt), Ct
 and pan, Save As / Pin from a window (pin opens over the picture), After Selecting a Region =
 Open Editor Window then Enter on a region (screen unfreezes, window opens with any
 annotations), Edit in Window button with three regions, and repeat-last-region afterwards.
+
+## Text boxes, Select Text, snapped regions (Forgejo #10, #12, #13, Nov 9 2026)
+
+- **#10 Text box size first.** Text tool: a click still makes auto-size text; a drag at least
+  12 pt (and 16 image px) wide draws a fixed box (dashed preview), text wraps at spaces to its
+  width and the height follows the lines. `ShapeKind::Text { width: Option<f32> }` (serde
+  default, skipped when None, so old sidecars load as auto). Wrapping is one algorithm
+  (`annotate::wrap_with` / `text_line_ranges`) used by core's render, `text_layout` (caret)
+  and `text_rect`, and by the editor's `shapes::text_rect` through its `Measure`, so export
+  and the on-screen render match. A word wider than the box keeps its own line and widens the
+  bounds. Text now has side handles (Left / Right) that set the box width (on auto text a side
+  drag fixes the width); the corner still scales the font. The live egui preview (only while a
+  shape is moved) wraps with egui's layout, an approximation. No setting was added.
+- **#12 Select Text tool (W, I-beam icon, last tool).** On first use per capture
+  (`select_text.rs`), `Shared::ocr` reads the base image on a worker ("Reading Text..." in
+  the hint bar); words come back in OCR reading order (line order, then words). All words get
+  a faint outline, the hovered word an accent outline; drag (or Shift+click) selects words
+  from the anchor to the word nearest the pointer (nearest line, then nearest word), Ctrl+A
+  selects all, Ctrl+C or the Copy Text button under the last selected word copies (spaces in a
+  line, newlines between lines), Esc clears the selection. The cache follows the base `Arc`:
+  a new region or crop reads again, switching tools keeps it. Notices: "No Text Found",
+  "Could Not Read Text", "Select Text Needs an OCR Language in Windows Settings".
+- **#13 Snapped regions stay on their element.** A region made by clicking a highlighted
+  window or element (first or added) gets a `selection::SnapTie` with the hover chain
+  (`Overlay::hover_chain`, innermost first, canvas px). Moving and resizing it stay inside the
+  chain's root (the outermost rect: the top-level window, e.g. the taskbar for a taskbar
+  button), and resize handles snap to every chain edge within `snap::SNAP_PT`. Alt drags are
+  free (hint "Alt  Free Resize", cheat sheet "Alt+Drag"); an Alt drag that leaves the root,
+  or any other change (arrows, Exact size, presets), ends the tie. Ties match their region
+  by rect, so they follow region switching in multi-region capture; combining clears them.
+  Free drags on empty space are unchanged.
+- Not verified live (no synthetic input): text box drag and wrap, the OCR word selection and
+  Copy Text on a real capture, tied resize on the taskbar.

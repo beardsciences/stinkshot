@@ -93,6 +93,7 @@ pub const TOOL_GROUPS: [&[(Tool, Icon)]; 2] = [
         (Tool::Callout, Icon::Callout),
         (Tool::Spotlight, Icon::Spotlight),
         (Tool::Measure, Icon::Ruler),
+        (Tool::SelectText, Icon::SelectText),
     ],
 ];
 

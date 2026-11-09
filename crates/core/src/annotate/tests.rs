@@ -140,6 +140,7 @@ fn doc_json_round_trip_all_kinds() {
             size: 18.0,
             background: Some([1, 2, 3, 255]),
             bold: false,
+            width: None,
         },
         ShapeKind::Step {
             center: pt(5.0, 5.0),
@@ -324,6 +325,7 @@ fn hit_step_text_magnifier_callout_spotlight() {
             size: 20.0,
             background: None,
             bold: false,
+            width: None,
         },
         Style::default(),
     );
@@ -443,6 +445,7 @@ fn bounds_include_stroke_and_head() {
             size: 20.0,
             background: None,
             bold: false,
+            width: None,
         },
         Style::default(),
     );
@@ -456,6 +459,7 @@ fn bounds_include_stroke_and_head() {
         size: 20.0,
         background: Some(WHITE),
         bold: false,
+        width: None,
     };
     let b2 = shape_bounds(d.get(text).unwrap(), &f);
     assert!(b2.w > b.w && b2.x < b.x);
@@ -605,6 +609,7 @@ fn new_arrow_and_text_fields_round_trip() {
             size: 22.0,
             background: Some([0, 0, 0, 255]),
             bold: true,
+            width: None,
         },
         style(RED, 4.0),
     );
@@ -725,6 +730,7 @@ fn bold_text_is_wider_and_dark_text_gets_a_light_halo() {
             size: 30.0,
             background: None,
             bold,
+            width: None,
         },
         style: Style {
             shadow: true,
@@ -753,6 +759,7 @@ fn text_layout_matches_lines_and_wraps_callouts() {
             size: 20.0,
             background: None,
             bold: true,
+            width: None,
         },
     )
     .unwrap();
@@ -780,6 +787,110 @@ fn text_layout_matches_lines_and_wraps_callouts() {
         assert!(f.line_width(&text[l.range.clone()], 16.0, false) <= 120.0 - 2.0 * 16.0 * 0.7);
         assert!(l.origin.x > 0.0);
     }
+}
+
+fn boxed_text(text: &str, width: Option<f32>, bold: bool) -> ShapeKind {
+    ShapeKind::Text {
+        pos: pt(10.0, 12.0),
+        text: text.into(),
+        size: 20.0,
+        background: None,
+        bold,
+        width,
+    }
+}
+
+#[test]
+fn wrap_with_breaks_at_spaces_and_paragraphs() {
+    // 10 px per char: "aa bb" = 50 px.
+    let w = |s: &str| s.chars().count() as f32 * 10.0;
+    let t = "aa bb cc\ndd";
+    let r = wrap_with(t, 50.0, w);
+    let lines: Vec<&str> = r.iter().map(|r| &t[r.clone()]).collect();
+    assert_eq!(lines, ["aa bb", "cc", "dd"]);
+    // A word wider than the box keeps its own line; empty paragraphs stay.
+    let t = "abcdefgh x\n\ny";
+    let lines: Vec<&str> = wrap_with(t, 30.0, w).into_iter().map(|r| &t[r]).collect();
+    assert_eq!(lines, ["abcdefgh", "x", "", "y"]);
+    // No width: only '\n' breaks.
+    let t = "aa bb cc\ndd";
+    assert_eq!(text_line_ranges(t, None, w), vec![0..8, 9..11]);
+    assert_eq!(shown_text(t, Some(50.0), w), "aa bb\ncc\ndd");
+}
+
+#[test]
+fn fixed_width_text_wraps_in_layout_bounds_and_render() {
+    let f = test_fonts();
+    let text = "one two three four five six seven eight";
+    let auto = boxed_text(text, None, false);
+    let boxed = boxed_text(text, Some(120.0), false);
+    let (_, _, auto_lines) = text_layout(&f, &auto).unwrap();
+    let (_, _, lines) = text_layout(&f, &boxed).unwrap();
+    assert_eq!(auto_lines.len(), 1);
+    assert!(lines.len() >= 3, "{}", lines.len());
+    // Lines cover the words in order, each fits the box, and they stack by line height.
+    let joined: Vec<&str> = lines.iter().map(|l| &text[l.range.clone()]).collect();
+    assert_eq!(joined.join(" "), text);
+    for (i, l) in lines.iter().enumerate() {
+        assert!(f.line_width(&text[l.range.clone()], 20.0, false) <= 120.0);
+        assert_eq!(
+            l.origin,
+            pt(10.0, 12.0 + i as f32 * 20.0 * crate::fonts::LINE_HEIGHT)
+        );
+    }
+    // Bounds: the box width (not the text's), one line height per wrapped line.
+    let s = |kind| Shape {
+        id: 1,
+        kind,
+        style: style(RED, 2.0),
+    };
+    let b = shape_bounds(&s(boxed.clone()), &f);
+    assert_eq!((b.x, b.y, b.w), (10.0, 12.0, 120.0));
+    assert!((b.h - lines.len() as f32 * 20.0 * crate::fonts::LINE_HEIGHT).abs() < 0.01);
+    assert!(shape_hit(&s(boxed.clone()), pt(125.0, b.y + 5.0), 2.0));
+    // The renderer draws exactly the wrapped lines: same pixels as the text pre-broken.
+    let pre = boxed_text(&joined.join("\n"), None, false);
+    let mut d1 = Doc::new(200, 200);
+    d1.shapes.push(s(boxed));
+    let mut d2 = Doc::new(200, 200);
+    d2.shapes.push(s(pre));
+    let base = white(200, 200);
+    assert_eq!(render(&base, &d1, &f).data, render(&base, &d2, &f).data);
+    // Bold measures wider, so it may wrap sooner, never later.
+    let (_, _, bold_lines) = text_layout(&f, &boxed_text(text, Some(120.0), true)).unwrap();
+    assert!(bold_lines.len() >= lines.len());
+}
+
+#[test]
+fn text_width_json_is_optional() {
+    let mut d = Doc::new(100, 80);
+    d.add(boxed_text("hi there", Some(64.0), false), style(RED, 2.0));
+    d.add(boxed_text("auto", None, false), style(RED, 2.0));
+    let json = d.to_json().unwrap();
+    assert_eq!(
+        json.matches("\"width\": 64").count() + json.matches("\"width\":64").count(),
+        1,
+        "{json}"
+    );
+    assert_eq!(Doc::from_json(&json).unwrap(), d);
+    // A text shape from before fixed boxes loads as auto width.
+    let old = r#"{
+        "version": 1, "base_width": 100, "base_height": 80, "next_id": 2,
+        "shapes": [
+            {"id": 1, "kind": {"type": "text", "pos": {"x": 1.0, "y": 2.0}, "text": "old",
+                "size": 18.0, "background": null},
+             "style": {"color": [255, 0, 0, 255], "width": 2.0, "fill": null, "shadow": false}}
+        ]
+    }"#;
+    let back = Doc::from_json(old).unwrap();
+    assert!(matches!(
+        back.shapes[0].kind,
+        ShapeKind::Text {
+            width: None,
+            bold: false,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -815,6 +926,7 @@ fn region_render_matches_full_render() {
             size: 24.0,
             background: None,
             bold: true,
+            width: None,
         },
         style([30, 200, 255, 255], 4.0),
     );
@@ -874,6 +986,7 @@ fn shape_patch_matches_the_full_render() {
             size: 28.0,
             background: Some([20, 20, 20, 255]),
             bold: false,
+            width: None,
         },
         style: style([255, 255, 255, 255], 4.0),
     };
@@ -1089,6 +1202,7 @@ fn render_degenerate_shapes_do_not_panic() {
             size: 10.0,
             background: Some(RED),
             bold: false,
+            width: None,
         },
         s.clone(),
     );
@@ -1426,6 +1540,7 @@ fn render_text_draws_inside_its_bounds_only() {
             size: 28.0,
             background: None,
             bold: false,
+            width: None,
         },
         style([0, 0, 0, 255], 4.0),
     );
@@ -1454,6 +1569,7 @@ fn render_text_multiline_and_shadow() {
                 size: 30.0,
                 background: None,
                 bold: false,
+                width: None,
             },
             Style {
                 shadow,
@@ -1483,6 +1599,7 @@ fn render_text_background_pill() {
             size: 24.0,
             background: Some([20, 20, 120, 255]),
             bold: false,
+            width: None,
         },
         style([255, 255, 255, 255], 4.0),
     );
@@ -2074,6 +2191,7 @@ fn sidecar_round_trip_and_layout() {
             size: 12.0,
             background: None,
             bold: false,
+            width: None,
         },
         Style::default(),
     );
@@ -2308,6 +2426,7 @@ fn showcase() {
             size: 22.0,
             background: None,
             bold: false,
+            width: None,
         },
         Style {
             color: [20, 20, 20, 255],
@@ -2321,6 +2440,7 @@ fn showcase() {
             size: 22.0,
             background: Some([17, 17, 17, 230]),
             bold: false,
+            width: None,
         },
         Style {
             color: [255, 255, 255, 255],
@@ -2465,6 +2585,7 @@ fn cjk_and_emoji_text_renders_with_fallback_fonts() {
             size: 28.0,
             background: None,
             bold: false,
+            width: None,
         },
         style([0, 0, 0, 255], 2.0),
     );
@@ -2515,6 +2636,7 @@ fn editor_showcase() {
                 size: 30.0,
                 background: bg,
                 bold: i == 0,
+                width: None,
             },
             style([20, 20, 20, 255], 2.0),
         );
