@@ -1617,9 +1617,9 @@ impl Surface for HistoryWindow {
                                             star_r.center(),
                                             15.0,
                                             Color32::from_black_alpha(if sresp.hovered() {
-                                                200
+                                                235
                                             } else {
-                                                150
+                                                205
                                             }),
                                         );
                                         widgets::paint_icon(
@@ -1661,9 +1661,9 @@ impl Surface for HistoryWindow {
                                             del_r.center(),
                                             15.0,
                                             Color32::from_black_alpha(if dresp.hovered() {
-                                                200
+                                                235
                                             } else {
-                                                150
+                                                205
                                             }),
                                         );
                                         widgets::paint_icon(
