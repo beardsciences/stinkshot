@@ -27,6 +27,11 @@
 - Also: tray icon clicks, a short feature list, File Locations (captures folder, config.toml,
   stinkshot.log; Open / Show in Explorer). Nothing on the page touches the network.
 
+## CLI
+
+`stinkshot settings --page <name>` opens Settings on a page by its nav name, any case
+(`help`, `about`, ...); an unknown name opens Settings as before. `Section::from_name` maps it.
+
 ## Strings
 
 Each new file keeps its user-visible strings in a `mod text` const table at the top, ready to
@@ -36,4 +41,14 @@ move into the localization lookup.
 
 Test instance: `STINKSHOT_PROFILE=ux-tour`, config with `take_over_printscreen = false`, all
 hotkeys `""`, `copy_to_clipboard = false`, `tour_seen = false`. Screenshots in
-`C:\dev\stinkshot-bench\ux-shots\tour-*.png` and `help-*.png`.
+`C:\dev\stinkshot-bench\ux-shots\tour-*.png`, `help-*.png`, `about-show-tour.png`.
+
+Verified (Nov 8 2026, debug build): tour opens on first start, Right/Esc/Enter keys step and
+close it, `tour_seen` is written true on close (Esc and Done both), `settings --page help|about`
+opens those pages. Driven with posted key messages to the test window only.
+
+Not verified: mouse clicks (posted mouse messages do not reach egui because Windows sends
+WM_MOUSELEAVE while the real cursor is elsewhere), so the Skip / Back / Open Help / Show Tour
+/ Change Hotkeys / Open buttons, the tray Help item and the lower half of the Help page
+(editor groups, features, file locations) were not exercised or screenshotted. Light theme not
+checked.
