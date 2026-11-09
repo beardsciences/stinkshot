@@ -5,6 +5,7 @@ use stinkshot_platform::Hwnd;
 use stinkshot_platform::occlusion::{self, Layer};
 use stinkshot_platform::windows_enum::WinInfo;
 
+use crate::l10n::tr;
 use crate::state::RegionPurpose;
 
 /// The window that is actually visible under the cursor in the frozen screen.
@@ -129,11 +130,11 @@ pub fn cycle_level(level: usize, wheel_delta_y: f32, max_level: usize) -> usize 
 
 pub fn purpose_label(p: RegionPurpose) -> &'static str {
     match p {
-        RegionPurpose::Ocr => "Select Area to Copy Text",
-        RegionPurpose::Scrolling => "Select Area to Scroll-Capture",
-        RegionPurpose::RecordMp4 => "Select Area to Record",
-        RegionPurpose::RecordGif => "Select Area to Record as GIF",
-        RegionPurpose::PickColor => "Pick a Color",
+        RegionPurpose::Ocr => tr!("overlay.purpose.ocr"),
+        RegionPurpose::Scrolling => tr!("overlay.purpose.scrolling"),
+        RegionPurpose::RecordMp4 => tr!("overlay.purpose.record_mp4"),
+        RegionPurpose::RecordGif => tr!("overlay.purpose.record_gif"),
+        RegionPurpose::PickColor => tr!("overlay.purpose.pick_color"),
     }
 }
 

@@ -12,6 +12,7 @@ use stinkshot_core::annotate::{
 use stinkshot_core::{PtF, RectF};
 
 use super::selection::Handle8;
+use crate::l10n::tr;
 
 /// Text extent callback: (text, size_px, bold) -> (width, height).
 pub type Measure<'a> = &'a dyn Fn(&str, f32, bool) -> (f32, f32);
@@ -51,24 +52,33 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub fn label(self) -> &'static str {
+    /// Tool name without its shortcut ("Arrow").
+    pub fn name(self) -> &'static str {
         match self {
-            Tool::Select => "Select (V)",
-            Tool::Arrow => "Arrow (A)",
-            Tool::Line => "Line (L)",
-            Tool::Rect => "Rectangle (R)",
-            Tool::Ellipse => "Ellipse (E)",
-            Tool::Pen => "Pen (P)",
-            Tool::Highlighter => "Highlighter (H)",
-            Tool::Text => "Text (T)",
-            Tool::Step => "Step Counter (N)",
-            Tool::Blur => "Blur (B)",
-            Tool::Pixelate => "Pixelate (X)",
-            Tool::Redact => "Solid Redact Box (K)",
-            Tool::Magnifier => "Magnifier Inset (M)",
-            Tool::Callout => "Callout (O)",
-            Tool::Spotlight => "Spotlight (S)",
-            Tool::Measure => "Measure (U)",
+            Tool::Select => tr!("overlay.tool.select"),
+            Tool::Arrow => tr!("overlay.tool.arrow"),
+            Tool::Line => tr!("overlay.tool.line"),
+            Tool::Rect => tr!("overlay.tool.rect"),
+            Tool::Ellipse => tr!("overlay.tool.ellipse"),
+            Tool::Pen => tr!("overlay.tool.pen"),
+            Tool::Highlighter => tr!("overlay.tool.highlighter"),
+            Tool::Text => tr!("overlay.tool.text"),
+            Tool::Step => tr!("overlay.tool.step"),
+            Tool::Blur => tr!("overlay.tool.blur"),
+            Tool::Pixelate => tr!("overlay.tool.pixelate"),
+            Tool::Redact => tr!("overlay.tool.redact"),
+            Tool::Magnifier => tr!("overlay.tool.magnifier"),
+            Tool::Callout => tr!("overlay.tool.callout"),
+            Tool::Spotlight => tr!("overlay.tool.spotlight"),
+            Tool::Measure => tr!("overlay.tool.measure"),
+        }
+    }
+
+    /// Tool name with its shortcut key ("Arrow (A)"), from `keys::TOOL_KEYS`.
+    pub fn label(self) -> String {
+        match super::keys::TOOL_KEYS.iter().find(|(t, _)| *t == self) {
+            Some((_, k)) => format!("{} ({})", self.name(), k.name()),
+            None => self.name().to_string(),
         }
     }
 
