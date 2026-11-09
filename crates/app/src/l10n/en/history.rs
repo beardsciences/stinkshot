@@ -56,7 +56,6 @@ pub fn get(key: &str) -> Option<&'static str> {
         "history.error.load_fix" => {
             "Restart Stinkshot; if it keeps happening, choose another history folder in Settings."
         }
-        "history.window.title" => "Stinkshot History",
         "history.nav.all" => "All Captures",
         "history.nav.starred" => "Starred",
         "history.nav.recordings" => "Recordings",
@@ -133,7 +132,6 @@ pub const KEYS: &[&str] = &[
     "history.act.images_only",
     "history.error.load",
     "history.error.load_fix",
-    "history.window.title",
     "history.nav.all",
     "history.nav.starred",
     "history.nav.recordings",

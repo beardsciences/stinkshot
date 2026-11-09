@@ -204,10 +204,6 @@ fn job_inner(
     });
 }
 
-/// English toast body when Windows has no OCR language, kept for callers outside the
-/// shell group; shell code uses `shell.ocr.none.body`.
-pub const NO_OCR_HELP: &str = "Add a language with text recognition in Windows Settings > Time & language > Language & region.";
-
 /// Clipboard failures in words a user can act on. A busy clipboard (another app holding it
 /// open, common with clipboard managers and remote desktop) is the usual cause.
 pub fn clipboard_error(e: &anyhow::Error) -> String {
@@ -225,7 +221,7 @@ pub fn clipboard_text_error(e: &anyhow::Error) -> String {
     report("copy", e, tr!("shell.clipboard.refused"))
 }
 
-/// Marker error for "no OCR engine" inside item jobs (mapped to `NO_OCR_HELP`).
+/// Marker error for "no OCR engine" inside item jobs (mapped to `shell.ocr.none.body`).
 const NO_OCR_MARK: &str = "no OCR language is installed";
 
 /// Context added to the clipboard step of item copies, so a failure there is not reported as

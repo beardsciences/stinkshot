@@ -1634,7 +1634,7 @@ impl SettingsWindow {
         } else {
             tr!(
                 "settings.history.ocr.desc_missing",
-                help = crate::workers::NO_OCR_HELP
+                help = crate::l10n::tr!("shell.ocr.none.body")
             )
         };
         toggle_row(

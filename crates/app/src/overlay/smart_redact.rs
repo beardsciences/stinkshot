@@ -398,7 +398,11 @@ pub fn button_tip(ocr: bool) -> String {
     if ocr {
         tr!("overlay.redact.tip", key = keys::FIND_SENSITIVE.label)
     } else {
-        format!("{}\n{}", no_ocr_notice(), crate::workers::NO_OCR_HELP)
+        format!(
+            "{}\n{}",
+            no_ocr_notice(),
+            crate::l10n::tr!("shell.ocr.none.body")
+        )
     }
 }
 

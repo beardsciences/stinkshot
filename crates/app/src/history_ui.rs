@@ -773,7 +773,9 @@ impl HistoryWindow {
 
 impl Surface for HistoryWindow {
     fn title(&self) -> String {
-        tr!("history.window.title").into()
+        // Not translated: the shell derives the viewport id from the title and focus_window
+        // finds the window by it (like Settings).
+        "Stinkshot History".into() // l10n-ok
     }
 
     fn viewport_builder(&self, _shared: &Shared) -> egui::ViewportBuilder {
@@ -1369,7 +1371,10 @@ impl Surface for HistoryWindow {
                 top += 24.0;
             }
             if !ocr_available {
-                let msg = tr!("history.no_ocr", help = crate::workers::NO_OCR_HELP);
+                let msg = tr!(
+                    "history.no_ocr",
+                    help = crate::l10n::tr!("shell.ocr.none.body")
+                );
                 let g = ui.painter().layout(
                     msg.to_string(),
                     uc::font(12.0),
