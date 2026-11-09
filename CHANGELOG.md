@@ -37,6 +37,13 @@ First public release.
   and `stinkshot quit` for installers and scripts.
 - Per-user installer (no admin) and a portable zip.
 - Opt-in update check that only trusts release info signed with the project's minisign key.
+- TODO: accessibility (screen reader names, keyboard navigation, high contrast), first-run
+  tour, in-app help and localization. Replace with what the merged tracks actually ship.
+
+### Fixed
+
+- TODO: resource leaks (GPU, handle and thread growth over long sessions in capture,
+  recording and History). Replace with the merged leak fixes.
 
 ### Security
 

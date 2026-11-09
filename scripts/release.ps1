@@ -35,6 +35,8 @@ param(
     [string]$TargetDir,
     [string]$OutDir,
     [switch]$SkipTests,
+    # Caps parallel rustc jobs (CARGO_BUILD_JOBS); lower it when the box is short on memory.
+    [int]$Jobs,
     [switch]$AllowDirty,
     [string]$Iscc,
     [string]$Minisign,
@@ -61,7 +63,15 @@ $BenchTools = 'C:\dev\stinkshot-bench\tools'
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
 $Triples = @{ x64 = 'x86_64-pc-windows-msvc'; arm64 = 'aarch64-pc-windows-msvc' }
 
-function Step([string]$Text) { Write-Host "==> $Text" -ForegroundColor Cyan }
+$script:StepClock = [Diagnostics.Stopwatch]::StartNew()
+$script:StepTimes = New-Object System.Collections.ArrayList
+$script:StepName = $null
+function Step([string]$Text) {
+    if ($script:StepName) { [void]$script:StepTimes.Add([pscustomobject]@{ Step = $script:StepName; Seconds = [math]::Round($script:StepClock.Elapsed.TotalSeconds, 1) }) }
+    $script:StepName = $Text
+    $script:StepClock.Restart()
+    Write-Host "==> $Text" -ForegroundColor Cyan
+}
 function Fail([string]$Text) { throw "release: $Text" }
 
 function Invoke-Native {
@@ -144,7 +154,7 @@ function Invoke-CodeSign([string[]]$Files) {
 # ------------------------------------------------------------------ inputs
 
 $savedEnv = @{}
-foreach ($n in 'CARGO_TARGET_DIR', 'STINKSHOT_PROFILE', 'SOURCE_DATE_EPOCH', 'PATH') { $savedEnv[$n] = [Environment]::GetEnvironmentVariable($n) }
+foreach ($n in 'CARGO_TARGET_DIR', 'CARGO_BUILD_JOBS', 'STINKSHOT_PROFILE', 'SOURCE_DATE_EPOCH', 'PATH') { $savedEnv[$n] = [Environment]::GetEnvironmentVariable($n) }
 
 Push-Location $Repo
 try {
@@ -174,6 +184,13 @@ try {
         else { Fail "CHANGELOG.md has no ## [$Version] section." }
     }
     $changes = if ($section.Success) { $section.Groups[1].Value.Trim() } else { '' }
+    $heading = [regex]::Match($changelog, "(?m)^## \[$([regex]::Escape($Version))\][^\r\n]*").Value
+    $unfinished = @()
+    if ($heading -match 'Unreleased') { $unfinished += "the heading says Unreleased (set the date: $heading)" }
+    if ($changes -match '\bTODO\b') { $unfinished += 'it still has TODO placeholders' }
+    foreach ($u in $unfinished) {
+        if ($AllowDirty) { Write-Warning "CHANGELOG.md [$Version]: $u." } else { Fail "CHANGELOG.md [$Version]: $u." }
+    }
 
     $isccExe = Find-Tool $Iscc 'STINKSHOT_ISCC' 'ISCC.exe' @("$BenchTools\innosetup\ISCC.exe", "$env:LOCALAPPDATA\Programs\Inno Setup 7\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe", "$env:ProgramFiles\Inno Setup 7\ISCC.exe")
     $minisignExe = Find-Tool $Minisign 'STINKSHOT_MINISIGN' 'minisign.exe' @("$BenchTools\minisign\minisign-win64\x86_64\minisign.exe")
@@ -183,6 +200,7 @@ try {
 
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
     $env:CARGO_TARGET_DIR = $TargetDir
+    if ($Jobs -gt 0) { $env:CARGO_BUILD_JOBS = "$Jobs" }
     # The tests check default paths, so no dev profile may leak in. The script never runs
     # the built exe (the version check reads its resource), so the real instance is safe.
     $env:STINKSHOT_PROFILE = $null
@@ -332,6 +350,10 @@ try {
     Write-Host "Upload everything above except RELEASE_NOTES.md to the $Tag release (docs/RELEASING.md)."
 }
 finally {
+    if ($script:StepName -and $script:StepName -ne 'done') {
+        [void]$script:StepTimes.Add([pscustomobject]@{ Step = "$($script:StepName) (stopped)"; Seconds = [math]::Round($script:StepClock.Elapsed.TotalSeconds, 1) })
+    }
+    if ($script:StepTimes.Count) { $script:StepTimes | Format-Table -AutoSize | Out-String | Write-Host }
     foreach ($n in $savedEnv.Keys) { [Environment]::SetEnvironmentVariable($n, $savedEnv[$n]) }
     Pop-Location
 }
