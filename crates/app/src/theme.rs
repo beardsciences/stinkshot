@@ -608,18 +608,56 @@ pub mod widgets {
             .inner_margin(egui::Margin::symmetric(18, 14))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
+                // The text wraps beside the controls, using their width from the last frame,
+                // so long (translated) text never runs under them. When that would leave the
+                // text too narrow, the controls move to their own line below it.
+                let id = ui.scope_id().with(("setting_row", title));
+                let right_w = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or(0.0);
+                let text_w = ui.available_width() - right_w - 16.0;
+                let stacked = text_w < 200.0;
+                let text = |ui: &mut Ui, max_w: f32| {
                     ui.vertical(|ui| {
+                        ui.set_max_width(max_w);
                         ui.spacing_mut().item_spacing.y = 3.0;
-                        ui.label(egui::RichText::new(title).size(14.0).color(p.text));
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(title).size(14.0).color(p.text))
+                                .wrap(),
+                        );
                         if !desc.is_empty() {
-                            ui.label(egui::RichText::new(desc).size(12.0).color(p.text_tertiary));
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(desc).size(12.0).color(p.text_tertiary),
+                                )
+                                .wrap(),
+                            );
                         }
                     });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                };
+                let right = egui::Layout::right_to_left(egui::Align::Center);
+                let used = if stacked {
+                    text(ui, ui.available_width());
+                    ui.add_space(6.0);
+                    let h = ui.spacing().interact_size.y;
+                    ui.allocate_ui_with_layout(vec2(ui.available_width(), h), right, |ui| {
                         add_right(ui);
-                    });
-                });
+                        ui.min_rect().width()
+                    })
+                    .inner
+                } else {
+                    ui.horizontal(|ui| {
+                        text(ui, text_w);
+                        ui.with_layout(right, |ui| {
+                            add_right(ui);
+                            ui.min_rect().width()
+                        })
+                        .inner
+                    })
+                    .inner
+                };
+                if (used - right_w).abs() > 0.5 {
+                    ui.data_mut(|d| d.insert_temp(id, used));
+                    ui.ctx().request_repaint();
+                }
             });
     }
 
