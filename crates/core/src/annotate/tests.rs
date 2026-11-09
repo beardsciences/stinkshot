@@ -133,6 +133,7 @@ fn doc_json_round_trip_all_kinds() {
         ShapeKind::Highlighter {
             points: vec![pt(0.0, 0.0), pt(10.0, 5.0)],
         },
+        ShapeKind::HighlightBox { rect: r },
         ShapeKind::Text {
             pos: pt(5.0, 5.0),
             text: "hi\nthere".into(),
@@ -1253,6 +1254,163 @@ fn render_highlighter_is_translucent() {
     assert!(on_black[0] < 150, "text still readable: {on_black:?}");
     assert_eq!(out.pixel(50, 45), WHITE);
     assert_eq!(out.pixel(50, 10), WHITE);
+}
+
+#[test]
+fn render_highlight_box_fills_exactly_its_rect_like_a_stroke() {
+    let f = test_fonts();
+    let mut base = white(100, 60);
+    for x in 20..80 {
+        for y in 28..32 {
+            base.set_pixel(x, y, [0, 0, 0, 255]);
+        }
+    }
+    let yellow = style([255, 235, 0, 0x99], 16.0);
+    let mut d = Doc::new(100, 60);
+    d.add(
+        ShapeKind::HighlightBox {
+            rect: RectF::new(10.0, 20.0, 80.0, 20.0),
+        },
+        yellow.clone(),
+    );
+    let out = render(&base, &d, &f);
+    // Same tint as a freehand stroke of the same style, text still readable, no outline.
+    let mut stroke = Doc::new(100, 60);
+    stroke.add(
+        ShapeKind::Highlighter {
+            points: vec![pt(10.0, 30.0), pt(90.0, 30.0)],
+        },
+        yellow,
+    );
+    let ref_out = render(&base, &stroke, &f);
+    assert_eq!(out.pixel(50, 24), ref_out.pixel(50, 24));
+    assert_ne!(out.pixel(50, 24), WHITE);
+    assert!(out.pixel(50, 29)[0] < 150, "text readable");
+    assert_eq!(
+        out.pixel(10, 20),
+        out.pixel(50, 24),
+        "flat fill to the corner"
+    );
+    assert_eq!(out.pixel(89, 39), out.pixel(50, 24));
+    assert_eq!(out.pixel(5, 30), WHITE);
+    assert_eq!(out.pixel(50, 45), WHITE);
+    assert_eq!(out.pixel(50, 15), WHITE);
+    // The region render (editor) and the full render agree.
+    let work = bake_destructive(&base, &d);
+    let region = render_region(&work, &d, &f, PxRect::new(0, 0, 100, 60));
+    assert_eq!(region.data, out.data);
+}
+
+#[test]
+fn highlight_box_hits_bounds_and_moves() {
+    let f = test_fonts();
+    let mut d = Doc::new(200, 200);
+    let id = d.add(
+        ShapeKind::HighlightBox {
+            rect: RectF::new(20.0, 30.0, 100.0, 20.0),
+        },
+        style(RED, 16.0),
+    );
+    assert_eq!(d.hit_test(pt(70.0, 40.0), 0.0), Some(id));
+    assert_eq!(d.hit_test(pt(70.0, 55.0), 0.0), None);
+    assert_eq!(
+        shape_bounds(d.get(id).unwrap(), &f),
+        RectF::new(20.0, 30.0, 100.0, 20.0)
+    );
+    translate_shape(&mut d.get_mut(id).unwrap().kind, 5.0, -10.0);
+    assert_eq!(
+        d.get(id).unwrap().kind,
+        ShapeKind::HighlightBox {
+            rect: RectF::new(25.0, 20.0, 100.0, 20.0)
+        }
+    );
+}
+
+#[test]
+fn highlighter_box_rect_covers_the_painted_stroke() {
+    let kind = ShapeKind::Highlighter {
+        points: vec![pt(10.0, 30.0), pt(50.0, 34.0), pt(90.0, 28.0)],
+    };
+    assert_eq!(
+        highlighter_box_rect(&kind, 16.0),
+        Some(RectF::new(2.0, 20.0, 96.0, 22.0))
+    );
+    // Same as the stroke's own bounds, so the box covers what the stroke painted.
+    let f = test_fonts();
+    let shape = Shape {
+        id: 1,
+        kind: kind.clone(),
+        style: style(RED, 16.0),
+    };
+    assert_eq!(
+        highlighter_box_rect(&kind, 16.0),
+        Some(shape_bounds(&shape, &f))
+    );
+    assert_eq!(
+        highlighter_box_rect(&ShapeKind::Highlighter { points: vec![] }, 16.0),
+        None
+    );
+    let pen = ShapeKind::Pen {
+        points: vec![pt(0.0, 0.0), pt(5.0, 5.0)],
+    };
+    assert_eq!(highlighter_box_rect(&pen, 16.0), None);
+    // A single dot becomes a marker-sized square; non-finite points are ignored.
+    let dot = ShapeKind::Highlighter {
+        points: vec![pt(10.0, 10.0), pt(f32::NAN, 3.0)],
+    };
+    assert_eq!(
+        highlighter_box_rect(&dot, 8.0),
+        Some(RectF::new(6.0, 6.0, 8.0, 8.0))
+    );
+}
+
+#[test]
+fn highlight_box_json_and_older_sidecars() {
+    let mut d = Doc::new(100, 80);
+    d.add(
+        ShapeKind::HighlightBox {
+            rect: RectF::new(1.0, 2.0, 30.0, 10.0),
+        },
+        style([255, 235, 0, 0x99], 16.0),
+    );
+    let json = d.to_json().unwrap();
+    assert!(json.contains("\"highlight_box\""), "{json}");
+    assert_eq!(Doc::from_json(&json).unwrap(), d);
+    // A sidecar from before box highlights (freehand only) still loads unchanged.
+    let old = r#"{
+        "version": 1, "base_width": 100, "base_height": 80, "next_id": 2,
+        "shapes": [
+            {"id": 1, "kind": {"type": "highlighter",
+                "points": [{"x": 1.0, "y": 2.0}, {"x": 50.0, "y": 2.0}]},
+             "style": {"color": [255, 235, 0, 153], "width": 16.0, "fill": null, "shadow": false}}
+        ]
+    }"#;
+    let back = Doc::from_json(old).unwrap();
+    assert_eq!(
+        back.shapes[0].kind,
+        ShapeKind::Highlighter {
+            points: vec![pt(1.0, 2.0), pt(50.0, 2.0)]
+        }
+    );
+}
+
+#[test]
+fn highlight_box_survives_save_and_reopen() {
+    let dir = tmpdir("hlbox");
+    let flat = dir.join("Shot.png");
+    let base = white(64, 48);
+    let mut d = Doc::new(64, 48);
+    d.add(
+        ShapeKind::HighlightBox {
+            rect: RectF::new(4.0, 6.0, 40.0, 12.0),
+        },
+        style([255, 235, 0, 0x99], 16.0),
+    );
+    save_editable(&flat, &base, &d).unwrap();
+    let (b2, d2) = load_editable(&flat).unwrap().unwrap();
+    assert_eq!(d2, d);
+    assert_eq!(b2.data, base.data);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

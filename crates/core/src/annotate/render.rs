@@ -7,8 +7,8 @@ use tiny_skia::{
 };
 
 use super::{
-    ArrowHead, ArrowParts, HIGHLIGHT_ALPHA, Shape, ShapeKind, Style, arrow_parts,
-    callout_tail_base, norm, shape_bounds, text_layout, text_rect, translate_shape,
+    ArrowHead, ArrowParts, Shape, ShapeKind, Style, arrow_parts, callout_tail_base,
+    highlight_color, norm, shape_bounds, text_layout, text_rect, translate_shape,
 };
 use crate::fonts::{Fonts, LINE_HEIGHT};
 use crate::geom::{PtF, PxRect, RectF};
@@ -300,15 +300,6 @@ fn paint(c: [u8; 4]) -> Paint<'static> {
     p
 }
 
-fn with_alpha(c: [u8; 4], f: f32) -> [u8; 4] {
-    [
-        c[0],
-        c[1],
-        c[2],
-        (c[3] as f32 * f.clamp(0.0, 1.0)).round() as u8,
-    ]
-}
-
 fn stroke_of(width: f32, cap: LineCap, join: LineJoin) -> Stroke {
     Stroke {
         width,
@@ -562,7 +553,7 @@ fn draw_shape(pm: &mut Pixmap, shape: &Shape, fonts: &Fonts, magnifier_src: Opti
             }
         }
         ShapeKind::Highlighter { points } => {
-            let color = with_alpha(st.color, HIGHLIGHT_ALPHA);
+            let color = highlight_color(st.color);
             match smooth_path(points) {
                 Some(path) => {
                     let stroke = stroke_of(st.width.max(1.0), LineCap::Round, LineJoin::Round);
@@ -573,6 +564,13 @@ fn draw_shape(pm: &mut Pixmap, shape: &Shape, fonts: &Fonts, magnifier_src: Opti
                         fill_path(pm, &dot, color, Transform::identity());
                     }
                 }
+            }
+        }
+        ShapeKind::HighlightBox { rect } => {
+            let r = norm(*rect);
+            if let Some(rr) = rect_of(r) {
+                let path = PathBuilder::from_rect(rr);
+                fill_path(pm, &path, highlight_color(st.color), Transform::identity());
             }
         }
         ShapeKind::Text {

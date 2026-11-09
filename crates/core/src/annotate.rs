@@ -105,6 +105,11 @@ pub enum ShapeKind {
     Highlighter {
         points: Vec<PtF>,
     },
+    /// Axis-aligned highlighter box: filled with the same translucent color as a
+    /// `Highlighter` stroke, no outline. style.width is kept only as the marker width.
+    HighlightBox {
+        rect: RectF,
+    },
     /// Top-left anchored text; `size` in image px. Supports '\n'.
     Text {
         pos: PtF,
@@ -183,6 +188,40 @@ pub(crate) const TEXT_PAD_Y: f32 = 0.2;
 pub(crate) const CALLOUT_PAD: f32 = 0.7;
 /// Highlighter strokes are drawn with this fraction of the style color's alpha.
 pub(crate) const HIGHLIGHT_ALPHA: f32 = 0.4;
+
+/// The color a highlighter stroke or box actually paints with (style color, alpha scaled by
+/// the highlight factor). The editor's live preview uses it so screen matches export.
+pub fn highlight_color(c: [u8; 4]) -> [u8; 4] {
+    [
+        c[0],
+        c[1],
+        c[2],
+        (c[3] as f32 * HIGHLIGHT_ALPHA).round() as u8,
+    ]
+}
+
+/// The box a freehand highlighter stroke covers: its points' bounds grown by half the marker
+/// width (the round-capped stroke's full painted extent). None for other shapes and empty or
+/// non-finite strokes.
+pub fn highlighter_box_rect(kind: &ShapeKind, width: f32) -> Option<RectF> {
+    let ShapeKind::Highlighter { points } = kind else {
+        return None;
+    };
+    let pts: Vec<PtF> = points
+        .iter()
+        .copied()
+        .filter(|p| p.x.is_finite() && p.y.is_finite())
+        .collect();
+    if pts.is_empty() {
+        return None;
+    }
+    let half = if width.is_finite() {
+        width.max(1.0) / 2.0
+    } else {
+        0.5
+    };
+    Some(points_bounds(&pts).expand(half))
+}
 
 /// Arrow head geometry derived from the stroke width.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -774,7 +813,8 @@ fn shape_hit(shape: &Shape, p: PtF, tol: f32) -> bool {
         }
         ShapeKind::Blur { rect, .. }
         | ShapeKind::Pixelate { rect, .. }
-        | ShapeKind::Redact { rect } => norm(*rect).expand(tol).contains(p),
+        | ShapeKind::Redact { rect }
+        | ShapeKind::HighlightBox { rect } => norm(*rect).expand(tol).contains(p),
         ShapeKind::Magnifier { dest, .. } => {
             let d = norm(*dest);
             let ring = half.max(2.0);
@@ -835,7 +875,8 @@ pub fn shape_bounds(shape: &Shape, fonts: &Fonts) -> RectF {
         ),
         ShapeKind::Blur { rect, .. }
         | ShapeKind::Pixelate { rect, .. }
-        | ShapeKind::Redact { rect } => norm(*rect),
+        | ShapeKind::Redact { rect }
+        | ShapeKind::HighlightBox { rect } => norm(*rect),
         ShapeKind::Magnifier { dest, .. } => {
             norm(*dest).expand(render::magnifier_ring_width(&shape.style))
         }
@@ -878,6 +919,7 @@ pub fn translate_shape(kind: &mut ShapeKind, dx: f32, dy: f32) {
         ShapeKind::Blur { rect, .. }
         | ShapeKind::Pixelate { rect, .. }
         | ShapeKind::Redact { rect }
+        | ShapeKind::HighlightBox { rect }
         | ShapeKind::Spotlight { rect, .. } => mvr(rect),
         // The magnifier's source stays put: moving the inset must not change what it magnifies.
         ShapeKind::Magnifier { dest, .. } => mvr(dest),

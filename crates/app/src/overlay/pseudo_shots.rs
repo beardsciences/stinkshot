@@ -35,6 +35,7 @@ fn scenes() -> Vec<(&'static str, Vec2, Scene)> {
                     color: [230, 60, 60, 255],
                     width: 4.0,
                     picking: false,
+                    highlight_box: None,
                 };
                 ui::tool_bar(ctx, at, &info, pal(), false, &mut Vec::new());
                 let st = ActionBarState {

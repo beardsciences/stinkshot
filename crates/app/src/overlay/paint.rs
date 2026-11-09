@@ -118,6 +118,11 @@ pub fn paint_shape(painter: &Painter, m: ImgToPt, shape: &Shape, skip_text: bool
                 }
             }
         }
+        ShapeKind::HighlightBox { rect } => {
+            // Exactly the renderer's flat fill (same translucent color, no outline).
+            let c = annotate::highlight_color(shape.style.color);
+            painter.rect_filled(m.r(*rect), 0.0, color32(c));
+        }
         ShapeKind::Text {
             pos,
             text,
