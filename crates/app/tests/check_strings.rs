@@ -2,9 +2,9 @@
 //! to egui label/button/heading/hover-text style calls in crates/app/src instead of
 //! `tr!("group.key")`, and reports counts per group and file.
 //!
-//! The full scan is `#[ignore]`d while files are being converted; run it with
+//! The full scan runs with `cargo test`; for per-file counts run
 //! `scripts/check-strings.ps1` or
-//! `cargo test -p stinkshot --test check_strings -- --ignored --nocapture`.
+//! `cargo test -p stinkshot --test check_strings -- --nocapture`.
 //! Allow a literal with `// l10n-ok` on its line, or globally in scripts/strings-allow.txt.
 
 use std::collections::BTreeMap;
@@ -46,6 +46,9 @@ const CALLS: &[&str] = &[
     "setting_row",
     "toggle_row",
     "group_title",
+    "rect_button",
+    "describe",
+    "name_inputs",
 ];
 
 #[derive(Debug, PartialEq)]
@@ -93,6 +96,7 @@ fn scan(src: &str, allow: &[String]) -> Vec<Hit> {
                         let line = src[..at].matches('\n').count() + 1;
                         let line_text = lines.get(line - 1).copied().unwrap_or("");
                         if has_words(&text)
+                            && !is_id(&text)
                             && !line_text.contains("l10n-ok")
                             && !allow.contains(&text)
                         {
@@ -150,6 +154,13 @@ fn direct_literals(b: &[u8], open: usize) -> Vec<(usize, String)> {
 }
 
 /// Two or more letters in a row, ignoring escapes (`\u{b7}`, `\n`) and `{placeholders}`.
+/// A lowercase snake_case literal is a widget id (`rect_button(ui, "del_ok", ..)`), not text:
+/// UI labels are Title Case.
+fn is_id(text: &str) -> bool {
+    text.bytes()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_')
+}
+
 fn has_words(text: &str) -> bool {
     let mut run = 0;
     let mut chars = text.chars();
@@ -266,7 +277,6 @@ fn load_allow() -> Vec<String> {
 }
 
 #[test]
-#[ignore = "fails until every group is converted; run scripts/check-strings.ps1"]
 fn user_strings_use_lookup() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let skip_dir = src.join("l10n");
@@ -332,6 +342,7 @@ fn ui() {
     ui.label("B");
     let c = '"';
     ui.checkbox(&mut on, "Show Loupe");
+    rect_button(ui, "del_ok", rect, "Delete Item", kind);
 }
 #[cfg(test)]
 mod tests { fn t() { ui.label("Test Only"); } }
@@ -347,7 +358,8 @@ mod tests { fn t() { ui.label("Test Only"); } }
             "Inner",
             "{n} items",
             "Drawn",
-            "Show Loupe"
+            "Show Loupe",
+            "Delete Item"
         ]
     );
 }
