@@ -128,8 +128,13 @@ pub struct SourceInfo {
 pub enum FinishAction {
     /// Enter / Ctrl+C: clipboard (+ history + toast per config).
     Copy,
-    /// Ctrl+S: Save As dialog, also history.
+    /// Save As dialog, also history (Ctrl+S, or Ctrl+Shift+S while re-editing).
     SaveAs,
+    /// Re-editing a history item, Ctrl+S: write the edits back to that item
+    /// (`edit_save::write_to_history`). For a new capture it just saves to history.
+    Save,
+    /// Re-editing: add the edits as a new history item, leaving the original as it was.
+    SaveCopy,
     Pin,
     /// Copy recognized text instead of the image.
     CopyText,
@@ -155,7 +160,8 @@ pub struct CaptureOutput {
     pub source: SourceInfo,
     /// "region" | "window" | "fullscreen" | "scrolling"
     pub mode: &'static str,
-    /// Set when re-editing an existing history item: overwrite it instead of adding new.
+    /// Set when re-editing an existing history item: overwrite it instead of adding new
+    /// (except `FinishAction::SaveCopy`, see `edit_save::history_target`).
     pub editing: Option<ItemId>,
 }
 

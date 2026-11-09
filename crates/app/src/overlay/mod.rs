@@ -242,6 +242,8 @@ struct Keys {
     paste: bool,
     duplicate: bool,
     save: bool,
+    /// Shift held with the save chord (Save As while re-editing).
+    save_shift: bool,
     pin: bool,
     text: bool,
     smart: bool,
@@ -1243,6 +1245,7 @@ impl Overlay {
             });
             k.duplicate = keys::DUPLICATE.pressed(i);
             k.save = keys::SAVE.pressed(i);
+            k.save_shift = i.modifiers.shift;
             k.pin = keys::PIN.pressed(i);
             k.text = keys::COPY_TEXT.pressed(i);
             k.smart = keys::FIND_SENSITIVE.pressed(i);
@@ -1405,7 +1408,8 @@ impl Overlay {
         }
         if self.annotating() && self.sel.is_some() {
             if k.save {
-                self.finish(ctx, shared, FinishAction::SaveAs);
+                let action = crate::edit_save::save_shortcut(self.editing_item(), k.save_shift);
+                self.finish(ctx, shared, action);
                 return;
             }
             if k.pin {
@@ -1621,6 +1625,11 @@ impl Overlay {
             return;
         }
         self.cancel(shared);
+    }
+
+    /// Re-editing a history item (Save writes back to it).
+    fn editing_item(&self) -> bool {
+        matches!(self.annotate_meta, Some((_, Some(_), _)))
     }
 
     /// Annotations the user drew or changed in this session (lost on cancel).

@@ -70,6 +70,8 @@ impl Chord {
 }
 
 pub const SAVE: Chord = Chord::ctrl(Key::S, "Ctrl+S");
+/// Save As while re-editing a history item (Ctrl+S saves back to the item there).
+pub const SAVE_AS_EDITING: &str = "Ctrl+Shift+S";
 pub const PIN: Chord = Chord::ctrl(Key::P, "Ctrl+P");
 pub const COPY_TEXT: Chord = Chord::ctrl(Key::T, "Ctrl+T");
 /// Find Sensitive Info (Smart Redact): R for redact.
@@ -271,6 +273,10 @@ pub fn sheet(select_only: bool) -> Sheet {
             tr!("overlay.keys.copy_image_no_shape"),
         ),
         (SAVE.label.to_string(), tr!("overlay.keys.save_as")),
+        (
+            SAVE_AS_EDITING.to_string(),
+            tr!("overlay.keys.save_as_editing"),
+        ),
         (PIN.label.to_string(), tr!("overlay.keys.pin")),
         (COPY_TEXT.label.to_string(), tr!("overlay.keys.copy_text")),
         ("Esc".to_string(), tr!("overlay.keys.cancel")),

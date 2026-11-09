@@ -2,8 +2,11 @@
 //! 1:1 at its physical size. Drag moves (our own drag loop in physical px, see `PinDrag`);
 //! wheel zooms (10%..800%); Ctrl+wheel opacity
 //! (20%..100%); double-click opens in the editor (if from history); Ctrl+C copies; Esc or
-//! the close button closes; hover shows the mini toolbar (opacity, copy, close) and the
-//! accent outline.
+//! the close button closes. The toolbar (opacity, edit, copy, close) sits in a strip above
+//! the image (Always Show Pin Toolbar, the window grows to fit it, `Chrome`), or with that
+//! setting off shows over the image on hover. Hover shows the accent outline. With Show Pins
+//! in Task View the pin is a normal app window (Alt+Tab, Task View, taskbar) titled
+//! "Pin: <name>", still always on top.
 //!
 //! The window is transparent (rounded corners + opacity are painted by egui), so the
 //! shell's `App::clear_color` must return fully transparent for the pin viewports.
@@ -137,6 +140,133 @@ struct PinDrag {
 const TOOL_BTN: f32 = 28.0;
 const TOOL_PAD: f32 = 3.0;
 const TOOL_GAP: f32 = 4.0;
+/// Height of the toolbar bar (points).
+const BAR_H: f32 = TOOL_PAD * 2.0 + TOOL_BTN;
+/// Always-shown toolbar: the strip above the image is the bar plus this gap (points).
+const STRIP_GAP: f32 = 4.0;
+
+/// Toolbar bar width for `n` buttons in a row (points).
+fn bar_w(n: usize) -> f32 {
+    let n = n.max(1) as f32;
+    TOOL_PAD * 2.0 + TOOL_BTN * n + TOOL_GAP * (n - 1.0)
+}
+
+/// What the always-shown toolbar adds around the image, in physical px: a strip above it,
+/// and a minimum window width so the toolbar fits over a narrow image (the image is then
+/// centered under it). Zero when the toolbar only shows on hover.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Chrome {
+    pub strip: i32,
+    pub min_w: i32,
+}
+
+impl Chrome {
+    pub fn new(always_toolbar: bool, buttons: usize, scale: f32) -> Chrome {
+        if !always_toolbar {
+            return Chrome::default();
+        }
+        let s = scale.max(0.1);
+        Chrome {
+            strip: ((BAR_H + STRIP_GAP) * s).round() as i32,
+            min_w: (bar_w(buttons) * s).ceil() as i32,
+        }
+    }
+
+    /// Window size for the image shown at `img` physical px.
+    pub fn window_size(self, img: (i32, i32)) -> (i32, i32) {
+        (img.0.max(self.min_w), img.1 + self.strip)
+    }
+
+    /// The image's offset inside the window.
+    pub fn image_offset(self, img: (i32, i32)) -> (i32, i32) {
+        ((self.window_size(img).0 - img.0) / 2, self.strip)
+    }
+
+    /// Window origin that puts the image's top left at `img_at`.
+    pub fn window_at(self, img_at: (i32, i32), img: (i32, i32)) -> (i32, i32) {
+        let off = self.image_offset(img);
+        (img_at.0 - off.0, img_at.1 - off.1)
+    }
+}
+
+/// The window rect after zooming the image from `old_img` to `new_img` px, keeping the image
+/// point under the cursor in place. `pos` is the window origin, `cursor` the cursor offset
+/// from it (physical px; it may be over the toolbar strip, then the anchor is clamped to the
+/// image edge).
+pub fn zoomed_rect(
+    chrome: Chrome,
+    pos: (i32, i32),
+    old_img: (i32, i32),
+    new_img: (i32, i32),
+    cursor: (f32, f32),
+) -> PxRect {
+    let off = chrome.image_offset(old_img);
+    let img_at = (pos.0 + off.0, pos.1 + off.1);
+    let in_img = (
+        (cursor.0 - off.0 as f32).clamp(0.0, old_img.0 as f32),
+        (cursor.1 - off.1 as f32).clamp(0.0, old_img.1 as f32),
+    );
+    let new_at = zoom_anchor(img_at, old_img, new_img, in_img);
+    let (x, y) = chrome.window_at(new_at, new_img);
+    let (w, h) = chrome.window_size(new_img);
+    PxRect::new(x, y, w, h)
+}
+
+/// The window rect after switching chrome (toolbar shown or hidden, DPI change): the image
+/// stays where it is on screen.
+pub fn rechromed_rect(old: Chrome, new: Chrome, pos: (i32, i32), img: (i32, i32)) -> PxRect {
+    let off = old.image_offset(img);
+    let (x, y) = new.window_at((pos.0 + off.0, pos.1 + off.1), img);
+    let (w, h) = new.window_size(img);
+    PxRect::new(x, y, w, h)
+}
+
+/// Toolbar buttons, in order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tool {
+    Opacity,
+    Edit,
+    Copy,
+    Close,
+}
+
+fn tools(has_item: bool) -> Vec<Tool> {
+    let mut t = vec![Tool::Opacity];
+    if has_item {
+        t.push(Tool::Edit);
+    }
+    t.extend([Tool::Copy, Tool::Close]);
+    t
+}
+
+/// Button rects in `bar`: left to right; with `close_right` the last one (Close) sits at the
+/// right end of a bar wider than the buttons need.
+fn button_rects(bar: Rect, n: usize, close_right: bool) -> Vec<Rect> {
+    let mut out = Vec::with_capacity(n);
+    let mut x = bar.left() + TOOL_PAD;
+    for i in 0..n {
+        let left = if close_right && n > 1 && i == n - 1 {
+            (bar.right() - TOOL_PAD - TOOL_BTN).max(x)
+        } else {
+            x
+        };
+        out.push(Rect::from_min_size(
+            pos2(left, bar.top() + TOOL_PAD),
+            vec2(TOOL_BTN, TOOL_BTN),
+        ));
+        x = left + TOOL_BTN + TOOL_GAP;
+    }
+    out
+}
+
+/// How a pin is created (from the Pins settings at the time).
+#[derive(Clone, Copy, Debug)]
+pub struct PinOpts {
+    /// A normal app window (Alt+Tab, Task View, taskbar) instead of a tool window.
+    pub task_view: bool,
+    /// Toolbar always shown in a strip above the image.
+    pub always_toolbar: bool,
+}
 
 pub struct Pin {
     image: Arc<Rgba>,
@@ -150,8 +280,15 @@ pub struct Pin {
     /// turns any builder change into OuterPosition/InnerSize commands in points, which
     /// winit converts with the window's current scale and which fight our physical moves.
     initial: PxRect,
-    /// Intended physical rect (position and image size x zoom). Authoritative for the size.
+    /// Intended physical rect (position and window size). Authoritative for the size.
     rect: PxRect,
+    /// Toolbar strip around the image (follows the setting and the window's DPI).
+    chrome: Chrome,
+    always_toolbar: bool,
+    /// Taskbar flag the window was created with (the builder must not change afterwards).
+    created_task_view: bool,
+    /// Task View flag currently applied to the window style.
+    task_view: bool,
     drag: Option<PinDrag>,
     last_drag_end: Option<Instant>,
     hwnd: Option<Hwnd>,
@@ -162,26 +299,32 @@ pub struct Pin {
 }
 
 impl Pin {
-    /// `at`: initial physical rect (e.g. where the region was captured); None = centered
-    /// on the monitor with the cursor.
+    /// `at`: physical rect of the image on screen (e.g. where the region was captured);
+    /// None = centered on the monitor with the cursor.
     pub fn new(
         image: Rgba,
         title: String,
         item: Option<ItemId>,
         at: Option<PxRect>,
         id: u64,
+        opts: PinOpts,
     ) -> Self {
         let area = match at {
             Some(r) => uc::area_of_rect(r),
             None => uc::area_under_cursor(),
         };
+        let chrome = Chrome::new(opts.always_toolbar, tools(item.is_some()).len(), area.scale);
         let dims = (image.width, image.height);
-        let zoom = initial_zoom(dims, area.work);
-        let (w, h) = window_size_px(dims, zoom);
+        let mut fit_in = area.work;
+        fit_in.h = (fit_in.h - chrome.strip).max(1);
+        let zoom = initial_zoom(dims, fit_in);
+        let img = window_size_px(dims, zoom);
+        let (w, h) = chrome.window_size(img);
         let rect = match at {
             Some(r) => {
                 let full = PxRect::new(area.work.x, area.work.y, area.work.w, area.work.h);
-                uc::clamp_into(PxRect::new(r.x, r.y, w, h), full)
+                let (x, y) = chrome.window_at((r.x, r.y), img);
+                uc::clamp_into(PxRect::new(x, y, w, h), full)
             }
             None => uc::centered_in(area.work, w, h),
         };
@@ -195,6 +338,10 @@ impl Pin {
             area,
             initial: rect,
             rect,
+            chrome,
+            always_toolbar: opts.always_toolbar,
+            created_task_view: opts.task_view,
+            task_view: opts.task_view,
             drag: None,
             last_drag_end: None,
             hwnd: None,
@@ -203,6 +350,11 @@ impl Pin {
             sent_transparent: false,
             copy_rx: None,
         }
+    }
+
+    /// Window size at the current zoom and chrome.
+    fn win_size(&self, dims: (u32, u32)) -> (i32, i32) {
+        self.chrome.window_size(window_size_px(dims, self.zoom))
     }
 
     fn texture_id(&mut self, ctx: &egui::Context) -> Option<egui::TextureId> {
@@ -260,6 +412,29 @@ impl Pin {
         }
     }
 
+    /// Follow the Pins settings and the window's DPI: resize around the image when the
+    /// toolbar strip changes, switch the window style when Show Pins in Task View changes.
+    fn follow_settings(&mut self, ctx: &egui::Context, shared: &Shared, ppp: f32) {
+        let pins = &shared.config.pins;
+        self.always_toolbar = pins.always_show_toolbar;
+        let chrome = Chrome::new(self.always_toolbar, tools(self.item.is_some()).len(), ppp);
+        if chrome != self.chrome && self.drag.is_none() {
+            let dims = (self.image.width, self.image.height);
+            let img = window_size_px(dims, self.zoom);
+            let r = rechromed_rect(self.chrome, chrome, (self.rect.x, self.rect.y), img);
+            self.chrome = chrome;
+            self.apply_rect(ctx, r);
+        }
+        if pins.show_in_task_view != self.task_view
+            && let Some(h) = self.hwnd
+        {
+            self.task_view = pins.show_in_task_view;
+            use stinkshot_platform::window_util as wu;
+            wu::set_tool_window(h, !self.task_view);
+            wu::set_topmost(h, true);
+        }
+    }
+
     /// Drive the drag loop: start on a primary press on the background, follow the global
     /// cursor in physical px while the button is held, end on release.
     fn update_drag(&mut self, ctx: &egui::Context, press_bg: bool, dims: (u32, u32)) {
@@ -272,7 +447,7 @@ impl Pin {
             && self.drag.is_none()
             && let Some(press) = input::try_cursor_pos()
         {
-            let size = window_size_px(dims, self.zoom);
+            let size = self.win_size(dims);
             let at = window_util::get_rect(h).unwrap_or(self.rect);
             self.drag = Some(PinDrag {
                 press,
@@ -296,7 +471,7 @@ impl Pin {
                 d.moving = true;
             }
             if d.moving {
-                let r = dragged_rect(d.start, d.press, now, window_size_px(dims, self.zoom));
+                let r = dragged_rect(d.start, d.press, now, self.win_size(dims));
                 // Also re-assert when Windows rescaled the window on a DPI change.
                 let drifted = window_util::get_rect(h).is_some_and(|a| a != r);
                 if r != self.rect || drifted {
@@ -332,7 +507,7 @@ impl Surface for Pin {
             .with_transparent(true)
             .with_resizable(false)
             .with_always_on_top()
-            .with_taskbar(false)
+            .with_taskbar(self.created_task_view)
             .with_active(false)
             .with_drag_and_drop(false)
     }
@@ -340,9 +515,12 @@ impl Surface for Pin {
     fn on_created(&mut self, hwnd: Hwnd, _shared: &Shared) {
         self.hwnd = Some(hwnd);
         use stinkshot_platform::window_util as wu;
-        wu::set_tool_window(hwnd, true);
+        wu::set_tool_window(hwnd, !self.task_view);
         wu::set_topmost(hwnd, true);
         wu::set_rect(hwnd, self.rect);
+        // The shell found the window by its unique title; from now on Alt+Tab, Task View and
+        // the taskbar show a readable one.
+        crate::sysutil::set_window_text(hwnd, &tr!("shell.pin.window_title", name = self.title));
     }
 
     fn show(&mut self, ctx: &egui::Context, shared: &mut Shared) -> SurfaceStatus {
@@ -379,6 +557,7 @@ impl Surface for Pin {
             .input(|i| i.viewport().native_pixels_per_point)
             .unwrap_or_else(|| ctx.pixels_per_point());
         let dims = (self.image.width, self.image.height);
+        self.follow_settings(ctx, shared, ppp);
         // Outside a drag, follow where the window really is (Windows may move it on a DPI or
         // display change) but keep the intended 1:1 size: a move onto a monitor with another
         // scale makes Windows (WM_DPICHANGED) rescale the window, so put the size back.
@@ -386,7 +565,7 @@ impl Surface for Pin {
             && let Some(h) = self.hwnd
             && let Some(actual) = stinkshot_platform::window_util::get_rect(h)
         {
-            let size = window_size_px(dims, self.zoom);
+            let size = self.win_size(dims);
             self.rect = PxRect::new(actual.x, actual.y, size.0, size.1);
             if let Some(fix) = size_fix(actual, size) {
                 stinkshot_platform::window_util::set_rect(h, fix);
@@ -406,14 +585,15 @@ impl Surface for Pin {
             } else {
                 let z = zoom_step(self.zoom, notches);
                 if (z - self.zoom).abs() > f32::EPSILON {
-                    let old = (self.rect.w, self.rect.h);
+                    let old = window_size_px(dims, self.zoom);
                     let new = window_size_px(dims, z);
+                    let win = self.win_size(dims);
                     let cursor = hovering
                         .map(|p| (p.x * ppp, p.y * ppp))
-                        .unwrap_or((old.0 as f32 / 2.0, old.1 as f32 / 2.0));
-                    let (nx, ny) = zoom_anchor((self.rect.x, self.rect.y), old, new, cursor);
+                        .unwrap_or((win.0 as f32 / 2.0, win.1 as f32 / 2.0));
+                    let r = zoomed_rect(self.chrome, (self.rect.x, self.rect.y), old, new, cursor);
                     self.zoom = z;
-                    self.apply_rect(ctx, PxRect::new(nx, ny, new.0, new.1));
+                    self.apply_rect(ctx, r);
                     self.set_chip(format!("{}%", (z * 100.0).round() as i32));
                 }
             }
@@ -441,7 +621,6 @@ impl Surface for Pin {
             || self
                 .last_drag_end
                 .is_some_and(|t| t.elapsed() < DRAG_CLICK_GUARD);
-        let zoom_pct = (self.zoom * 100.0).round() as i32;
         let chip = self
             .chip
             .as_ref()
@@ -457,46 +636,69 @@ impl Surface for Pin {
         if chip.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
+        let img_px = window_size_px(dims, self.zoom);
+        let img_off = self.chrome.image_offset(img_px);
+        let strip = self.chrome.strip > 0;
+        let tool_list = tools(item.is_some());
 
         uc::root_ui(ctx, Color32::TRANSPARENT, |ui, rect| {
             let radius = CornerRadius::same(8);
+            let img_rect = Rect::from_min_size(
+                rect.min + vec2(img_off.0 as f32 / ppp, img_off.1 as f32 / ppp),
+                vec2(img_px.0 as f32 / ppp, img_px.1 as f32 / ppp),
+            )
+            .intersect(rect);
             let tint = Color32::from_white_alpha((opacity * 255.0).round() as u8);
             if let Some(id) = tex {
                 ui.painter().add(
-                    egui::epaint::RectShape::filled(rect, radius, tint)
+                    egui::epaint::RectShape::filled(img_rect, radius, tint)
                         .with_texture(id, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))),
                 );
             } else {
                 ui.painter()
-                    .rect_filled(rect, radius, p.layer.gamma_multiply(opacity));
+                    .rect_filled(img_rect, radius, p.layer.gamma_multiply(opacity));
             }
 
-            // Mini toolbar, top right (shown while hovered, when the pin is big enough).
-            let tb_w = TOOL_PAD * 2.0 + TOOL_BTN * 3.0 + TOOL_GAP * 2.0;
-            let tb_h = TOOL_PAD * 2.0 + TOOL_BTN;
-            let tb = Rect::from_min_size(
-                pos2(
-                    (rect.right() - 6.0 - tb_w).max(rect.left()),
-                    rect.top() + 6.0,
-                ),
-                vec2(tb_w, tb_h),
-            );
-            let tb_fits = rect.width() >= tb_w + 12.0 && rect.height() >= tb_h + 12.0;
+            // Toolbar: always shown in the strip above the image, or (setting off) over the
+            // image's top right while hovered, when the image is big enough for it.
+            let n = tool_list.len();
+            let (bar, bar_shown) = if strip {
+                (
+                    Rect::from_min_size(rect.min, vec2(rect.width(), BAR_H)),
+                    true,
+                )
+            } else {
+                let w = bar_w(n);
+                let tb = Rect::from_min_size(
+                    pos2(
+                        (img_rect.right() - 6.0 - w).max(img_rect.left()),
+                        img_rect.top() + 6.0,
+                    ),
+                    vec2(w, BAR_H),
+                );
+                let fits = img_rect.width() >= w + 12.0 && img_rect.height() >= BAR_H + 12.0;
+                (tb, fits)
+            };
+            let buttons = button_rects(bar, n, strip);
 
             let bg = ui.interact(rect, ui.scope_id().with("pin_bg"), Sense::click_and_drag());
             // egui reports the background as hovered under the toolbar buttons too (a click
-            // widget over a drag widget hits both), so presses inside the toolbar are kept out
-            // of the drag explicitly.
+            // widget over a drag widget hits both), so presses on the buttons are kept out of
+            // the drag explicitly. The strip around them drags the pin like a title bar.
             let press = ui.input(|i| {
                 i.pointer
                     .button_pressed(PointerButton::Primary)
                     .then(|| i.pointer.press_origin())
                     .flatten()
             });
-            if bg.hovered() && press.is_some_and(|pos| !(tb_fits && tb.contains(pos))) {
+            let on_button = |pos: egui::Pos2| bar_shown && buttons.iter().any(|b| b.contains(pos));
+            if bg.hovered() && press.is_some_and(|pos| !on_button(pos)) {
                 press_bg = true;
             }
-            if bg.double_clicked() && item.is_some() && !recent_drag {
+            let on_image = ui
+                .input(|i| i.pointer.interact_pos())
+                .is_some_and(|pos| img_rect.contains(pos));
+            if bg.double_clicked() && on_image && item.is_some() && !recent_drag {
                 edit = true;
             }
             bg.context_menu(|ui| {
@@ -522,74 +724,69 @@ impl Surface for Pin {
             let hovered = bg.hovered() || ui.rect_contains_pointer(rect);
             if hovered {
                 ui.painter().rect_stroke(
-                    rect,
+                    img_rect,
                     radius,
                     Stroke::new(1.5, accent),
                     StrokeKind::Inside,
                 );
+            }
 
-                if tb_fits {
-                    let bar_fill = Color32::from_rgba_unmultiplied(32, 32, 32, 230);
-                    ui.painter()
-                        .rect_filled(tb, CornerRadius::same(6), bar_fill);
-                    let mut x = tb.left() + TOOL_PAD;
-                    for slot in 0..3 {
-                        let r = Rect::from_min_size(
-                            pos2(x, tb.top() + TOOL_PAD),
-                            vec2(TOOL_BTN, TOOL_BTN),
+            if bar_shown && (strip || hovered) {
+                let bar_fill = Color32::from_rgba_unmultiplied(32, 32, 32, 230);
+                ui.painter()
+                    .rect_filled(bar, CornerRadius::same(6), bar_fill);
+                let icon_col = Color32::from_rgb(0xe6, 0xe6, 0xe6);
+                for (tool, r) in tool_list.iter().zip(buttons.iter().copied()) {
+                    let resp = ui.interact(
+                        r,
+                        ui.scope_id().with(("pin_tool", *tool as u8)),
+                        Sense::click(),
+                    );
+                    if resp.hovered() {
+                        ui.painter().rect_filled(
+                            r,
+                            CornerRadius::same(4),
+                            Color32::from_white_alpha(28),
                         );
-                        x += TOOL_BTN + TOOL_GAP;
-                        let resp =
-                            ui.interact(r, ui.scope_id().with(("pin_tool", slot)), Sense::click());
-                        if resp.hovered() {
-                            ui.painter().rect_filled(
-                                r,
-                                CornerRadius::same(4),
-                                Color32::from_white_alpha(28),
+                    }
+                    let icon = |icon: Icon| {
+                        theme::widgets::paint_icon(
+                            ui.painter(),
+                            Rect::from_center_size(r.center(), vec2(14.0, 14.0)),
+                            icon,
+                            icon_col,
+                        )
+                    };
+                    let tip = match tool {
+                        Tool::Opacity => {
+                            ui.painter().text(
+                                r.center(),
+                                Align2::CENTER_CENTER,
+                                format!("{}%", (opacity * 100.0).round() as i32),
+                                uc::font(11.0),
+                                icon_col,
                             );
+                            tr!("shell.pin.opacity.tip")
                         }
-                        let icon_col = Color32::from_rgb(0xe6, 0xe6, 0xe6);
-                        match slot {
-                            0 => {
-                                ui.painter().text(
-                                    r.center(),
-                                    Align2::CENTER_CENTER,
-                                    format!("{}%", (opacity * 100.0).round() as i32),
-                                    uc::font(11.0),
-                                    icon_col,
-                                );
-                                if resp.on_hover_text(tr!("shell.pin.opacity.tip")).clicked()
-                                    && !recent_drag
-                                {
-                                    cycle = true;
-                                }
-                            }
-                            1 => {
-                                theme::widgets::paint_icon(
-                                    ui.painter(),
-                                    Rect::from_center_size(r.center(), vec2(14.0, 14.0)),
-                                    Icon::Copy,
-                                    icon_col,
-                                );
-                                if resp.on_hover_text(tr!("shell.pin.copy.tip")).clicked()
-                                    && !recent_drag
-                                {
-                                    want_copy = true;
-                                }
-                            }
-                            _ => {
-                                theme::widgets::paint_icon(
-                                    ui.painter(),
-                                    Rect::from_center_size(r.center(), vec2(14.0, 14.0)),
-                                    Icon::Close,
-                                    icon_col,
-                                );
-                                if resp.on_hover_text(tr!("shell.pin.close.tip")).clicked()
-                                    && !recent_drag
-                                {
-                                    close = true;
-                                }
-                            }
+                        Tool::Edit => {
+                            icon(Icon::Edit);
+                            tr!("shell.pin.edit.tip")
+                        }
+                        Tool::Copy => {
+                            icon(Icon::Copy);
+                            tr!("shell.pin.copy.tip")
+                        }
+                        Tool::Close => {
+                            icon(Icon::Close);
+                            tr!("shell.pin.close.tip")
+                        }
+                    };
+                    if resp.on_hover_text(tip).clicked() && !recent_drag {
+                        match tool {
+                            Tool::Opacity => cycle = true,
+                            Tool::Edit => edit = true,
+                            Tool::Copy => want_copy = true,
+                            Tool::Close => close = true,
                         }
                     }
                 }
@@ -602,8 +799,8 @@ impl Surface for Pin {
                 let size = galley.size() + vec2(16.0, 8.0);
                 let r = Rect::from_min_size(
                     pos2(
-                        rect.left() + 8.0,
-                        (rect.bottom() - 8.0 - size.y).max(rect.top()),
+                        img_rect.left() + 8.0,
+                        (img_rect.bottom() - 8.0 - size.y).max(img_rect.top()),
                     ),
                     size,
                 );
@@ -616,7 +813,6 @@ impl Surface for Pin {
                     .galley(r.min + vec2(8.0, 4.0), galley, Color32::WHITE);
             }
         });
-        let _ = zoom_pct;
         self.update_drag(ctx, press_bg, dims);
 
         if cycle {
@@ -627,12 +823,16 @@ impl Surface for Pin {
             ));
         }
         if reset_zoom && (self.zoom - 1.0).abs() > f32::EPSILON {
-            let old = (self.rect.w, self.rect.h);
+            let old = window_size_px(dims, self.zoom);
             let new = window_size_px(dims, 1.0);
-            let center = (old.0 as f32 / 2.0, old.1 as f32 / 2.0);
-            let (nx, ny) = zoom_anchor((self.rect.x, self.rect.y), old, new, center);
+            let off = self.chrome.image_offset(old);
+            let center = (
+                off.0 as f32 + old.0 as f32 / 2.0,
+                off.1 as f32 + old.1 as f32 / 2.0,
+            );
+            let r = zoomed_rect(self.chrome, (self.rect.x, self.rect.y), old, new, center);
             self.zoom = 1.0;
-            self.apply_rect(ctx, PxRect::new(nx, ny, new.0, new.1));
+            self.apply_rect(ctx, r);
             self.set_chip("100%".into());
         }
         if want_copy {
@@ -767,5 +967,79 @@ mod tests {
             zoom_anchor((0, 0), (400, 200), (200, 100), (400.0, 200.0)),
             (200, 100)
         );
+    }
+
+    #[test]
+    fn chrome_adds_a_strip_and_a_minimum_width() {
+        assert_eq!(Chrome::new(false, 4, 1.5), Chrome::default());
+        let c = Chrome::new(true, 4, 1.0);
+        assert_eq!(c.strip, (BAR_H + STRIP_GAP).round() as i32);
+        assert_eq!(c.min_w, bar_w(4).ceil() as i32);
+        // A wide image: the window is the image plus the strip, image right under it.
+        assert_eq!(c.window_size((800, 600)), (800, 600 + c.strip));
+        assert_eq!(c.image_offset((800, 600)), (0, c.strip));
+        // A tiny image: the window is as wide as the toolbar, the image centered under it.
+        let (w, h) = c.window_size((20, 10));
+        assert_eq!((w, h), (c.min_w, 10 + c.strip));
+        assert_eq!(c.image_offset((20, 10)), ((c.min_w - 20) / 2, c.strip));
+        // Scales with DPI.
+        let c2 = Chrome::new(true, 4, 2.0);
+        assert!(c2.strip >= c.strip * 2 - 1 && c2.min_w >= c.min_w * 2 - 1);
+        // Placing the window so the image lands on the captured rect.
+        assert_eq!(c.window_at((100, 200), (800, 600)), (100, 200 - c.strip));
+    }
+
+    #[test]
+    fn zoom_with_chrome_anchors_on_the_image() {
+        let c = Chrome::new(true, 4, 1.0);
+        // Cursor at the image center: the image center stays put.
+        let pos = (100, 100);
+        let img = (400, 200);
+        let cur = (200.0, c.strip as f32 + 100.0);
+        let r = zoomed_rect(c, pos, img, (800, 400), cur);
+        let off = c.image_offset((800, 400));
+        assert_eq!((r.x + off.0, r.y + off.1), (100 - 200, 100 + c.strip - 100));
+        assert_eq!((r.w, r.h), c.window_size((800, 400)));
+        // Cursor over the strip: anchored at the image's top edge, so the image top stays.
+        let r = zoomed_rect(c, pos, img, (800, 400), (0.0, 5.0));
+        assert_eq!(r.y, 100);
+        // No chrome: the same as the plain anchor.
+        let r = zoomed_rect(Chrome::default(), pos, img, (800, 400), (200.0, 100.0));
+        assert_eq!(
+            (r.x, r.y),
+            zoom_anchor(pos, img, (800, 400), (200.0, 100.0))
+        );
+    }
+
+    #[test]
+    fn toggling_the_toolbar_keeps_the_image_in_place() {
+        let on = Chrome::new(true, 4, 1.0);
+        let off = Chrome::default();
+        let img = (30, 30);
+        let shown = rechromed_rect(off, on, (500, 500), img);
+        let o = on.image_offset(img);
+        assert_eq!((shown.x + o.0, shown.y + o.1), (500, 500));
+        let hidden = rechromed_rect(on, off, (shown.x, shown.y), img);
+        assert_eq!(hidden, PxRect::new(500, 500, 30, 30));
+    }
+
+    #[test]
+    fn toolbar_buttons_fit_and_close_sits_right() {
+        assert_eq!(
+            tools(true),
+            vec![Tool::Opacity, Tool::Edit, Tool::Copy, Tool::Close]
+        );
+        assert_eq!(tools(false), vec![Tool::Opacity, Tool::Copy, Tool::Close]);
+        let bar = Rect::from_min_size(pos2(0.0, 0.0), vec2(bar_w(4), BAR_H));
+        let b = button_rects(bar, 4, true);
+        assert_eq!(b.len(), 4);
+        assert!(b.iter().all(|r| bar.contains_rect(*r)));
+        for w in b.windows(2) {
+            assert!(w[0].right() <= w[1].left());
+        }
+        let wide = Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, BAR_H));
+        let b = button_rects(wide, 4, true);
+        assert!((b[3].right() - (600.0 - TOOL_PAD)).abs() < 1e-3);
+        assert!((b[2].right() - (TOOL_PAD + 3.0 * TOOL_BTN + 2.0 * TOOL_GAP)).abs() < 1e-3);
     }
 }

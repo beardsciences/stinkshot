@@ -69,8 +69,9 @@ The public items in each crate's stub files are the contract. They compile today
   (handles, size label, presets; toolbars visible) -> Annotating (a tool active) -> Finish.
 - Element snap: `ElementSnapper::request(hwnd_under_cursor, p)` on mouse move; draw
   `latest().rects[level]`; wheel changes `level`; falls back to window rect.
-- Keys: Esc (cancel / deselect tool), Enter or Ctrl+C (copy), Ctrl+S (save as), Ctrl+P
-  (pin), Ctrl+T (copy text), Ctrl+R (Find Sensitive Info, docs/notes/smart-redact.md),
+- Keys: Esc (cancel / deselect tool), Enter or Ctrl+C (copy), Ctrl+S (save as; when
+  re-editing a history item it saves back to the item and Ctrl+Shift+S is save as, see
+  app/src/edit_save.rs), Ctrl+P (pin), Ctrl+T (copy text), Ctrl+R (Find Sensitive Info, docs/notes/smart-redact.md),
   Ctrl+Z/Ctrl+Y, Del, tool shortcuts A arrow, L line, R rect,
   E ellipse, P pen, H highlighter, T text, N step, B blur, X pixelate, K redact box,
   M magnifier, O callout, S spotlight, U measure, V select; 1-8 palette colors; [ ] stroke width;
