@@ -67,6 +67,11 @@ pub struct Frozen {
     pub image: Rgba,
     /// Cursor position at freeze time (virtual coords).
     pub cursor: PxPoint,
+    /// The pointer image at freeze time, kept apart from `image` (which has it drawn in
+    /// only when `include_cursor` was set). None when the pointer was hidden.
+    pub cursor_shot: Option<CursorShot>,
+    /// `cursor_shot` is drawn into `image`.
+    pub cursor_drawn: bool,
 }
 
 pub fn freeze_all(include_cursor: bool) -> anyhow::Result<Frozen> {
@@ -76,19 +81,23 @@ pub fn freeze_all(include_cursor: bool) -> anyhow::Result<Frozen> {
     }
     let cursor = crate::input::cursor_pos();
     let mut image = capture_region(bounds, false)?;
-    if include_cursor {
-        draw_cursor(
+    let cursor_shot = cursor_shot();
+    if include_cursor && let Some(c) = &cursor_shot {
+        draw_cursor_shot(
             &mut image,
             PxPoint {
                 x: bounds.x,
                 y: bounds.y,
             },
+            c,
         );
     }
     Ok(Frozen {
         bounds,
         image,
         cursor,
+        cursor_drawn: include_cursor && cursor_shot.is_some(),
+        cursor_shot,
     })
 }
 
@@ -1940,27 +1949,10 @@ unsafe fn render_icon(hicon: HICON, w: i32, h: i32, bg: u8) -> anyhow::Result<Ve
     }
 }
 
-/// Recover straight-alpha RGBA from the same glyph rendered over black and over white.
+/// Recover straight-alpha RGBA from the same glyph rendered over black and over white
+/// (inverting pixels become black with a white outline, see `cursor_from_renders`).
 pub(crate) fn combine_black_white(black: &[u8], white: &[u8], w: u32, h: u32) -> Rgba {
-    let mut out = Rgba::new(w, h);
-    for ((o, b), wh) in out
-        .data
-        .chunks_exact_mut(4)
-        .zip(black.chunks_exact(4))
-        .zip(white.chunks_exact(4))
-    {
-        // BGRA inputs. Over black the pixel is C*a, over white C*a + 255*(1-a).
-        let diff: i32 = (0..3).map(|i| wh[i] as i32 - b[i] as i32).sum::<i32>() / 3;
-        let a = (255 - diff).clamp(0, 255) as u32;
-        if a == 0 {
-            continue;
-        }
-        o[0] = ((b[2] as u32 * 255 + a / 2) / a).min(255) as u8;
-        o[1] = ((b[1] as u32 * 255 + a / 2) / a).min(255) as u8;
-        o[2] = ((b[0] as u32 * 255 + a / 2) / a).min(255) as u8;
-        o[3] = a as u8;
-    }
-    out
+    stinkshot_core::annotate::cursor_from_renders(black, white, w, h)
 }
 
 fn bitmap_size(h: HBITMAP) -> Option<(i32, i32)> {
@@ -1976,7 +1968,30 @@ fn bitmap_size(h: HBITMAP) -> Option<(i32, i32)> {
     (n > 0).then_some((bm.bmWidth, bm.bmHeight))
 }
 
-fn try_draw_cursor(img: &mut Rgba, origin: PxPoint) -> anyhow::Result<()> {
+/// The pointer at the moment of a capture, apart from the screen pixels.
+#[derive(Clone, Debug)]
+pub struct CursorShot {
+    /// Straight-alpha pointer image at the size Windows draws it.
+    pub image: Rgba,
+    /// Where the image's top-left sits, virtual coords (position minus hotspot).
+    pub top_left: PxPoint,
+    /// Hotspot inside the image.
+    pub hotspot: PxPoint,
+}
+
+impl CursorShot {
+    /// The image's rect, virtual coords.
+    pub fn rect(&self) -> PxRect {
+        PxRect::new(
+            self.top_left.x,
+            self.top_left.y,
+            self.image.width as i32,
+            self.image.height as i32,
+        )
+    }
+}
+
+fn try_cursor_shot() -> anyhow::Result<Option<CursorShot>> {
     let mut ci = CURSORINFO {
         cbSize: std::mem::size_of::<CURSORINFO>() as u32,
         ..Default::default()
@@ -1985,7 +2000,7 @@ fn try_draw_cursor(img: &mut Rgba, origin: PxPoint) -> anyhow::Result<()> {
     unsafe {
         GetCursorInfo(&mut ci)?;
         if ci.flags.0 & CURSOR_SHOWING.0 == 0 || ci.hCursor.is_invalid() {
-            return Ok(());
+            return Ok(None);
         }
         let hicon = HICON(ci.hCursor.0);
         let mut ii = ICONINFO::default();
@@ -2002,21 +2017,36 @@ fn try_draw_cursor(img: &mut Rgba, origin: PxPoint) -> anyhow::Result<()> {
         if !ii.hbmMask.is_invalid() {
             let _ = DeleteObject(HGDIOBJ(ii.hbmMask.0));
         }
-        let Some((cw, ch)) = size.filter(|(w, h)| *w > 0 && *h > 0 && *w <= 512 && *h <= 512)
+        let max = stinkshot_core::annotate::MAX_CURSOR_SIDE as i32;
+        let Some((cw, ch)) = size.filter(|(w, h)| *w > 0 && *h > 0 && *w <= max && *h <= max)
         else {
-            return Ok(());
+            return Ok(None);
         };
-        let px = ci.ptScreenPos.x - ii.xHotspot as i32 - origin.x;
-        let py = ci.ptScreenPos.y - ii.yHotspot as i32 - origin.y;
-        if px >= img.width as i32 || py >= img.height as i32 || px + cw <= 0 || py + ch <= 0 {
-            return Ok(());
-        }
+        // DrawIconEx applies the AND/XOR masks itself; two passes recover alpha.
         let black = render_icon(hicon, cw, ch, 0)?;
         let white = render_icon(hicon, cw, ch, 255)?;
-        let cursor = combine_black_white(&black, &white, cw as u32, ch as u32);
-        blend_over(img, &cursor, px, py);
+        let image = combine_black_white(&black, &white, cw as u32, ch as u32);
+        Ok(Some(CursorShot {
+            image,
+            top_left: PxPoint {
+                x: ci.ptScreenPos.x - ii.xHotspot as i32,
+                y: ci.ptScreenPos.y - ii.yHotspot as i32,
+            },
+            hotspot: PxPoint {
+                x: ii.xHotspot as i32,
+                y: ii.yHotspot as i32,
+            },
+        }))
     }
-    Ok(())
+}
+
+/// The current pointer image and where it is, or None when it is hidden (or on failure).
+pub fn cursor_shot() -> Option<CursorShot> {
+    let _dpi = crate::dpi::ThreadPerMonitorAware::new();
+    try_cursor_shot()
+        .map_err(|e| log::debug!("cursor_shot: {e}"))
+        .ok()
+        .flatten()
 }
 
 /// Straight-alpha source-over of `src` onto `dst` at (x, y).
@@ -2053,9 +2083,19 @@ pub(crate) fn blend_over(dst: &mut Rgba, src: &Rgba, x: i32, y: i32) {
 /// Draw the current cursor image into `img` (whose top-left is at `origin` in virtual
 /// coords). Used when include_cursor is on and the capture path didn't include it.
 pub fn draw_cursor(img: &mut Rgba, origin: PxPoint) {
-    if let Err(e) = try_draw_cursor(img, origin) {
-        log::debug!("draw_cursor: {e}");
+    if let Some(c) = cursor_shot() {
+        draw_cursor_shot(img, origin, &c);
     }
+}
+
+/// Draw a pointer taken with `cursor_shot` into `img` (top-left at `origin`, virtual coords).
+pub fn draw_cursor_shot(img: &mut Rgba, origin: PxPoint, c: &CursorShot) {
+    blend_over(
+        img,
+        &c.image,
+        c.top_left.x - origin.x,
+        c.top_left.y - origin.y,
+    );
 }
 
 #[cfg(test)]

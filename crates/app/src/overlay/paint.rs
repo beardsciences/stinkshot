@@ -268,7 +268,31 @@ pub fn paint_shape(painter: &Painter, m: ImgToPt, shape: &Shape, skip_text: bool
             let _ = dim;
             dashed_rect(painter, m.r(*rect), Color32::from_white_alpha(200));
         }
+        ShapeKind::Cursor { rect, image } => {
+            let tex = cursor_texture(painter.ctx(), image.rgba());
+            let uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+            painter.image(tex.id(), m.r(*rect), uv, Color32::WHITE);
+        }
     }
+}
+
+/// The pointer bitmap as a texture, uploaded once per distinct image and kept in the
+/// context's memory.
+fn cursor_texture(ctx: &egui::Context, img: &Rgba) -> egui::TextureHandle {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (img.width, img.height, &img.data).hash(&mut h);
+    let id = egui::Id::unique(("ov-cursor-tex", h.finish()));
+    if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return t;
+    }
+    let ci = egui::ColorImage::from_rgba_unmultiplied(
+        [img.width as usize, img.height as usize],
+        &img.data,
+    );
+    let t = ctx.load_texture("ov-cursor", ci, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, t.clone()));
+    t
 }
 
 /// Dim everything inside `clip` except `hole` (used for spotlight previews).

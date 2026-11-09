@@ -614,6 +614,7 @@ fn draw_shape(pm: &mut Pixmap, shape: &Shape, fonts: &Fonts, magnifier_src: Opti
         } => {
             draw_callout(pm, fonts, st, norm(*rect), *tail, text, *size);
         }
+        ShapeKind::Cursor { rect, image } => draw_cursor(pm, norm(*rect), image.rgba()),
         // Handled in earlier passes.
         ShapeKind::Blur { .. }
         | ShapeKind::Pixelate { .. }
@@ -884,6 +885,36 @@ pub(crate) fn draw_magnifier(
         &stroke,
         Transform::identity(),
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// Cursor
+// ---------------------------------------------------------------------------------------
+
+/// The pointer bitmap scaled into `rect`. At 1:1 on whole pixels it is copied exactly.
+pub(crate) fn draw_cursor(pm: &mut Pixmap, rect: RectF, img: &Rgba) {
+    if img.width == 0 || img.height == 0 || rect.w < 0.5 || rect.h < 0.5 {
+        return;
+    }
+    let Some(src) = rgba_to_pixmap(img) else {
+        return;
+    };
+    let sx = rect.w / img.width as f32;
+    let sy = rect.h / img.height as f32;
+    let exact = (sx - 1.0).abs() < 1e-4
+        && (sy - 1.0).abs() < 1e-4
+        && rect.x.fract() == 0.0
+        && rect.y.fract() == 0.0;
+    let paint = tiny_skia::PixmapPaint {
+        quality: if exact {
+            FilterQuality::Nearest
+        } else {
+            FilterQuality::Bilinear
+        },
+        ..tiny_skia::PixmapPaint::default()
+    };
+    let tf = Transform::from_row(sx, 0.0, 0.0, sy, rect.x, rect.y);
+    pm.draw_pixmap(0, 0, src.as_ref(), &paint, tf, None);
 }
 
 // ---------------------------------------------------------------------------------------

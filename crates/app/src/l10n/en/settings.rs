@@ -105,6 +105,10 @@ pub fn get(key: &str) -> Option<&'static str> {
         "settings.hotkeys.reset" => "Reset Shortcuts to Defaults",
         "settings.capture.cursor" => "Include Mouse Cursor",
         "settings.capture.cursor.desc" => "Draw the pointer into screenshots.",
+        "settings.capture.cursor_object" => "Cursor as Object",
+        "settings.capture.cursor_object.desc" => {
+            "In the editor, keep the pointer as a movable object. Del removes it."
+        }
         "settings.capture.snap" => "Snap to Windows and Elements",
         "settings.capture.snap.desc" => {
             "Highlight windows and UI elements under the cursor for one-click capture."
@@ -399,6 +403,8 @@ pub const KEYS: &[&str] = &[
     "settings.hotkeys.reset",
     "settings.capture.cursor",
     "settings.capture.cursor.desc",
+    "settings.capture.cursor_object",
+    "settings.capture.cursor_object.desc",
     "settings.capture.snap",
     "settings.capture.snap.desc",
     "settings.capture.loupe",

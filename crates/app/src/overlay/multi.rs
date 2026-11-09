@@ -194,7 +194,7 @@ impl Overlay {
         if !self.add_armed(shift) {
             return false;
         }
-        if !self.doc.shapes.is_empty() {
+        if !self.take_back_cursor() {
             self.flash_notice(tr!("overlay.notice.add_regions_first"));
             self.drag = Drag::Ignore;
             return true;
@@ -220,7 +220,10 @@ impl Overlay {
 
     /// Esc with several regions: drop the active one, the previous one becomes active.
     pub(super) fn remove_active_region(&mut self) -> bool {
-        if !matches!(self.kind, Kind::Capture) || !self.doc.shapes.is_empty() {
+        if !matches!(self.kind, Kind::Capture)
+            || self.extra_regions.is_empty()
+            || !self.take_back_cursor()
+        {
             return false;
         }
         let Some(r) = self.extra_regions.pop() else {
@@ -251,6 +254,7 @@ impl Overlay {
             img.height,
             hover::local_to_virtual(union, self.bounds)
         );
+        let cursors = self.cursors_for_combine();
         let mut doc = Doc::new(img.width, img.height);
         doc.base_width = img.width;
         doc.base_height = img.height;
@@ -263,6 +267,7 @@ impl Overlay {
         self.doc = doc;
         self.undo = super::undo::UndoStack::new();
         self.selected.clear();
+        self.add_combined_cursors(cursors, &placements);
         self.hover = None;
         self.view = super::view::View::IDENTITY;
         self.bar_origin = None;

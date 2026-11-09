@@ -63,7 +63,13 @@ pub struct Hotkeys {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Capture {
+    /// Draw the pointer into the pixels of captures that skip the editor (quick window and
+    /// full-screen captures, scrolling, CLI), and of editor captures when `cursor_object`
+    /// is off.
     pub include_cursor: bool,
+    /// In the editor (region overlay, full screen with the editor on), keep the pointer as a
+    /// movable object, selected at first so Del removes it. Overrides `include_cursor` there.
+    pub cursor_object: bool,
     pub freeze_screen: bool,
     pub snap_to_elements: bool,
     pub show_loupe: bool,
@@ -210,6 +216,7 @@ impl Default for Capture {
     fn default() -> Self {
         Self {
             include_cursor: false,
+            cursor_object: true,
             freeze_screen: true,
             snap_to_elements: true,
             show_loupe: true,
@@ -603,6 +610,8 @@ include_cursor = true
         let cfg = Config::load_from(&p).unwrap();
         assert!(cfg.capture.include_cursor);
         assert!(!cfg.capture.open_editor_after_capture);
+        // Configs from before the cursor object existed get it on.
+        assert!(cfg.capture.cursor_object);
         std::fs::write(
             &p,
             "[capture]

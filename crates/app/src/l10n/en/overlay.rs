@@ -120,6 +120,7 @@ pub fn get(key: &str) -> Option<&'static str> {
         "overlay.notice.add_regions_hint" => "Drag to add regions. Enter copies them all.",
         "overlay.notice.copied_shape" => "Copied 1 Shape: {key} to Paste",
         "overlay.notice.copied_shapes" => "Copied {n} Shapes: {key} to Paste",
+        "overlay.notice.cursor_kept" => "Cursor Kept: Del Removes It",
         // Finish errors (toasts).
         "overlay.error.finish_title" => "Could Not Finish Capture",
         "overlay.error.finish_body" => {
@@ -384,6 +385,7 @@ pub const KEYS: &[&str] = &[
     "overlay.notice.add_regions_hint",
     "overlay.notice.copied_shape",
     "overlay.notice.copied_shapes",
+    "overlay.notice.cursor_kept",
     "overlay.error.finish_title",
     "overlay.error.finish_body",
     "overlay.error.render_title",

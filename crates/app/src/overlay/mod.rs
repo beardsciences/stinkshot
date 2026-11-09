@@ -37,6 +37,7 @@
 //! (ruler), `multi` (multi-region capture). This file owns the state machine.
 
 mod beautify_panel;
+mod cursor;
 mod hover;
 pub(crate) mod keys;
 mod measure;
@@ -350,6 +351,8 @@ pub struct Overlay {
     options: ShapeOptions,
     /// Selected shapes, in the order they were picked.
     selected: Vec<ShapeId>,
+    /// The captured mouse pointer as an object (`cursor.rs`).
+    cursor: cursor::CursorObj,
     /// Shapes copied with Ctrl+C (editor only) and how often they were pasted.
     clipboard: Vec<Shape>,
     pastes: u32,
@@ -557,6 +560,7 @@ impl Overlay {
             .map(|m| (m.rect.translate(-bounds.x, -bounds.y), m.scale))
             .collect();
         let cursor_local = (frozen.cursor.x - bounds.x, frozen.cursor.y - bounds.y);
+        let cursor_obj = cursor::CursorObj::new(&frozen, shared.config.capture.cursor_object);
 
         let mut o = Overlay {
             kind: Kind::Capture,
@@ -619,6 +623,7 @@ impl Overlay {
                 ..ShapeOptions::default()
             },
             selected: Vec::new(),
+            cursor: cursor_obj,
             clipboard: Vec::new(),
             pastes: 0,
             magnifier_source: None,
@@ -679,7 +684,10 @@ impl Overlay {
 
         match mode {
             OverlayMode::Capture => o.kind = Kind::Capture,
-            OverlayMode::SelectRegion(p) => o.kind = Kind::Select(p),
+            OverlayMode::SelectRegion(p) => {
+                o.kind = Kind::Select(p);
+                o.cursor.pending = false;
+            }
             OverlayMode::Annotate {
                 base,
                 mut doc,
@@ -688,6 +696,15 @@ impl Overlay {
                 source,
             } => {
                 o.kind = Kind::Annotate;
+                o.cursor.pending = false;
+                // A fresh capture whose only shape is the pointer (full screen with Cursor
+                // as Object): it starts selected so Del removes it.
+                let fresh_cursor = match doc.shapes.as_slice() {
+                    [s] if editing.is_none() && matches!(s.kind, ShapeKind::Cursor { .. }) => {
+                        Some(s.id)
+                    }
+                    _ => None,
+                };
                 // The editor centres the image on the cursor's monitor and leaves room for
                 // the docked bars under it; a remembered spot would land on the image or on
                 // another monitor, so the editor always opens docked.
@@ -700,6 +717,9 @@ impl Overlay {
                 let base = Arc::new(base);
                 o.orig = Some(base.clone());
                 o.base = Some(base);
+                if let Some(id) = fresh_cursor {
+                    o.auto_select_cursor(id);
+                }
             }
         }
         o
@@ -1337,7 +1357,13 @@ impl Overlay {
         }
         // Ctrl+C with shapes selected copies the shapes (inside the editor only); Enter
         // always copies the image.
-        if k.copy_event && !k.enter && self.annotating() && !self.selected.is_empty() {
+        // The automatically selected pointer does not count: Ctrl+C still copies the image.
+        if k.copy_event
+            && !k.enter
+            && self.annotating()
+            && !self.selected.is_empty()
+            && !self.cursor_auto_selected()
+        {
             self.copy_shapes();
             return;
         }
@@ -1444,7 +1470,7 @@ impl Overlay {
         if k.arrows != (0, 0) && self.sel.is_some() && matches!(self.drag, Drag::None) {
             let (dx, dy) = k.arrows;
             let step = if k.shift { 10 } else { 1 };
-            if self.annotating() && !self.selected.is_empty() {
+            if self.annotating() && !self.selected.is_empty() && !self.cursor_auto_selected() {
                 let pre = self.doc.clone();
                 // One screen px per press, whatever the zoom.
                 let k_img = 1.0 / (self.scale * self.view.zoom).max(0.01);
@@ -1575,6 +1601,11 @@ impl Overlay {
         }
         if self.magnifier_source.take().is_some() {
             return;
+        }
+        // Esc does what it did before the pointer was selected for the user.
+        if self.cursor_auto_selected() {
+            self.selected.clear();
+            self.forget_cursor_auto();
         }
         if self.annotating() && (!self.selected.is_empty() || self.tool != Tool::Select) {
             self.selected.clear();

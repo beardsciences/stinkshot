@@ -281,7 +281,7 @@ pub fn bounds(shape: &Shape, measure: Measure) -> RectF {
         | ShapeKind::HighlightBox { rect } => *rect,
         ShapeKind::Magnifier { source, dest, .. } => union(*source, *dest),
         ShapeKind::Callout { rect, tail, .. } => union(*rect, RectF::new(tail.x, tail.y, 0.0, 0.0)),
-        ShapeKind::Spotlight { rect, .. } => *rect,
+        ShapeKind::Spotlight { rect, .. } | ShapeKind::Cursor { rect, .. } => *rect,
     }
 }
 
@@ -372,6 +372,7 @@ pub fn hit(shape: &Shape, p: PtF, tol: f32, measure: Measure) -> bool {
             rect.expand(tol).contains(p) || dist_to_segment(p, root, *tail) <= 8.0 + tol
         }
         ShapeKind::Spotlight { rect, .. } => near_rect_border(*rect, p, 4.0 + tol),
+        ShapeKind::Cursor { rect, .. } => rect.expand(tol).contains(p),
     }
 }
 
@@ -446,6 +447,18 @@ pub fn handles(shape: &Shape, measure: Measure) -> Vec<(ShapeHandle, PtF)> {
                 ShapeHandle::Rect(Handle8::Right),
                 pt(center.x + radius, center.y),
             ));
+        }
+        // Corners only: the pointer keeps its aspect ratio.
+        ShapeKind::Cursor { rect, .. } => {
+            for h in [
+                Handle8::TopLeft,
+                Handle8::TopRight,
+                Handle8::BottomRight,
+                Handle8::BottomLeft,
+            ] {
+                let (x, y) = super::selection::handle_pos((rect.x, rect.y, rect.w, rect.h), h);
+                out.push((ShapeHandle::Rect(h), pt(x, y)));
+            }
         }
         ShapeKind::Callout { tail, .. } => {
             if let Some(r) = main_rect(shape) {
@@ -604,6 +617,9 @@ pub fn drag_handle(
             };
         }
         (ShapeKind::Callout { tail, .. }, ShapeHandle::Tail) => *tail = p,
+        (ShapeKind::Cursor { rect, image }, ShapeHandle::Rect(h)) => {
+            *rect = resize_cursor(*rect, h, p, image.width() as f32, image.height() as f32);
+        }
         (ShapeKind::Step { center, radius, .. }, ShapeHandle::Rect(_)) => {
             *radius = dist(*center, p).clamp(6.0, 120.0);
         }
@@ -636,6 +652,27 @@ pub fn drag_handle(
         }
         _ => {}
     }
+}
+
+/// Resize a pointer by dragging corner `h` to `p`: the opposite corner stays, the aspect
+/// ratio of its `img_w` x `img_h` bitmap is kept, and the scale stays within 1/4x..8x.
+pub fn resize_cursor(r: RectF, h: Handle8, p: PtF, img_w: f32, img_h: f32) -> RectF {
+    let (hd, vd) = (h.h_dir(), h.v_dir());
+    if hd == 0 || vd == 0 || img_w < 1.0 || img_h < 1.0 {
+        return r;
+    }
+    let ax = if hd < 0 { r.x + r.w } else { r.x };
+    let ay = if vd < 0 { r.y + r.h } else { r.y };
+    let sx = ((p.x - ax) * hd as f32).max(0.0) / img_w;
+    let sy = ((p.y - ay) * vd as f32).max(0.0) / img_h;
+    let s = sx.max(sy).clamp(0.25, 8.0);
+    let (w, h) = (img_w * s, img_h * s);
+    RectF::new(
+        if hd < 0 { ax - w } else { ax },
+        if vd < 0 { ay - h } else { ay },
+        w,
+        h,
+    )
 }
 
 fn min_size(mut r: RectF) -> RectF {
@@ -915,6 +952,9 @@ pub fn is_highlight(kind: &ShapeKind) -> bool {
 /// Recolor a shape. Highlighters keep their translucency; callouts recolor their fill too;
 /// text on a pill recolors the pill and picks readable ink.
 pub fn recolor(shape: &mut Shape, color: [u8; 4]) {
+    if matches!(shape.kind, ShapeKind::Cursor { .. }) {
+        return;
+    }
     let mut c = color;
     if is_highlight(&shape.kind) {
         c[3] = HIGHLIGHTER_ALPHA;
@@ -976,6 +1016,7 @@ pub fn adjust_size(shape: &mut Shape, delta: f32) {
             *block = ((*block as f32 + delta * 2.0).round().max(2.0) as u32).min(200);
         }
         ShapeKind::Spotlight { dim, .. } => *dim = (*dim + delta * 0.05).clamp(0.1, 0.95),
+        ShapeKind::Cursor { .. } => {}
         _ => shape.style.width = (shape.style.width + delta).clamp(1.0, 64.0),
     }
 }
@@ -2075,5 +2116,81 @@ mod tests {
         recolor(&mut s, [1, 2, 3, 255]);
         assert_eq!(s.style.color, [1, 2, 3, HIGHLIGHTER_ALPHA]);
         assert_eq!(display_width(&s), (s.style.width / 4.0).clamp(1.0, 64.0));
+    }
+
+    fn cursor_doc() -> (Doc, ShapeId) {
+        let img = stinkshot_core::annotate::CursorImage::new(stinkshot_core::Rgba::filled(
+            10,
+            20,
+            [0, 0, 0, 255],
+        ));
+        let (k, st) = stinkshot_core::annotate::cursor_shape(pt(50.0, 50.0), img);
+        let mut d = Doc::new(400, 300);
+        let id = d.add(k, st);
+        (d, id)
+    }
+
+    #[test]
+    fn cursor_hits_bounds_and_corner_handles() {
+        let (d, id) = cursor_doc();
+        let s = d.get(id).unwrap();
+        assert_eq!(bounds(s, &measure), RectF::new(50.0, 50.0, 10.0, 20.0));
+        assert_eq!(hit_test(&d, pt(55.0, 60.0), 0.0, &measure), Some(id));
+        assert_eq!(hit_test(&d, pt(70.0, 60.0), 0.0, &measure), None);
+        let hs = handles(s, &measure);
+        assert_eq!(hs.len(), 4);
+        assert!(hs.contains(&(ShapeHandle::Rect(Handle8::BottomRight), pt(60.0, 70.0))));
+    }
+
+    #[test]
+    fn cursor_resizes_with_aspect_and_ignores_color_and_size_keys() {
+        let (mut d, id) = cursor_doc();
+        let s = d.get_mut(id).unwrap();
+        // Drag the bottom-right corner to double width: height follows.
+        drag_handle(
+            s,
+            ShapeHandle::Rect(Handle8::BottomRight),
+            pt(70.0, 60.0),
+            false,
+            &measure,
+        );
+        assert!(
+            matches!(&s.kind, ShapeKind::Cursor { rect, .. } if *rect == RectF::new(50.0, 50.0, 20.0, 40.0))
+        );
+        // Top-left keeps the bottom-right corner fixed.
+        drag_handle(
+            s,
+            ShapeHandle::Rect(Handle8::TopLeft),
+            pt(65.0, 80.0),
+            false,
+            &measure,
+        );
+        assert!(
+            matches!(&s.kind, ShapeKind::Cursor { rect, .. } if *rect == RectF::new(65.0, 80.0, 5.0, 10.0))
+        );
+        // Never smaller than a quarter.
+        drag_handle(
+            s,
+            ShapeHandle::Rect(Handle8::TopLeft),
+            pt(69.5, 89.5),
+            false,
+            &measure,
+        );
+        assert!(
+            matches!(&s.kind, ShapeKind::Cursor { rect, .. } if (rect.w - 2.5).abs() < 1e-4 && (rect.h - 5.0).abs() < 1e-4)
+        );
+        let before = s.clone();
+        recolor(s, [1, 2, 3, 255]);
+        adjust_size(s, 3.0);
+        assert_eq!(*s, before);
+    }
+
+    #[test]
+    fn resize_cursor_ignores_edge_handles() {
+        let r = RectF::new(0.0, 0.0, 10.0, 20.0);
+        assert_eq!(
+            resize_cursor(r, Handle8::Right, pt(50.0, 50.0), 10.0, 20.0),
+            r
+        );
     }
 }

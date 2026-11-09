@@ -1,9 +1,10 @@
 //! Capture helpers shared by the shell, its workers and the headless CLI.
 
 use anyhow::Context;
+use stinkshot_core::annotate::{self, CursorImage, Doc, ShapeId};
 use stinkshot_core::config::{Config, parse_hex_color};
 use stinkshot_core::frame::{self, WindowFx};
-use stinkshot_core::{PxPoint, PxRect, Rgba};
+use stinkshot_core::{PtF, PxPoint, PxRect, Rgba};
 use stinkshot_platform::capture::{self, Frozen, WindowCaptureOpts};
 use stinkshot_platform::windows_enum::WinInfo;
 use stinkshot_platform::{monitors, windows_enum};
@@ -103,6 +104,23 @@ pub fn crop_frozen(frozen: &Frozen, rect: PxRect) -> Rgba {
     frozen
         .image
         .crop(rect.translate(-frozen.bounds.x, -frozen.bounds.y))
+}
+
+/// Cursor as Object: put the pointer from `frozen` into `doc`, whose image is the `rect`
+/// (virtual coords) part of the snapshot, when it was kept out of the pixels and shows there.
+/// Returns the new shape's id.
+pub fn add_cursor_object(doc: &mut Doc, frozen: &Frozen, rect: PxRect) -> Option<ShapeId> {
+    let c = frozen
+        .cursor_shot
+        .as_ref()
+        .filter(|_| !frozen.cursor_drawn)?;
+    c.rect().intersect(&rect)?;
+    let pos = PtF::new(
+        (c.top_left.x - rect.x) as f32,
+        (c.top_left.y - rect.y) as f32,
+    );
+    let (kind, style) = annotate::cursor_shape(pos, CursorImage::new(c.image.clone()));
+    Some(doc.add(kind, style))
 }
 
 /// Full rect of the monitor containing `p`, or the whole snapshot if unknown.

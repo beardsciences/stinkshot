@@ -339,11 +339,22 @@ fn opens_region_overlay(cmd: &Command) -> bool {
     )
 }
 
+/// Whether a freeze draws the pointer into its pixels: per Include Mouse Cursor, except for
+/// the editor when Cursor as Object keeps the pointer as a movable object instead.
+fn freeze_draws_cursor(editor: bool, cap: &stinkshot_core::config::Capture) -> bool {
+    cap.include_cursor && !(editor && cap.cursor_object)
+}
+
 /// Freeze the screen for `cmd` while the app is still starting, and for the region overlay
 /// put the frozen screen on display at once (`quick_overlay`).
-fn early_freeze_for(cmd: &Command, include_cursor: bool, accent: [u8; 3]) -> Option<EarlyFreeze> {
+fn early_freeze_for(
+    cmd: &Command,
+    cap: &stinkshot_core::config::Capture,
+    accent: [u8; 3],
+) -> Option<EarlyFreeze> {
     let windows = windows_enum::visible_windows();
-    let frozen = match capture::freeze_all(include_cursor) {
+    let editor = matches!(cmd, Command::CaptureRegion);
+    let frozen = match capture::freeze_all(freeze_draws_cursor(editor, cap)) {
         Ok(f) => f,
         Err(e) => {
             log::debug!("early freeze failed: {e:#}");
@@ -378,7 +389,7 @@ fn prefreeze_while_gpu_starts(
     initial: Option<&Command>,
     ipc_rx: &Receiver<Vec<String>>,
     gpu: Option<&std::thread::JoinHandle<Option<eframe::egui_wgpu::WgpuSetupExisting>>>,
-    include_cursor: bool,
+    cap: &stinkshot_core::config::Capture,
     accent: [u8; 3],
 ) -> (Vec<Vec<String>>, Option<EarlyFreeze>) {
     let mut queued = Vec::new();
@@ -389,7 +400,7 @@ fn prefreeze_while_gpu_starts(
     if let Some(cmd) = initial.filter(|c| freezes_first(c))
         && !gpu.is_finished()
     {
-        early = early_freeze_for(cmd, include_cursor, accent);
+        early = early_freeze_for(cmd, cap, accent);
     }
     while !gpu.is_finished() {
         match ipc_rx.recv_timeout(Duration::from_millis(5)) {
@@ -398,7 +409,7 @@ fn prefreeze_while_gpu_starts(
                 // forwarded one must not take it and leave the launch command unfrozen first.
                 let taken = early.is_some() || initial.is_some_and(freezes_first);
                 if !taken && let Some(cmd) = cli::command_from_args(&args).filter(freezes_first) {
-                    early = early_freeze_for(&cmd, include_cursor, accent);
+                    early = early_freeze_for(&cmd, cap, accent);
                 }
                 queued.push(args);
             }
@@ -484,7 +495,7 @@ fn run_app(
         initial.as_ref(),
         &ipc_rx,
         gpu.as_ref(),
-        config.capture.include_cursor,
+        &config.capture,
         [accent[0], accent[1], accent[2]],
     );
     let wgpu_options = crate::gpu::options(gpu);
@@ -1255,6 +1266,15 @@ impl Shell {
     }
 
     fn freeze(&mut self) -> Option<(Frozen, Vec<stinkshot_platform::windows_enum::WinInfo>)> {
+        self.freeze_for(false)
+    }
+
+    /// `freeze` for a capture that opens in the editor (`editor`), where Cursor as Object
+    /// keeps the pointer out of the pixels.
+    fn freeze_for(
+        &mut self,
+        editor: bool,
+    ) -> Option<(Frozen, Vec<stinkshot_platform::windows_enum::WinInfo>)> {
         if let Some(e) = self.early_freeze.take()
             && e.at.elapsed() < EARLY_FREEZE_MAX_AGE
         {
@@ -1265,7 +1285,7 @@ impl Shell {
         let t0 = Instant::now();
         let windows = windows_enum::visible_windows();
         let t1 = Instant::now();
-        let res = capture::freeze_all(self.shared.config.capture.include_cursor);
+        let res = capture::freeze_all(freeze_draws_cursor(editor, &self.shared.config.capture));
         timing::point(format_args!(
             "freeze done: windows {:.1} ms, freeze_all {:.1} ms",
             (t1 - t0).as_secs_f64() * 1000.0,
@@ -1320,7 +1340,8 @@ impl Shell {
         if self.capture_blocked() {
             return;
         }
-        let Some((frozen, windows)) = self.freeze() else {
+        let editor = matches!(mode, OverlayMode::Capture);
+        let Some((frozen, windows)) = self.freeze_for(editor) else {
             return;
         };
         self.freeze_cache =
@@ -1355,7 +1376,7 @@ impl Shell {
             self.capture_fullscreen_quick();
             return;
         }
-        let Some((frozen, windows)) = self.freeze() else {
+        let Some((frozen, windows)) = self.freeze_for(true) else {
             return;
         };
         let mut source = capture_ops::target_from(&windows)
@@ -1372,7 +1393,10 @@ impl Shell {
             );
             return;
         }
-        let doc = Doc::new(base.width, base.height);
+        let mut doc = Doc::new(base.width, base.height);
+        if self.shared.config.capture.cursor_object {
+            capture_ops::add_cursor_object(&mut doc, &frozen, mon);
+        }
         self.open_overlay(
             OverlayMode::Annotate {
                 base,
