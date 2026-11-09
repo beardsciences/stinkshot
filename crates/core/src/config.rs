@@ -27,6 +27,8 @@ pub struct General {
     pub start_with_windows: bool,
     /// "system" | "dark" | "light"
     pub theme: String,
+    /// UI language: "system" (Windows locale), a code like "en", or "pseudo".
+    pub language: String,
     /// Hex like "#7fd36a".
     pub accent: String,
     pub copy_to_clipboard: bool,
@@ -170,6 +172,7 @@ impl Default for General {
         Self {
             start_with_windows: false,
             theme: "system".into(),
+            language: "system".into(),
             accent: "#7fd36a".into(),
             copy_to_clipboard: true,
             show_toast: true,
