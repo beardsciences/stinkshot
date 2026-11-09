@@ -44,6 +44,8 @@ mod multi;
 mod paint;
 mod panels;
 mod picker;
+#[cfg(test)]
+mod pseudo_shots;
 mod render;
 mod scan;
 mod selection;

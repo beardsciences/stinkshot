@@ -548,20 +548,26 @@ fn review(
                         egui::epaint::StrokeKind::Inside,
                     );
                 }
-                ui.painter().text(
-                    egui::pos2(cb.right() + 10.0, rect.center().y),
-                    Align2::LEFT_CENTER,
-                    kind_label(f.kind),
-                    egui::FontId::proportional(12.5),
-                    pal.text,
-                );
-                ui.painter().text(
+                let preview = ui.painter().text(
                     egui::pos2(rect.right() - 8.0, rect.center().y),
                     Align2::RIGHT_CENTER,
                     &f.preview,
                     egui::FontId::monospace(12.0),
                     pal.text_secondary,
                 );
+                // The kind name gives way to the preview: long translations end in "...".
+                let left = cb.right() + 10.0;
+                let mut job = egui::text::LayoutJob::simple_singleline(
+                    kind_label(f.kind).to_owned(),
+                    egui::FontId::proportional(12.5),
+                    pal.text,
+                );
+                job.wrap = egui::text::TextWrapping::truncate_at_width(
+                    (preview.left() - 10.0 - left).max(20.0),
+                );
+                let galley = ui.painter().layout_job(job);
+                let y = rect.center().y - galley.size().y / 2.0;
+                ui.painter().galley(egui::pos2(left, y), galley, pal.text);
                 if resp.clicked() {
                     out.push(SmartAction::Toggle(i));
                 }
