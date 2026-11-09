@@ -442,6 +442,7 @@ fn run_app(
     gpu: Option<std::thread::JoinHandle<Option<eframe::egui_wgpu::WgpuSetupExisting>>>,
 ) -> anyhow::Result<()> {
     let config = Config::load();
+    crate::l10n::apply(&config.general.language);
     timing::point(format_args!("config loaded"));
 
     // OCR engine creation touches COM; do it on a scratch thread so the UI thread's apartment

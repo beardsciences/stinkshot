@@ -20,6 +20,7 @@ mod gpu;
 mod history_ui;
 mod hotkeys;
 mod icon_gen;
+mod l10n;
 mod logger;
 mod logo_anim;
 mod overlay;
