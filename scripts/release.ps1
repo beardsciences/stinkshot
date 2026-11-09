@@ -283,7 +283,7 @@ try {
         version  = $Version
         tag      = $Tag
         released = (Get-Date -Format 'yyyy-MM-dd')
-        page     = "$ProjectUrl/releases/tag/$Tag"
+        page     = "https://stinkshot.com/download"
         commit   = $commit
         files    = @($files)
     }

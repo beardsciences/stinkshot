@@ -5,12 +5,10 @@
 //! release page.
 //!
 //! Flow (docs/notes/release.md):
-//! 1. GET the Forgejo "latest release" API for its `tag_name`. Untrusted: it only decides
-//!    whether to look further. A tag that is not newer ends the check (saves two requests).
-//! 2. GET `stinkshot-release.json` and its minisign signature `stinkshot-release.json.minisig`
-//!    from that release's downloads, at URLs built from the fixed base below (never from URLs
-//!    in the API answer).
-//! 3. Verify the signature with the public key embedded at build time
+//! 1. GET `stinkshot-release.json` and its minisign signature `stinkshot-release.json.minisig`
+//!    from the fixed base on stinkshot.com (a 404 means nothing is published: up to date).
+//!    stinkshot.com is used so the code host can move without breaking installed copies.
+//! 2. Verify the signature with the public key embedded at build time
 //!    (`assets/release-key.pub`, prehashed Ed25519 only). Only the verified manifest's version,
 //!    tag and page are trusted; a missing or bad signature is an error and nothing is shown.
 
@@ -19,12 +17,11 @@ use std::time::Duration;
 use anyhow::{Context, anyhow, bail};
 use serde::Deserialize;
 
-pub const RELEASES_API: &str =
-    "https://code.mccullough.dev/api/v1/repos/beard/stinkshot/releases/latest";
-/// `<base>/<tag>/<file>` is a release asset.
-pub const DOWNLOAD_BASE: &str = "https://code.mccullough.dev/beard/stinkshot/releases/download";
-/// A manifest's `page` must start with this, or the default release page is used instead.
-pub const PROJECT_URL: &str = "https://code.mccullough.dev/beard/stinkshot/";
+/// `<base>/<file>` is the latest release's signed info.
+pub const RELEASE_BASE: &str = "https://stinkshot.com/release";
+/// A manifest's `page` must start with this, or `DEFAULT_PAGE` is used instead.
+pub const PROJECT_URL: &str = "https://stinkshot.com/";
+pub const DEFAULT_PAGE: &str = "https://stinkshot.com/download";
 pub const MANIFEST_NAME: &str = "stinkshot-release.json";
 pub const SIGNATURE_NAME: &str = "stinkshot-release.json.minisig";
 /// The release signing public key (minisign format). The secret key never enters the repo.
@@ -35,7 +32,6 @@ pub const UNTRUSTED: &str = "release manifest failed verification";
 /// (not uploaded yet): not a verification failure.
 pub const UNSIGNED: &str = "release has no signed release info";
 
-const MAX_API_BYTES: u64 = 1024 * 1024;
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 const MAX_SIGNATURE_BYTES: u64 = 4 * 1024;
 
@@ -75,37 +71,27 @@ pub fn check() -> anyhow::Result<Option<Release>> {
         .user_agent(format!("Stinkshot/{}", env!("CARGO_PKG_VERSION")))
         .build()
         .into();
-    // Forgejo answers 404 when the repository has no published release yet: nothing newer
-    // exists, so this is a successful "up to date", not a failure to retry.
-    let Some(api) = get(&agent, RELEASES_API, "application/json", MAX_API_BYTES)? else {
-        return Ok(None);
-    };
-    let body: serde_json::Value =
-        serde_json::from_slice(&api).context("update check response was not JSON")?;
-    let tag = latest_tag(&body)?;
-    if !is_newer(&tag, env!("CARGO_PKG_VERSION")) {
-        return Ok(None);
-    }
-    let manifest = get(
+    // 404 before the first release is published: nothing newer exists, so this is a
+    // successful "up to date", not a failure to retry.
+    let Some(manifest) = get(
         &agent,
-        &asset_url(&tag, MANIFEST_NAME),
+        &asset_url(MANIFEST_NAME),
         "application/json",
         MAX_MANIFEST_BYTES,
     )?
-    .ok_or_else(|| anyhow!("{UNSIGNED}: release {tag} has no {MANIFEST_NAME}"))?;
+    else {
+        return Ok(None);
+    };
     let signature = get(
         &agent,
-        &asset_url(&tag, SIGNATURE_NAME),
+        &asset_url(SIGNATURE_NAME),
         "text/plain",
         MAX_SIGNATURE_BYTES,
     )?
-    .ok_or_else(|| anyhow!("{UNSIGNED}: release {tag} has no {SIGNATURE_NAME}"))?;
+    .ok_or_else(|| anyhow!("{UNSIGNED}: no {SIGNATURE_NAME} published"))?;
     let signature =
         String::from_utf8(signature).map_err(|_| anyhow!("{UNTRUSTED}: signature is not text"))?;
     let m = verify_manifest(&manifest, &signature, RELEASE_PUBLIC_KEY)?;
-    if m.tag != tag {
-        bail!("{UNTRUSTED}: signed tag {} does not match {tag}", m.tag);
-    }
     Ok(release_if_newer(&m, env!("CARGO_PKG_VERSION")))
 }
 
@@ -130,22 +116,8 @@ fn get(
     Ok(Some(bytes))
 }
 
-fn asset_url(tag: &str, name: &str) -> String {
-    format!("{DOWNLOAD_BASE}/{tag}/{name}")
-}
-
-/// `tag_name` of a Forgejo/Gitea release object, restricted to characters that are safe in a
-/// URL path segment (the tag is put into the asset URLs).
-pub fn latest_tag(v: &serde_json::Value) -> anyhow::Result<String> {
-    let tag = v
-        .get("tag_name")
-        .and_then(|t| t.as_str())
-        .filter(|t| !t.is_empty())
-        .ok_or_else(|| anyhow!("release has no tag_name"))?;
-    if !is_safe_tag(tag) {
-        bail!("release tag has unexpected characters");
-    }
-    Ok(tag.to_string())
+fn asset_url(name: &str) -> String {
+    format!("{RELEASE_BASE}/{name}")
 }
 
 fn is_safe_tag(tag: &str) -> bool {
@@ -199,7 +171,7 @@ pub fn release_if_newer(m: &Manifest, current: &str) -> Option<Release> {
     let url = if m.page.starts_with(PROJECT_URL) && !m.page.contains(char::is_whitespace) {
         m.page.clone()
     } else {
-        format!("{PROJECT_URL}releases/tag/{}", m.tag)
+        DEFAULT_PAGE.to_string()
     };
     Some(Release {
         tag: m.tag.clone(),
@@ -275,21 +247,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_latest_tag() {
-        let v = serde_json::json!({"tag_name": "v0.2.0", "html_url": "https://example.test/r/v0.2.0", "id": 4});
-        assert_eq!(latest_tag(&v).unwrap(), "v0.2.0");
-        assert!(latest_tag(&serde_json::json!({"name": "x"})).is_err());
-        assert!(latest_tag(&serde_json::json!({"tag_name": ""})).is_err());
-        // The tag goes into a URL path: no separators, queries or traversal.
-        for bad in ["v1/../../x", "v1?x=1", "..", "v1 2", "v1#a", "v1%2f"] {
-            assert!(
-                latest_tag(&serde_json::json!({ "tag_name": bad })).is_err(),
-                "{bad}"
-            );
-        }
-    }
-
-    #[test]
     fn embedded_release_key_parses() {
         assert!(minisign_verify::PublicKey::decode(RELEASE_PUBLIC_KEY.trim()).is_ok());
         // The test key must never be the release key.
@@ -304,10 +261,8 @@ mod tests {
         assert_eq!(m.files.len(), 1);
         let r = release_if_newer(&m, "0.1.0").unwrap();
         assert_eq!(r.tag, "v9.9.9");
-        assert_eq!(
-            r.url,
-            "https://code.mccullough.dev/beard/stinkshot/releases/tag/v9.9.9"
-        );
+        // The fixture's page is on the old code host, outside PROJECT_URL.
+        assert_eq!(r.url, DEFAULT_PAGE);
         assert!(release_if_newer(&m, "9.9.9").is_none());
         assert!(release_if_newer(&m, "10.0.0").is_none());
     }
@@ -388,9 +343,6 @@ mod tests {
             files: vec![],
         };
         let r = release_if_newer(&m, "1.0.0").unwrap();
-        assert_eq!(
-            r.url,
-            "https://code.mccullough.dev/beard/stinkshot/releases/tag/v1.2.3"
-        );
+        assert_eq!(r.url, DEFAULT_PAGE);
     }
 }

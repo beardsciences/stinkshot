@@ -31,28 +31,28 @@ impl Drop for ComGuard {
     }
 }
 
-/// COM + Media Foundation startup for the lifetime of the guard (both are ref counted).
+/// COM for the lifetime of the guard (ref counted) plus process-wide Media Foundation.
 pub struct MfSession {
     _mf: MfGuard,
     _com: ComGuard,
 }
 
-/// Media Foundation startup/shutdown only (ref counted, usable from any thread). Held by
-/// objects that must outlive the worker threads that created Media Foundation resources.
+/// Media Foundation started for the rest of the process. MF is started once and never shut
+/// down: each MFStartup/MFShutdown cycle leaks the platform work-queue thread pools (about
+/// 50 handles per recording or export). Kept as a token so call sites read the same.
 pub struct MfGuard;
+
+static MF_STARTED: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
 
 impl MfGuard {
     pub fn new() -> Result<Self> {
-        unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) }.context("MFStartup failed")?;
+        MF_STARTED
+            .get_or_init(|| {
+                unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) }.map_err(|e| format!("{e}"))
+            })
+            .clone()
+            .map_err(|e| anyhow::anyhow!("MFStartup failed: {e}"))?;
         Ok(MfGuard)
-    }
-}
-
-impl Drop for MfGuard {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = MFShutdown();
-        }
     }
 }
 

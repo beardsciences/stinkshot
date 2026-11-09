@@ -45,9 +45,16 @@ pub struct OverlayFonts {
 }
 
 impl OverlayFonts {
+    /// Loaded once per process: `Fonts::load_system` maps (and keeps) the font files, so
+    /// calling it per recording leaked two file mappings each time.
+    pub fn load() -> Option<OverlayFonts> {
+        static CACHE: std::sync::OnceLock<Option<OverlayFonts>> = std::sync::OnceLock::new();
+        CACHE.get_or_init(Self::load_uncached).clone()
+    }
+
     /// Prefer the shared `stinkshot_core::fonts::Fonts` loader; fall back to reading Segoe UI
     /// / Arial straight from the Windows font folder.
-    pub fn load() -> Option<OverlayFonts> {
+    fn load_uncached() -> Option<OverlayFonts> {
         let core = std::panic::catch_unwind(stinkshot_core::fonts::Fonts::load_system);
         if let Ok(Ok(f)) = core {
             return Some(OverlayFonts {

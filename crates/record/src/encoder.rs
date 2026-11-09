@@ -189,7 +189,40 @@ impl Encoder {
     }
 
     pub fn finalize(&self) -> Result<()> {
-        unsafe { self.writer.Finalize() }.context("sink writer Finalize")
+        let r = unsafe { self.writer.Finalize() }.context("sink writer Finalize");
+        self.shutdown_parts();
+        r
+    }
+
+    /// Shut down the encoder MFT and media sink explicitly: releasing the writer alone left
+    /// the hardware encoder's session objects (events, sections, mutants) behind per recording.
+    fn shutdown_parts(&self) {
+        unsafe {
+            let mut raw: *mut core::ffi::c_void = std::ptr::null_mut();
+            let got = self.writer.GetServiceForStream(
+                self.video_stream,
+                &GUID::zeroed(),
+                &IMFTransform::IID,
+                &mut raw,
+            );
+            if got.is_ok() && !raw.is_null() {
+                let mft = IMFTransform::from_raw(raw);
+                if let Ok(s) = mft.cast::<IMFShutdown>() {
+                    let _ = s.Shutdown();
+                }
+            }
+            let mut raw: *mut core::ffi::c_void = std::ptr::null_mut();
+            let got = self.writer.GetServiceForStream(
+                MF_SINK_WRITER_MEDIASINK.0 as u32,
+                &GUID::zeroed(),
+                &IMFMediaSink::IID,
+                &mut raw,
+            );
+            if got.is_ok() && !raw.is_null() {
+                let sink = IMFMediaSink::from_raw(raw);
+                let _ = sink.Shutdown();
+            }
+        }
     }
 }
 

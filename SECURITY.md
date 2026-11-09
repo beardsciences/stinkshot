@@ -5,8 +5,8 @@
 - Captures never leave your PC. There are no upload targets, share targets, accounts or
   telemetry, and there never will be.
 - The only network request is the update check. It is off by default. When on, it makes plain
-  HTTPS GETs to code.mccullough.dev (the releases API, then the release's
-  `stinkshot-release.json` and its signature) at most once a day, and sends nothing beyond what
+  HTTPS GETs to stinkshot.com (`/release/stinkshot-release.json` and its signature) at most
+  once a day, and sends nothing beyond what
   any GET carries (a `Stinkshot/<version>` User-Agent).
 - The update check trusts version info only after verifying its minisign (Ed25519) signature
   against the public key built into the app. It never downloads or runs installers.
