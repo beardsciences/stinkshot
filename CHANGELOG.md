@@ -9,7 +9,7 @@ write entries for people who use Stinkshot, not for people who read the diff.
 
 ## [Unreleased]
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-11-08
 
 First public release.
 
