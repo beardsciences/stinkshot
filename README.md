@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/logo-256.png" width="128" height="128" alt="Stinkshot logo: a glossy green gel orb"></p>
+<p align="center"><img src="docs/logo-anim.webp" width="128" height="128" alt="Stinkshot logo: a glossy green gel orb"></p>
 
 # Stinkshot
 
