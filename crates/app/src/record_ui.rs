@@ -361,8 +361,9 @@ const HUD_GAP: f32 = 4.0;
 pub struct RecordHud {
     summary: String,
     toggles: HudToggles,
-    /// Sources the recorder opened at start. A source that was off in Settings cannot be
-    /// switched on mid-recording, so its toggle is disabled instead of pretending.
+    /// Sources the recorder can use. A source that was off in Settings cannot be switched on
+    /// mid-recording (except the microphone when there is an audio track), so its toggle is
+    /// disabled instead of pretending.
     available: HudToggles,
     /// Display form of the record hotkey ("Ctrl+Shift+R"), shown on the Stop tooltip.
     stop_key: String,
@@ -406,6 +407,11 @@ impl RecordHud {
     }
 
     /// Some(new) if the user changed a toggle since the last call.
+    /// Switch the Microphone toggle back off (opening it mid-recording failed).
+    pub fn set_mic_off(&mut self) {
+        self.toggles.mic = false;
+    }
+
     pub fn take_toggle_changes(&mut self) -> Option<HudToggles> {
         if std::mem::take(&mut self.changed) {
             Some(self.toggles)
@@ -724,6 +730,16 @@ pub struct TrimWindow {
     prompt: Option<TrimPrompt>,
     rect: PxRect,
     scale: f32,
+    /// Previewing the kept part: when play started and the playhead then.
+    playing: Option<(Instant, f64)>,
+}
+
+/// Playhead while previewing: `from` plus the time since play started, looping inside
+/// `start..end`.
+pub fn play_position(from: f64, elapsed: f64, start: f64, end: f64) -> f64 {
+    let len = (end - start).max(0.05);
+    let t = (from - start).clamp(0.0, len) + elapsed.max(0.0);
+    start + t % len
 }
 
 impl TrimWindow {
@@ -758,6 +774,7 @@ impl TrimWindow {
             prompt: None,
             rect,
             scale: area.scale,
+            playing: None,
         }
     }
 
@@ -883,6 +900,21 @@ impl TrimWindow {
         }
     }
 
+    fn toggle_play(&mut self) {
+        self.playing = match self.playing {
+            Some(_) => None,
+            None => {
+                // From the playhead, or from the start when it sits at the end.
+                let from = if self.playhead >= self.end - 0.05 {
+                    self.start
+                } else {
+                    self.playhead.clamp(self.start, self.end)
+                };
+                Some((Instant::now(), from))
+            }
+        };
+    }
+
     fn save(&mut self, shared: &mut Shared, gif: bool) {
         shared.outbox.push(Command::TrimDone {
             start: secs(self.start),
@@ -937,15 +969,19 @@ impl Surface for TrimWindow {
 
         // Keyboard.
         if self.prompt.is_none() && !ctx.egui_wants_keyboard_input() {
-            let (esc, enter, left, right, shift) = ctx.input(|i| {
+            let (esc, enter, left, right, shift, space) = ctx.input(|i| {
                 (
                     i.key_pressed(Key::Escape),
                     i.key_pressed(Key::Enter),
                     i.key_pressed(Key::ArrowLeft),
                     i.key_pressed(Key::ArrowRight),
                     i.modifiers.shift,
+                    i.key_pressed(Key::Space),
                 )
             });
+            if space {
+                self.toggle_play();
+            }
             if esc && !self.submitted {
                 self.prompt = Some(TrimPrompt::Close);
             }
@@ -960,6 +996,7 @@ impl Surface for TrimWindow {
                 _ => 0.0,
             };
             if delta != 0.0 {
+                self.playing = None;
                 match self.active {
                     Handle::In => {
                         (self.start, self.end) = drag_handle(
@@ -987,6 +1024,16 @@ impl Surface for TrimWindow {
         }
 
         let busy = self.submitted || self.progress.is_some();
+        if busy {
+            self.playing = None;
+        }
+        if let Some((t0, from)) = self.playing {
+            self.playhead = play_position(from, t0.elapsed().as_secs_f64(), self.start, self.end);
+            self.active = Handle::Playhead;
+            ctx.request_repaint_after(Duration::from_millis(33));
+        }
+        let playing = self.playing.is_some();
+        let mut toggle_play = false;
         let mut save_gif = false;
         let mut save_mp4 = false;
         let mut ask_discard = false;
@@ -1096,6 +1143,34 @@ impl Surface for TrimWindow {
                 Color32::from_rgba_unmultiplied(0, 0, 0, 170),
             );
             painter.galley(tr.min + vec2(6.0, 3.0), tg, Color32::WHITE);
+
+            // Play / pause the kept part (Space).
+            let pb = Rect::from_center_size(
+                preview_area.right_bottom() + vec2(-8.0 - 18.0, -8.0 - 18.0),
+                vec2(36.0, 36.0),
+            );
+            let presp = ui.interact(pb, ui.scope_id().with("trim_play"), Sense::click());
+            let tip = if playing {
+                tr!("shell.trim.pause")
+            } else {
+                tr!("shell.trim.play")
+            };
+            presp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tip));
+            crate::a11y::focus_ring(&presp);
+            painter.circle_filled(
+                pb.center(),
+                18.0,
+                Color32::from_rgba_unmultiplied(0, 0, 0, if presp.hovered() { 220 } else { 170 }),
+            );
+            theme::widgets::paint_icon(
+                &painter,
+                Rect::from_center_size(pb.center(), vec2(18.0, 18.0)),
+                if playing { Icon::Pause } else { Icon::Play },
+                Color32::WHITE,
+            );
+            if presp.on_hover_text(tip).clicked() && !busy {
+                toggle_play = true;
+            }
 
             // Filmstrip.
             painter.rect_filled(
@@ -1376,9 +1451,16 @@ impl Surface for TrimWindow {
             }
         });
 
+        if self.playing.is_some() && (dragging.is_some() || (playhead - self.playhead).abs() > 1e-9)
+        {
+            self.playing = None;
+        }
         self.start = start;
         self.end = end;
         self.playhead = playhead;
+        if toggle_play {
+            self.toggle_play();
+        }
         self.active = active;
         self.dragging = dragging;
         self.wanted = secs(preview_time(
@@ -1788,5 +1870,19 @@ mod tests {
         let got = hud.take_toggle_changes();
         assert_eq!(got.map(|g| g.mic), Some(false));
         assert_eq!(hud.take_toggle_changes(), None);
+    }
+}
+
+#[cfg(test)]
+mod play_tests {
+    use super::play_position;
+
+    #[test]
+    fn preview_loops_inside_the_kept_part() {
+        assert!((play_position(2.0, 0.5, 2.0, 5.0) - 2.5).abs() < 1e-9);
+        // Past the out point it wraps to the in point.
+        assert!((play_position(4.0, 1.5, 2.0, 5.0) - 2.5).abs() < 1e-9);
+        // A playhead outside the kept part starts from its edge.
+        assert!((play_position(0.0, 0.0, 2.0, 5.0) - 2.0).abs() < 1e-9);
     }
 }

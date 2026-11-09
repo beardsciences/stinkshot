@@ -29,6 +29,9 @@ write entries for people who use Stinkshot, not for people who read the diff.
 - A region snapped to a window or element stays inside it when moved or resized. Hold Alt to
   resize freely.
 - Settings search (Ctrl+F).
+- The recording toolbar's Microphone button can switch the microphone on mid-recording when
+  the recording has sound, even if it was off in Settings.
+- Play and pause in the trim window (Space) to preview the clip before saving a GIF or MP4.
 - Capture Selected Text and Capture Selected Paragraph: capture the text highlighted in the
   active app. No hotkey by default; set one in Settings > Hotkeys.
 

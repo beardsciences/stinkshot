@@ -149,6 +149,10 @@ pub fn get(key: &str) -> Option<&'static str> {
         }
         "shell.record.finish_failed" => "Could Not Finish the Recording",
         "shell.record.at_60" => "Recording at 60 FPS",
+        "shell.record.mic_failed" => "Microphone Not Added",
+        "shell.record.mic_failed.body" => {
+            "The microphone could not be opened. The recording goes on without it."
+        }
         "shell.record.start_failed.body" => {
             "Windows could not start the screen recorder. Try a smaller area or restart Stinkshot."
         }
@@ -215,6 +219,8 @@ pub fn get(key: &str) -> Option<&'static str> {
         "shell.trim.save_prompt" => "Save This Recording?",
         "shell.trim.title" => "Trim Recording",
         "shell.trim.loading" => "Loading Preview",
+        "shell.trim.play" => "Play (Space)",
+        "shell.trim.pause" => "Pause (Space)",
         "shell.trim.reading" => "Reading Frames",
         "shell.trim.gif_warning" => "Long clips make very large GIFs. MP4 is smaller.",
         "shell.trim.discard" => "Discard",
@@ -485,6 +491,8 @@ pub const KEYS: &[&str] = &[
     "shell.record.finish_failed.body",
     "shell.record.finish_failed",
     "shell.record.at_60",
+    "shell.record.mic_failed",
+    "shell.record.mic_failed.body",
     "shell.record.start_failed.body",
     "shell.export.failed.body",
     "shell.export.failed.tail",
@@ -541,6 +549,8 @@ pub const KEYS: &[&str] = &[
     "shell.trim.save_prompt",
     "shell.trim.title",
     "shell.trim.loading",
+    "shell.trim.play",
+    "shell.trim.pause",
     "shell.trim.reading",
     "shell.trim.gif_warning",
     "shell.trim.discard",

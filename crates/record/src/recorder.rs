@@ -45,6 +45,8 @@ struct Shared {
     dropped: AtomicU64,
     error: Mutex<Option<String>>,
     timeline: Mutex<Timeline>,
+    /// Microphone switched on mid-recording (`Recorder::start_mic`); the mixer picks it up.
+    late_mic: Mutex<Option<Arc<Mutex<SourceQueue>>>>,
 }
 
 impl Shared {
@@ -80,6 +82,8 @@ pub struct Recorder {
     fps: u32,
     final_elapsed: Option<Duration>,
     finished: bool,
+    /// A microphone is being captured (opened at start or by `start_mic`).
+    mic_open: bool,
     /// Keeps Media Foundation alive until the encoder has been finalized and dropped.
     _mf: MfGuard,
 }
@@ -132,6 +136,7 @@ impl Recorder {
             dropped: AtomicU64::new(0),
             error: Mutex::new(None),
             timeline: Mutex::new(Timeline::new(Instant::now())),
+            late_mic: Mutex::new(None),
         });
 
         // Audio sources first: failing to open a requested device fails the recording.
@@ -206,6 +211,7 @@ impl Recorder {
                 Err(_) => bail!("recording initialisation timed out"),
             };
 
+        let mic_open = mic_q.is_some();
         let mixer = if want_audio {
             let shared = shared.clone();
             let enc = enc.clone();
@@ -242,6 +248,7 @@ impl Recorder {
             fps,
             final_elapsed: None,
             finished: false,
+            mic_open,
             _mf: mf_guard,
         })
     }
@@ -280,6 +287,39 @@ impl Recorder {
             dropped: self.shared.dropped.load(Ordering::Relaxed),
             error: self.shared.error.lock().ok().and_then(|e| e.clone()),
         }
+    }
+
+    /// Whether `start_mic` can add a microphone now: the recording has an audio track (system
+    /// audio or a microphone was on at start) and no microphone is open yet.
+    pub fn can_add_mic(&self) -> bool {
+        self.mixer.is_some() && !self.mic_open && !self.finished
+    }
+
+    /// Whether a microphone is being recorded.
+    pub fn mic_open(&self) -> bool {
+        self.mic_open
+    }
+
+    /// Open the microphone mid-recording and mix it in from now on. Needs an audio track
+    /// (see `can_add_mic`); a no-op when a microphone is already open.
+    pub fn start_mic(&mut self, device: Option<String>) -> Result<()> {
+        if self.mic_open {
+            return Ok(());
+        }
+        if self.mixer.is_none() || self.finished {
+            bail!("this recording has no audio track");
+        }
+        let q = Arc::new(Mutex::new(SourceQueue::default()));
+        let h = spawn_audio(Source::Microphone(device), &q, &self.shared)
+            .context("microphone capture")?;
+        self.captures.push(h);
+        if let Ok(mut slot) = self.shared.late_mic.lock() {
+            *slot = Some(q);
+        }
+        self.shared.mic_muted.store(false, Ordering::Relaxed);
+        self.mic_open = true;
+        log::info!("microphone added mid-recording");
+        Ok(())
     }
 
     pub fn set_mic_muted(&self, muted: bool) {
@@ -768,13 +808,21 @@ fn mixer_thread(
     let mut pcm = Vec::new();
     loop {
         let stopping = shared.stop.load(Ordering::Relaxed);
+        // A microphone switched on mid-recording joins here (starts empty, so silence
+        // until its first packets arrive).
+        let late = if mic_q.is_none() {
+            shared.late_mic.lock().ok().and_then(|g| g.clone())
+        } else {
+            None
+        };
+        let mic_now = mic_q.clone().or(late);
         let (elapsed, paused) = match shared.timeline.lock() {
             Ok(t) => (t.elapsed_at(Instant::now()), t.is_paused()),
             Err(_) => return,
         };
         if paused && !stopping {
             // drop audio captured while paused so resume starts clean
-            for q in [&sys_q, &mic_q].into_iter().flatten() {
+            for q in [&sys_q, &mic_now].into_iter().flatten() {
                 if let Ok(mut q) = q.lock() {
                     q.clear();
                 }
@@ -801,7 +849,7 @@ fn mixer_thread(
                     &mut buf_sys,
                 );
                 pull(
-                    &mic_q,
+                    &mic_now,
                     shared.mic_muted.load(Ordering::Relaxed),
                     &mut buf_mic,
                 );

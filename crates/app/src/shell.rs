@@ -1998,7 +1998,8 @@ impl Shell {
         }
         // Live recorder: status, toggles.
         let mut stop_with_error: Option<String> = None;
-        if let Rec::Active { rec, .. } = &self.rec {
+        let mut mic_failed: Option<String> = None;
+        if let Rec::Active { rec, .. } = &mut self.rec {
             let status = rec.status();
             if let Some(err) = status.error.clone() {
                 stop_with_error = Some(err);
@@ -2006,6 +2007,15 @@ impl Shell {
             if let Some(hud) = &mut self.record_hud {
                 hud.s.update_status(status);
                 if let Some(t) = hud.s.take_toggle_changes() {
+                    if t.mic && !rec.mic_open() {
+                        let rc = &self.shared.config.recording;
+                        let dev = (!rc.mic_device.is_empty()).then(|| rc.mic_device.clone());
+                        if let Err(e) = rec.start_mic(dev) {
+                            log::warn!("microphone mid-recording: {e:#}");
+                            hud.s.set_mic_off();
+                            mic_failed = Some(format!("{e:#}"));
+                        }
+                    }
                     rec.set_mic_muted(!t.mic);
                     rec.set_system_muted(!t.system);
                     rec.set_webcam_visible(t.webcam);
@@ -2013,6 +2023,10 @@ impl Shell {
                 }
             }
             wake::wake_after(Duration::from_millis(200));
+        }
+        if let Some(err) = mic_failed {
+            let body = report_str("microphone", &err, tr!("shell.record.mic_failed.body"));
+            self.notify(tr!("shell.record.mic_failed"), body, true);
         }
         if let Some(err) = stop_with_error {
             let body = report_str_with(
@@ -2269,9 +2283,11 @@ impl Shell {
                 });
                 self.record_frame = Some(Slot::new(RecordFrame::new(pending.rect)));
                 let mut hud = RecordHud::new(pending.rect, summary, toggles);
-                // Sources off at start were never opened; the HUD must not offer them.
+                // Sources off at start were never opened; the HUD must not offer them. The
+                // microphone is the exception: with an audio track it can join mid-recording.
                 let available = HudToggles {
                     overlays: true,
+                    mic: toggles.mic || rec.can_add_mic(),
                     ..toggles
                 };
                 hud.set_context(available, stop_key);
