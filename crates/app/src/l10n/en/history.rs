@@ -76,6 +76,10 @@ pub fn get(key: &str) -> Option<&'static str> {
         "history.delete.cancel" => "Cancel",
         "history.delete.confirm" => "Delete",
         "history.thumb.unavailable" => "Preview Unavailable",
+        "history.mode.window" => "window",
+        "history.mode.fullscreen" => "fullscreen",
+        "history.mode.scrolling" => "scrolling",
+        "history.mode.recording" => "recording",
         _ => return None,
     })
 }
@@ -145,4 +149,8 @@ pub const KEYS: &[&str] = &[
     "history.delete.cancel",
     "history.delete.confirm",
     "history.thumb.unavailable",
+    "history.mode.window",
+    "history.mode.fullscreen",
+    "history.mode.scrolling",
+    "history.mode.recording",
 ];

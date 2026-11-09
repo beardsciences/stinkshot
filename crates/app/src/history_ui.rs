@@ -221,12 +221,23 @@ pub fn friendly_date(created: DateTime<Local>, now: DateTime<Local>) -> String {
 pub fn item_meta_line(m: &ItemMeta, now: DateTime<Local>) -> String {
     let mut parts = vec![friendly_date(m.created, now)];
     if !m.mode.is_empty() && m.mode != "region" {
-        parts.push(m.mode.clone());
+        parts.push(mode_label(&m.mode));
     }
     if m.width > 0 && m.height > 0 {
         parts.push(uc::fmt_dims(m.width, m.height));
     }
     parts.join(" \u{b7} ")
+}
+
+/// Display name of a stored capture mode; unknown modes show as stored.
+fn mode_label(mode: &str) -> String {
+    match mode {
+        "window" => tr!("history.mode.window").into(),
+        "fullscreen" => tr!("history.mode.fullscreen").into(),
+        "scrolling" => tr!("history.mode.scrolling").into(),
+        "recording" => tr!("history.mode.recording").into(),
+        _ => mode.to_string(),
+    }
 }
 
 fn fmt_gb(gb: f32) -> String {
@@ -1190,11 +1201,23 @@ impl Surface for HistoryWindow {
             // ---------------- Main: header ----------------
             let inner = main.shrink2(vec2(22.0, 18.0));
             let header = Rect::from_min_size(inner.min, vec2(inner.width(), 36.0));
-            let folder_w = 108.0;
-            let date_w = 130.0;
+            // Size the folder button and date picker to their text so longer languages fit.
+            let text_w = |s: &str, f: egui::FontId| {
+                ui.painter()
+                    .layout_no_wrap(s.to_string(), f, p.text)
+                    .size()
+                    .x
+            };
+            let folder_w = (text_w(tr!("history.open_folder"), uc::font(13.0)) + 28.0).max(108.0);
+            let combo_font = egui::TextStyle::Button.resolve(ui.style());
+            // The combo is as wide as its selected text plus padding and the chevron.
+            let date_w = (text_w(date.label(), combo_font) + 32.0).max(130.0);
             let search_rect = Rect::from_min_max(
                 header.min,
-                pos2(header.right() - folder_w - date_w - 20.0, header.bottom()),
+                pos2(
+                    (header.right() - folder_w - date_w - 20.0).max(header.left() + 80.0),
+                    header.bottom(),
+                ),
             );
             let search_id = ui.scope_id().with("hist_search");
             let search_focused = ui.memory(|m| m.has_focus(search_id));
@@ -1231,7 +1254,10 @@ impl Surface for HistoryWindow {
             // text share one alignment), so it sits on the box's centre line at any scale.
             let te_rect = Rect::from_min_max(
                 pos2(search_rect.left() + 38.0, search_rect.top()),
-                pos2(search_rect.right() - 34.0, search_rect.bottom()),
+                pos2(
+                    (search_rect.right() - 34.0).max(search_rect.left() + 39.0),
+                    search_rect.bottom(),
+                ),
             );
             let te = ui.scope_builder(UiBuilder::new().max_rect(te_rect), |ui| {
                 ui.add_sized(
