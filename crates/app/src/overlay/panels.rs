@@ -3,6 +3,7 @@
 
 use egui::{Color32, Frame, Margin, RichText, Sense, Vec2};
 
+use crate::l10n::tr;
 use crate::theme::{self, Palette};
 
 pub fn panel_frame(pal: &Palette) -> Frame {
@@ -46,7 +47,7 @@ pub fn header(ui: &mut egui::Ui, title: &str, pal: &Palette) -> bool {
             if r.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
-            close = r.on_hover_text("Close (Esc)").clicked();
+            close = r.on_hover_text(tr!("overlay.close")).clicked();
         });
     });
     close

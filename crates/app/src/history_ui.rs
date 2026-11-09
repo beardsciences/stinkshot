@@ -24,6 +24,7 @@ use stinkshot_core::Rgba;
 use stinkshot_history::{History, ItemId, ItemKind, ItemMeta, Query, Stats};
 use stinkshot_platform::Hwnd;
 
+use crate::l10n::tr;
 use crate::state::{Command, Shared, Surface, SurfaceStatus};
 use crate::theme::{self, Icon, widgets};
 use crate::toast::ui_common::{self as uc, Debounce, Lru};
@@ -1246,7 +1247,7 @@ impl Surface for HistoryWindow {
                         .frame(egui::Frame::NONE)
                         .margin(egui::Margin::ZERO)
                         .align(egui::Align2::LEFT_CENTER)
-                        .hint_text("Search Captures")
+                        .hint_text(tr!("history.search.hint"))
                         .font(uc::font(14.0))
                         .min_size(te_rect.size())
                         .desired_width(te_rect.width()),
@@ -1275,7 +1276,7 @@ impl Surface for HistoryWindow {
                     Icon::Close,
                     p.text_secondary,
                 );
-                if cresp.on_hover_text("Clear Search").clicked() {
+                if cresp.on_hover_text(tr!("history.search.clear")).clicked() {
                     search.clear();
                     search_changed = true;
                 }
@@ -1789,7 +1790,7 @@ impl Surface for HistoryWindow {
                         egui::Modal::new(egui::Id::unique("hist_delete_modal")).show(ctx, |ui| {
                             ui.set_width(360.0);
                             ui.label(
-                                RichText::new("Delete This Capture?")
+                                RichText::new(tr!("history.delete.title"))
                                     .font(theme::semibold(15.0))
                                     .color(p.text),
                             );

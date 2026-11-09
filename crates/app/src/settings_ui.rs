@@ -28,6 +28,7 @@ use stinkshot_platform::snip::SnipChord;
 
 use self::ui_hotkey::{Captured, display, same_combo};
 use crate::hotkeys::SnipStatus;
+use crate::l10n::{self, tr};
 use crate::state::{Command, Shared, Surface, SurfaceStatus};
 use crate::theme::{self, Icon, widgets};
 use crate::toast::ui_common as uc;
@@ -794,8 +795,8 @@ impl SettingsWindow {
         );
         widgets::setting_row(
             ui,
-            "Theme",
-            "Follow Windows or force dark or light.",
+            tr!("settings.theme"),
+            tr!("settings.theme.desc"),
             |ui| {
                 let label = match g.theme.as_str() {
                     "dark" => "Dark",
@@ -814,6 +815,33 @@ impl SettingsWindow {
                         );
                         ui.selectable_value(&mut g.theme, "dark".to_string(), "Dark");
                         ui.selectable_value(&mut g.theme, "light".to_string(), "Light");
+                    });
+            },
+        );
+        widgets::setting_row(
+            ui,
+            tr!("settings.language"),
+            tr!("settings.language.desc"),
+            |ui| {
+                let current = l10n::CHOICES
+                    .iter()
+                    .find(|(v, _)| *v == g.language)
+                    .map_or(tr!("settings.language.system"), |(_, k)| l10n::lookup(k));
+                egui::ComboBox::from_id_salt("language")
+                    .icon(widgets::combo_chevron)
+                    .selected_text(current)
+                    .width(170.0)
+                    .show_ui(ui, |ui| {
+                        for (value, key) in l10n::CHOICES {
+                            let r = ui.selectable_value(
+                                &mut g.language,
+                                value.to_string(),
+                                l10n::lookup(key),
+                            );
+                            if r.changed() {
+                                l10n::apply(&g.language);
+                            }
+                        }
                     });
             },
         );
