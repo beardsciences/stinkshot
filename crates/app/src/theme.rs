@@ -715,8 +715,18 @@ pub mod widgets {
         alert: Option<&str>,
         add_right: impl FnOnce(&mut Ui),
     ) {
-        let (dark, _) = current(ui.ctx());
+        // Settings search: hide rows that do not match, highlight the ones that do.
+        let hit = match crate::settings_search::check_row(title, desc) {
+            crate::settings_search::RowCheck::Normal => None,
+            crate::settings_search::RowCheck::Hidden => return,
+            crate::settings_search::RowCheck::Hit(m) => Some(m),
+        };
+        let (dark, accent) = current(ui.ctx());
         let p = palette(dark);
+        let mark = (
+            p.text,
+            accent.gamma_multiply(if dark { 0.45 } else { 0.35 }),
+        );
         let stroke = if alert.is_some() {
             Stroke::new(1.0, p.danger.gamma_multiply(0.6))
         } else {
@@ -741,21 +751,45 @@ pub mod widgets {
                     ui.vertical(|ui| {
                         ui.set_max_width(max_w);
                         ui.spacing_mut().item_spacing.y = 3.0;
-                        let t = ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(title).size(14.0 * ts).color(p.text),
-                            )
-                            .wrap(),
-                        );
-                        if !desc.is_empty() {
-                            ui.add(
+                        let t = match &hit {
+                            Some(m) => ui.add(
+                                egui::Label::new(crate::settings_search::highlighted(
+                                    title,
+                                    &m.title,
+                                    egui::FontId::proportional(14.0 * ts),
+                                    p.text,
+                                    mark,
+                                ))
+                                .wrap(),
+                            ),
+                            None => ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new(desc)
-                                        .size(12.0 * ts)
-                                        .color(p.text_tertiary),
+                                    egui::RichText::new(title).size(14.0 * ts).color(p.text),
                                 )
                                 .wrap(),
-                            );
+                            ),
+                        };
+                        if !desc.is_empty() {
+                            match &hit {
+                                Some(m) => ui.add(
+                                    egui::Label::new(crate::settings_search::highlighted(
+                                        desc,
+                                        &m.desc,
+                                        egui::FontId::proportional(12.0 * ts),
+                                        p.text_tertiary,
+                                        mark,
+                                    ))
+                                    .wrap(),
+                                ),
+                                None => ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(desc)
+                                            .size(12.0 * ts)
+                                            .color(p.text_tertiary),
+                                    )
+                                    .wrap(),
+                                ),
+                            };
                         }
                         if let Some(alert) = alert {
                             ui.add(

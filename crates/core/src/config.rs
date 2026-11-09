@@ -59,6 +59,10 @@ pub struct Hotkeys {
     pub record_gif: String,
     /// Standalone color picker (empty = no hotkey; also in the tray menu).
     pub pick_color: String,
+    /// Capture the text selected in the focused app (UI Automation). Empty = no hotkey.
+    pub selected_text: String,
+    /// Same, grown to whole paragraphs. Empty = no hotkey.
+    pub selected_paragraph: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -243,6 +247,8 @@ impl Default for Hotkeys {
             record_mp4: "Control+Alt+KeyR".into(),
             record_gif: "Control+Alt+KeyG".into(),
             pick_color: String::new(),
+            selected_text: String::new(),
+            selected_paragraph: String::new(),
         }
     }
 }
@@ -592,6 +598,8 @@ mod tests {
         cfg.editor.beautify.aspect = crate::beautify::Aspect::Portrait;
         cfg.editor.beautify.background = crate::beautify::BackgroundKind::Blurred;
         cfg.hotkeys.pick_color = "Control+Alt+KeyC".into();
+        cfg.hotkeys.selected_text = "Control+Alt+KeyP".into();
+        cfg.hotkeys.selected_paragraph = "Control+Alt+Shift+KeyP".into();
         cfg.history.max_gb = 2.5;
         cfg.privacy.check_for_updates = true;
         cfg.privacy.last_update_check = Some(chrono::Utc::now());
@@ -630,6 +638,7 @@ mod tests {
         assert!(cfg.hotkeys.pick_color.is_empty());
         // Pin options added later: both on for old files.
         assert!(cfg.pins.show_in_task_view && cfg.pins.always_show_toolbar);
+        assert!(cfg.hotkeys.selected_text.is_empty() && cfg.hotkeys.selected_paragraph.is_empty());
         let _ = std::fs::remove_dir_all(&d);
     }
 

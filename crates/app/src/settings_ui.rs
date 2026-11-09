@@ -29,6 +29,7 @@ use stinkshot_platform::snip::SnipChord;
 use self::ui_hotkey::{Captured, display, same_combo};
 use crate::hotkeys::SnipStatus;
 use crate::l10n::{self, tr};
+use crate::settings_search as search;
 use crate::state::{Command, Shared, Surface, SurfaceStatus};
 use crate::theme::{self, Icon, widgets};
 use crate::toast::ui_common as uc;
@@ -77,6 +78,27 @@ const SECTIONS: [(Section, &str); 9] = [
     (Section::Help, "settings.nav.help"),
     (Section::About, "settings.nav.about"),
 ];
+
+/// Synonym keys searched along with each page's name (Help is not searched: it has no
+/// settings).
+const SEARCH_KEYWORDS: [(Section, &str); 8] = [
+    (Section::General, "settings.search.kw.general"),
+    (Section::Hotkeys, "settings.search.kw.hotkeys"),
+    (Section::Capture, "settings.search.kw.capture"),
+    (Section::Editor, "settings.search.kw.editor"),
+    (Section::Recording, "settings.search.kw.recording"),
+    (Section::History, "settings.search.kw.history"),
+    (Section::Privacy, "settings.search.kw.privacy"),
+    (Section::About, "settings.search.kw.about"),
+];
+
+/// Displayed name of a page.
+fn section_name(section: Section) -> &'static str {
+    SECTIONS
+        .iter()
+        .find(|(s, _)| *s == section)
+        .map_or("", |(_, n)| l10n::lookup(n))
+}
 
 /// `(config value, label key)` for the Theme setting.
 const THEMES: [(&str, &str); 3] = [
@@ -296,6 +318,10 @@ pub struct SettingsWindow {
     /// When Check Again was clicked, and when the shell answered.
     hotkey_check_requested: bool,
     hotkey_checked_at: Option<Instant>,
+    /// Settings search text; results replace the page while it is not blank.
+    search: String,
+    /// Best row score per page from the last results frame, to put the best page first.
+    search_scores: Vec<(Section, u32)>,
 }
 
 impl SettingsWindow {
@@ -322,11 +348,14 @@ impl SettingsWindow {
             copied_url_at: None,
             hotkey_check_requested: false,
             hotkey_checked_at: None,
+            search: String::new(),
+            search_scores: Vec::new(),
         }
     }
 
     /// Switch to `section` (another window asked for a specific page).
     pub fn show_section(&mut self, section: Section) {
+        self.search.clear();
         if section != self.section {
             self.section = section;
             self.stats_at = None;
@@ -495,12 +524,17 @@ impl Surface for SettingsWindow {
         let capturing_before = self.capturing.is_some();
         let key_consumed = self.apply_capture(shared, ctx);
         // Esc closes the window unless it belongs to a hotkey field, a text field or a popup.
-        let esc_close = !capturing_before
+        // With search text it clears the search instead.
+        let esc_free = !capturing_before
             && !key_consumed
             && self.capturing.is_none()
             && !ctx.egui_wants_keyboard_input()
             && !egui::Popup::is_any_open(ctx)
             && ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        let esc_close = esc_free && self.search.is_empty();
+        if esc_free {
+            self.search.clear();
+        }
         if self.capturing.is_some() {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
@@ -510,6 +544,12 @@ impl Surface for SettingsWindow {
             && !key_consumed
             && self.capturing.is_none()
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::H));
+        // Ctrl+F focuses the search field (same rule).
+        let focus_search = !capturing_before
+            && !key_consumed
+            && self.capturing.is_none()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F));
+        let search_before = self.search.clone();
 
         let p = uc::pal(shared);
         let accent = uc::accent(shared);
@@ -538,14 +578,22 @@ impl Surface for SettingsWindow {
             );
             uc::layer_edges(ui, content, 8.0, p.stroke);
 
+            // Search, above the pages like Windows Settings.
+            let search_rect = egui::Rect::from_min_size(
+                pos2(nav.left() + 12.0, nav.top() + 8.0),
+                vec2(NAV_W - 24.0, 34.0),
+            );
+            self.search_box(ui, search_rect, shared, accent, focus_search);
+            let searching = !search::Query::parse(&self.search).is_empty();
+
             // Navigation.
-            let mut y = nav.top() + 8.0;
+            let mut y = search_rect.bottom() + 10.0;
             for (sec, name) in SECTIONS {
                 let r =
                     egui::Rect::from_min_size(pos2(nav.left() + 12.0, y), vec2(NAV_W - 24.0, 36.0));
                 y += 38.0;
                 let resp = ui.interact(r, ui.scope_id().with(("nav", name)), Sense::click());
-                let selected = sec == section;
+                let selected = sec == section && !searching;
                 crate::a11y::describe(
                     &resp,
                     egui::accesskit::Role::Tab,
@@ -596,6 +644,7 @@ impl Surface for SettingsWindow {
                 );
                 if resp.clicked() {
                     section = sec;
+                    self.search.clear();
                 }
             }
 
@@ -614,18 +663,28 @@ impl Surface for SettingsWindow {
                 open_history = true;
             }
 
-            // Page.
+            // Page, or search results while the search has words.
+            let query = search::Query::parse(&self.search);
             let area = content.shrink2(vec2(28.0, 18.0));
             let w = area.width().min(CONTENT_MAX_W);
             let page_rect = egui::Rect::from_min_size(area.min, vec2(w, area.height()));
             ui.scope_builder(UiBuilder::new().max_rect(page_rect), |ui| {
+                let salt = if query.is_empty() {
+                    section as u8
+                } else {
+                    u8::MAX
+                };
                 ScrollArea::vertical()
-                    .id_salt(("settings_page", section as u8))
+                    .id_salt(("settings_page", salt))
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.set_width(w - 12.0);
                         ui.spacing_mut().item_spacing.y = 6.0;
                         ui.spacing_mut().slider_width = 180.0;
+                        if !query.is_empty() {
+                            self.search_results(ui, shared, &query, key_consumed);
+                            return;
+                        }
                         ui.label(
                             RichText::new(
                                 SECTIONS
@@ -637,17 +696,7 @@ impl Surface for SettingsWindow {
                             .color(p.text),
                         );
                         ui.add_space(6.0);
-                        match section {
-                            Section::General => self.page_general(ui, shared, accent),
-                            Section::Hotkeys => self.page_hotkeys(ui, shared, key_consumed),
-                            Section::Capture => self.page_capture(ui, shared, accent),
-                            Section::Editor => self.page_editor(ui, shared),
-                            Section::Recording => self.page_recording(ui, shared),
-                            Section::History => self.page_history(ui, shared),
-                            Section::Privacy => self.page_privacy(ui, shared, accent),
-                            Section::Help => crate::help::page(ui, shared),
-                            Section::About => self.page_about(ui, shared),
-                        }
+                        self.page(section, ui, shared, key_consumed);
                         ui.add_space(16.0);
                     });
             });
@@ -660,11 +709,18 @@ impl Surface for SettingsWindow {
                 self.scan_devices(ctx);
             }
         }
-        // Landing on Recording through other paths (first frame) also needs the scan.
-        if self.section == Section::Recording && !self.devices.loaded && self.device_rx.is_none() {
+        let searching = !search::Query::parse(&self.search).is_empty();
+        // Landing on Recording through other paths (first frame) also needs the scan, and so
+        // do search results, which can show its device rows.
+        if (self.section == Section::Recording || searching)
+            && !self.devices.loaded
+            && self.device_rx.is_none()
+        {
             self.scan_devices(ctx);
         }
-        if self.section != Section::Hotkeys {
+        // A hotkey field records only while it is on screen: on its page, or in results
+        // that have not changed since it was clicked.
+        if (self.section != Section::Hotkeys && !searching) || self.search != search_before {
             self.capturing = None;
         }
 
@@ -687,6 +743,203 @@ impl Surface for SettingsWindow {
         } else {
             SurfaceStatus::Open
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// Search
+// ---------------------------------------------------------------------------------------
+
+impl SettingsWindow {
+    fn page(&mut self, section: Section, ui: &mut Ui, shared: &mut Shared, key_consumed: bool) {
+        let accent = uc::accent(shared);
+        match section {
+            Section::General => self.page_general(ui, shared, accent),
+            Section::Hotkeys => self.page_hotkeys(ui, shared, key_consumed),
+            Section::Capture => self.page_capture(ui, shared, accent),
+            Section::Editor => self.page_editor(ui, shared),
+            Section::Recording => self.page_recording(ui, shared),
+            Section::History => self.page_history(ui, shared),
+            Section::Privacy => self.page_privacy(ui, shared, accent),
+            Section::Help => crate::help::page(ui, shared),
+            Section::About => self.page_about(ui, shared),
+        }
+    }
+
+    /// The search field at the top of the navigation. Esc in it clears the text.
+    fn search_box(
+        &mut self,
+        ui: &mut Ui,
+        rect: egui::Rect,
+        shared: &Shared,
+        accent: Color32,
+        focus: bool,
+    ) {
+        let p = uc::pal(shared);
+        let id = ui.scope_id().with("settings_search");
+        let focused = ui.memory(|m| m.has_focus(id));
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(6), p.layer);
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::same(6),
+            Stroke::new(1.0, p.stroke),
+            StrokeKind::Inside,
+        );
+        ui.painter().rect_filled(
+            egui::Rect::from_min_max(
+                pos2(rect.left() + 3.0, rect.bottom() - 2.0),
+                pos2(rect.right() - 3.0, rect.bottom()),
+            ),
+            CornerRadius::same(1),
+            if focused || !self.search.is_empty() {
+                accent
+            } else {
+                p.stroke
+            },
+        );
+        widgets::paint_icon(
+            ui.painter(),
+            egui::Rect::from_center_size(
+                pos2(rect.left() + 17.0, rect.center().y),
+                vec2(15.0, 15.0),
+            ),
+            Icon::Search,
+            p.text_secondary,
+        );
+        let te_rect = egui::Rect::from_min_max(
+            pos2(rect.left() + 32.0, rect.top()),
+            pos2(rect.right() - 30.0, rect.bottom()),
+        );
+        let te = ui.scope_builder(UiBuilder::new().max_rect(te_rect), |ui| {
+            ui.add_sized(
+                te_rect.size(),
+                egui::TextEdit::singleline(&mut self.search)
+                    .id(id)
+                    .frame(egui::Frame::NONE)
+                    .margin(egui::Margin::ZERO)
+                    .align(Align2::LEFT_CENTER)
+                    .hint_text(tr!("settings.search.hint"))
+                    .font(uc::font(13.0))
+                    .min_size(te_rect.size())
+                    .desired_width(te_rect.width()),
+            )
+        });
+        crate::a11y::name_from_placeholder(&te.inner);
+        if focus {
+            te.inner.request_focus();
+        }
+        if te.inner.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.search.clear();
+        }
+        if !self.search.is_empty() {
+            let cr = egui::Rect::from_center_size(
+                pos2(rect.right() - 16.0, rect.center().y),
+                vec2(22.0, 22.0),
+            );
+            let cresp = ui.interact(cr, id.with("clear"), Sense::click());
+            crate::a11y::role(&cresp, egui::accesskit::Role::Button);
+            if cresp.hovered() {
+                ui.painter().rect_filled(
+                    cr,
+                    CornerRadius::same(5),
+                    theme::subtle_fill(shared.dark, 1),
+                );
+            }
+            widgets::paint_icon(
+                ui.painter(),
+                egui::Rect::from_center_size(cr.center(), vec2(11.0, 11.0)),
+                Icon::Close,
+                p.text_secondary,
+            );
+            if cresp.on_hover_text(tr!("settings.search.clear")).clicked() {
+                self.search.clear();
+                te.inner.request_focus();
+            }
+        }
+    }
+
+    /// Every page's matching rows under its name, best page first, or the empty state.
+    fn search_results(
+        &mut self,
+        ui: &mut Ui,
+        shared: &mut Shared,
+        query: &search::Query,
+        key_consumed: bool,
+    ) {
+        let p = uc::pal(shared);
+        let accent = uc::accent(shared);
+        let mark = (
+            p.text,
+            accent.gamma_multiply(if shared.dark { 0.45 } else { 0.35 }),
+        );
+        let pages: Vec<Section> = SEARCH_KEYWORDS.iter().map(|(s, _)| *s).collect();
+        let mut scores = Vec::new();
+        let head_h = 30.0;
+        for section in search::order(&pages, &self.search_scores) {
+            let name = section_name(section);
+            let keywords = SEARCH_KEYWORDS
+                .iter()
+                .find(|(s, _)| *s == section)
+                .map_or("", |(_, k)| l10n::lookup(k));
+            // The page draws into a child below room for its heading. Only rows draw while
+            // the filter is active, so a page with no match leaves nothing behind.
+            let top = ui.cursor().min;
+            let width = ui.available_width();
+            let body =
+                egui::Rect::from_min_size(top + vec2(0.0, head_h), vec2(width, f32::INFINITY));
+            let mut child = ui.new_child(
+                UiBuilder::new()
+                    .max_rect(body)
+                    .layout(egui::Layout::top_down(egui::Align::Min))
+                    .id_salt(("search_page", section as u8)),
+            );
+            let filter = search::begin(query, name, keywords);
+            self.page(section, &mut child, shared, key_consumed);
+            let (rows, best) = filter.finish();
+            if rows == 0 {
+                continue;
+            }
+            scores.push((section, best));
+            let head = egui::Rect::from_min_size(top, vec2(width, head_h));
+            ui.scope_builder(UiBuilder::new().max_rect(head), |ui| {
+                ui.add(egui::Label::new(search::highlighted(
+                    name,
+                    &search::highlights(query, name),
+                    theme::semibold(18.0),
+                    p.text,
+                    mark,
+                )));
+            });
+            let used =
+                egui::Rect::from_min_max(top, pos2(top.x + width, child.min_rect().bottom()));
+            ui.advance_cursor_after_rect(used);
+            ui.add_space(10.0);
+        }
+        if scores.is_empty() {
+            let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 200.0), Sense::hover());
+            let c = pos2(r.center().x, r.top() + 70.0);
+            ui.painter()
+                .circle_filled(c, 30.0, theme::subtle_fill(shared.dark, 1));
+            widgets::paint_icon(
+                ui.painter(),
+                egui::Rect::from_center_size(c, vec2(30.0, 30.0)),
+                Icon::Search,
+                p.text_secondary,
+            );
+            ui.painter().text(
+                pos2(c.x, c.y + 48.0),
+                Align2::CENTER_TOP,
+                tr!("settings.search.none"),
+                theme::semibold(18.0),
+                p.text,
+            );
+        }
+        // A new query can reorder the pages: draw again with the fresh order.
+        if search::order(&pages, &scores) != search::order(&pages, &self.search_scores) {
+            ui.ctx().request_repaint();
+        }
+        self.search_scores = scores;
     }
 }
 
@@ -746,6 +999,9 @@ fn slider_row<N: egui::emath::Numeric>(
 }
 
 fn group_title(ui: &mut Ui, p: &theme::Palette, text: &str) {
+    if search::searching() {
+        return;
+    }
     ui.add_space(14.0);
     ui.label(
         RichText::new(text)
@@ -833,6 +1089,9 @@ fn info_card(
     title: &str,
     body: &str,
 ) {
+    if search::searching() {
+        return;
+    }
     let w = ui.available_width();
     let galley = ui.painter().layout(
         body.to_string(),
@@ -1062,6 +1321,7 @@ impl SettingsWindow {
             Tone::Bad => p.danger,
             Tone::Neutral => p.text_tertiary,
         };
+        let browsing = !search::searching();
         let mut lines = Vec::new();
         if !status.is_empty() {
             lines.push((status, color));
@@ -1069,18 +1329,22 @@ impl SettingsWindow {
         if let Some(note) = snip_prtsc_note(&shared.config.hotkeys) {
             lines.push((note.to_string(), p.text_tertiary));
         }
-        ui.add_space(2.0);
-        // Indented to line up with the text inside the card above.
-        ui.horizontal(|ui| {
-            ui.add_space(19.0);
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                for (text, color) in lines {
-                    ui.add(egui::Label::new(RichText::new(text).size(12.0).color(color)).wrap());
-                }
+        if browsing {
+            ui.add_space(2.0);
+            // Indented to line up with the text inside the card above.
+            ui.horizontal(|ui| {
+                ui.add_space(19.0);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    for (text, color) in lines {
+                        ui.add(
+                            egui::Label::new(RichText::new(text).size(12.0).color(color)).wrap(),
+                        );
+                    }
+                });
             });
-        });
-        ui.add_space(4.0);
+            ui.add_space(4.0);
+        }
         if shared.config.hotkeys.replace_snipping_tool {
             // Included in Replace Snipping Tool: shown on and locked.
             let mut on = true;
@@ -1100,7 +1364,7 @@ impl SettingsWindow {
                 &mut shared.config.hotkeys.take_over_printscreen,
             );
         }
-        if !self.hotkey_errors.is_empty() {
+        if browsing && !self.hotkey_errors.is_empty() {
             ui.add_space(4.0);
             let text = self.hotkey_errors.join("\n");
             let w = ui.available_width();
@@ -1211,6 +1475,9 @@ impl SettingsWindow {
                         .on_disabled_hover_text(tr!("settings.hotkeys.chord_fixed"));
                 });
             });
+        }
+        if !browsing {
+            return;
         }
         ui.add_space(8.0);
         ui.label(
@@ -1810,7 +2077,9 @@ impl SettingsWindow {
             tr!("settings.history.originals.desc"),
             &mut h.keep_editable,
         );
-        if let Some(s) = &self.stats {
+        if let Some(s) = &self.stats
+            && !search::searching()
+        {
             ui.add_space(2.0);
             ui.label(
                 RichText::new(tr!(
@@ -1881,6 +2150,10 @@ impl SettingsWindow {
         if requested {
             ui.ctx().request_repaint_after(Duration::from_millis(500));
         }
+        // The history rows are History's own; search shows them there only.
+        if search::searching() {
+            return;
+        }
         group_title(ui, p, tr!("settings.privacy.history"));
         self.history_rows(ui, shared);
         ui.add_space(14.0);
@@ -1913,13 +2186,15 @@ impl SettingsWindow {
 
     fn page_about(&mut self, ui: &mut Ui, shared: &mut Shared) {
         let p = uc::pal(shared);
-        crate::logo_anim::header(
-            ui,
-            theme::semibold(22.0),
-            uc::font(13.0),
-            p.text,
-            p.text_secondary,
-        );
+        if !search::searching() {
+            crate::logo_anim::header(
+                ui,
+                theme::semibold(22.0),
+                uc::font(13.0),
+                p.text,
+                p.text_secondary,
+            );
+        }
         widgets::setting_row(
             ui,
             tr!("settings.about.license"),

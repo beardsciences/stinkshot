@@ -265,3 +265,16 @@ So no change was needed. The HUD drag starts after egui's drag threshold, so the
 the cursor offset of that moment (a few px behind the press point) but it does not jump or
 wiggle; starting the OS drag on press would steal clicks from the HUD buttons, which sit over
 the draggable background. Verified from code (no synthetic input).
+
+## Settings search (#11)
+
+The field at the top of the Settings navigation (Ctrl+F focuses it, Esc clears it) replaces
+the page with results while it has words. Results are drawn by the real page code:
+`settings_search::begin` sets a thread-local filter, `widgets::setting_row` hides rows that do
+not match and highlights the ones that do, and pages skip non-row content while
+`settings_search::searching()` is true. Each page draws into a child `Ui` below room for its
+heading, so a page with no match leaves nothing behind and needs no second pass. Every query
+word must match the row title, description, page name or the page's synonyms
+(`settings.search.kw.*`, translated like everything else). Pages are ordered by their best
+row score from the previous results frame (one repaint when it changes). Help is not searched;
+History's rows show only under History (Privacy repeats them).

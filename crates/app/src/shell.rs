@@ -1148,6 +1148,7 @@ impl Shell {
                 }
             }
             Command::RepeatLastRegion => self.repeat_last_region(),
+            Command::CaptureSelectedText { paragraph } => self.capture_selected_text(paragraph),
             Command::PickColor => {
                 self.begin_overlay(OverlayMode::SelectRegion(RegionPurpose::PickColor))
             }
@@ -1513,6 +1514,74 @@ impl Shell {
             editing: None,
         };
         self.capture_done(out);
+    }
+
+    /// Capture Selected Text: a worker asks UI Automation where the selection is, then
+    /// `capture_text_rect` takes that area. Nothing is sent to the app and its selection and
+    /// the clipboard stay as they are.
+    fn capture_selected_text(&mut self, paragraph: bool) {
+        if self.capture_blocked() {
+            return;
+        }
+        // After a tray click the focus is gone from the app: search its window instead.
+        let fallback = capture_ops::target_window().map(|w| w.hwnd);
+        self.window_capture_pending = true;
+        workers::find_selected_text(&self.env(), fallback, paragraph);
+    }
+
+    /// Captures the selection's rect like a region: into the editor when Open Editor After
+    /// Capture is on, otherwise finished right away.
+    fn capture_text_rect(&mut self, rect: PxRect) {
+        if self.capture_blocked() {
+            return;
+        }
+        if self.shared.config.capture.open_editor_after_capture {
+            let Some((frozen, windows)) = self.freeze() else {
+                return;
+            };
+            let base = capture_ops::crop_frozen(&frozen, rect);
+            if base.width == 0 || base.height == 0 {
+                self.notify(
+                    tr!("shell.selected_text.none"),
+                    tr!("shell.selected_text.none.body"),
+                    false,
+                );
+                return;
+            }
+            let source = capture_ops::source_for_rect(&windows, rect);
+            let doc = Doc::new(base.width, base.height);
+            self.open_overlay(
+                OverlayMode::Annotate {
+                    base,
+                    doc,
+                    mode: "text",
+                    editing: None,
+                    source,
+                },
+                frozen,
+                windows,
+            );
+            return;
+        }
+        let windows = windows_enum::visible_windows();
+        let base = match capture::freeze_rect(rect, self.shared.config.capture.include_cursor) {
+            Ok(img) if img.width > 0 && img.height > 0 => img,
+            Ok(_) => {
+                self.notify(
+                    tr!("shell.selected_text.none"),
+                    tr!("shell.selected_text.none.body"),
+                    false,
+                );
+                return;
+            }
+            Err(e) => {
+                let body = report("freeze_rect", &e, tr!("shell.capture.no_image.body"));
+                self.notify(tr!("shell.capture.screen_failed"), body, true);
+                return;
+            }
+        };
+        let source = capture_ops::source_for_rect(&windows, rect);
+        self.finish_quick(base, rect, source, "text");
     }
 
     fn capture_done(&mut self, out: CaptureOutput) {
@@ -2016,6 +2085,25 @@ impl Shell {
                         let body =
                             report_str("window capture", &e, tr!("shell.error.window_capture"));
                         self.notify(tr!("shell.capture.window_failed"), body, true)
+                    }
+                }
+            }
+            WorkerMsg::SelectedText(result) => {
+                self.window_capture_pending = false;
+                match result {
+                    Ok(Some(rect)) => self.capture_text_rect(rect),
+                    Ok(None) => self.notify(
+                        tr!("shell.selected_text.none"),
+                        tr!("shell.selected_text.none.body"),
+                        false,
+                    ),
+                    Err(e) => {
+                        log::warn!("selected text: {e}");
+                        self.notify(
+                            tr!("shell.selected_text.none"),
+                            tr!("shell.selected_text.none.body"),
+                            false,
+                        );
                     }
                 }
             }

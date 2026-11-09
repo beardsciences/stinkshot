@@ -1,7 +1,8 @@
 //! Command line. `stinkshot` with no args starts the tray app.
 //!
 //!   stinkshot [--tray]                      start (tray only, no window)
-//!   stinkshot region|window|full|scroll|ocr|repeat|record|gif
+//!   stinkshot region|window|full|scroll|ocr|repeat|text|record|gif
+//!   stinkshot text --paragraph              capture the selected text's paragraphs
 //!                                           trigger in the running instance (starts it if needed)
 //!   stinkshot history|settings              open windows
 //!   stinkshot settings --page help          open Settings on a page (help, about, ...)
@@ -97,6 +98,12 @@ enum Sub {
     },
     /// Capture the last region again.
     Repeat,
+    /// Capture the text selected in the focused app.
+    Text {
+        /// Grow the selection to whole paragraphs first.
+        #[arg(short, long)]
+        paragraph: bool,
+    },
     /// Pick a color anywhere on screen and copy it (hex, RGB or HSL).
     PickColor,
     /// Record the screen as MP4 (toggles: stops a running recording).
@@ -130,6 +137,9 @@ fn command_of(sub: &Sub) -> Command {
         Sub::Scroll => Command::CaptureScrolling,
         Sub::Ocr { .. } => Command::OcrRegion,
         Sub::Repeat => Command::RepeatLastRegion,
+        Sub::Text { paragraph } => Command::CaptureSelectedText {
+            paragraph: *paragraph,
+        },
         Sub::PickColor => Command::PickColor,
         Sub::Record => Command::RecordMp4,
         Sub::Gif => Command::RecordGif,
@@ -316,6 +326,14 @@ mod tests {
         assert!(matches!(
             command_from_args(&args(&["repeat"])),
             Some(Command::RepeatLastRegion)
+        ));
+        assert!(matches!(
+            command_from_args(&args(&["text"])),
+            Some(Command::CaptureSelectedText { paragraph: false })
+        ));
+        assert!(matches!(
+            command_from_args(&args(&["text", "--paragraph"])),
+            Some(Command::CaptureSelectedText { paragraph: true })
         ));
         assert!(matches!(
             command_from_args(&args(&["pick-color"])),

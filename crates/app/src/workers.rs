@@ -46,6 +46,9 @@ pub enum WorkerMsg {
     },
     /// The window-capture worker crashed before it could report.
     WindowCaptureFailed(String),
+    /// Capture Selected Text: the padded on-screen rect of the selection, None when the
+    /// focused app shows no selected text.
+    SelectedText(Result<Option<PxRect>, String>),
     /// Image + doc loaded for the editor (re-edit); opens an Editor Window.
     OpenAnnotate {
         base: Rgba,
@@ -419,6 +422,32 @@ pub fn capture_window(env: &Env, frozen: Frozen, windows: Vec<WinInfo>, win: Win
             });
         },
         || WorkerMsg::WindowCaptureFailed("The capture task crashed.".into()),
+    );
+}
+
+/// Pixels of padding around a text selection, at 100 % scale.
+const SELECTION_PAD: f32 = 6.0;
+
+/// Finds where the focused app's text selection is (UI Automation can be slow, so not on the
+/// UI thread). `fallback` is searched when the focused element holds no text.
+pub fn find_selected_text(env: &Env, fallback: Option<stinkshot_platform::Hwnd>, paragraph: bool) {
+    job_recovering(
+        env,
+        "selected-text",
+        move |env| {
+            use stinkshot_platform::{monitors, text_selection};
+            let result = text_selection::selected_text(fallback, paragraph)
+                .map(|sel| {
+                    let sel = sel?;
+                    let first = *sel.rects.first()?;
+                    let pad = (SELECTION_PAD * capture_ops::scale_at(first)).round() as i32;
+                    let mons: Vec<PxRect> = monitors::list().into_iter().map(|m| m.rect).collect();
+                    text_selection::capture_rect(&sel.rects, sel.element, pad, &mons)
+                })
+                .map_err(|e| format!("{e:#}"));
+            env.send(WorkerMsg::SelectedText(result));
+        },
+        || WorkerMsg::SelectedText(Err("The selected-text task crashed.".into())),
     );
 }
 

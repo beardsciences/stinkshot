@@ -236,6 +236,7 @@ fn mode_label(mode: &str) -> String {
         "fullscreen" => tr!("history.mode.fullscreen").into(),
         "scrolling" => tr!("history.mode.scrolling").into(),
         "recording" => tr!("history.mode.recording").into(),
+        "text" => tr!("history.mode.text").into(),
         _ => mode.to_string(),
     }
 }

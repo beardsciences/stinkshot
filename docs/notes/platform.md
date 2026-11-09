@@ -414,3 +414,21 @@ What is left: the D3D11 device itself (about 52 MB, driver) and, while warm, the
 - [ ] `window_util` on an egui window: Mica visible, dark title bar, topmost, excluded from a
       screen recording, tool-window hides it from Alt+Tab, `set_rect` across a mixed-DPI border
       ends at exactly the requested physical rect.
+
+## Text selection (`text_selection.rs`, #14)
+
+`selected_text(fallback_hwnd, paragraph)` reads where the focused app's text selection is:
+the focused element's TextPattern (then up to 6 ancestors, then the text elements of
+`fallback_hwnd`), `GetSelection`, and each range's `GetBoundingRectangles`. Paragraph mode
+expands clones of the ranges with `TextUnit_Paragraph` (a bare caret counts as its paragraph),
+so the selection, focus and clipboard never change and no input is sent. Call it off the UI
+thread: it sets a 2 s UIA transaction and connection timeout. `capture_rect` unions the line
+rects, pads them, keeps them inside the text element and clips to the monitors (unit tested).
+Additive: new public module only. Core gained `Hotkeys::selected_text` and
+`selected_paragraph` (empty by default).
+
+- [ ] Notepad, WordPad / Word, Edge / Firefox page text, VS Code: Capture Selected Text and
+      Capture Selected Paragraph frame the right area; nothing selected shows the toast.
+- [ ] Tray menu path (focus moved to the tray): the fallback window search finds the selection.
+- `cargo test -p stinkshot-platform -- --ignored reads_selection_of_own_richedit` checks
+  an Edit control the test creates (shown without activation).

@@ -21,6 +21,7 @@ pub mod ocr;
 pub mod quick_overlay;
 pub mod snip;
 pub mod system;
+pub mod text_selection;
 pub mod uia;
 mod util;
 pub mod wgc_memo;
