@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use egui::{Align2, CornerRadius, RichText, Sense, UiBuilder, pos2, vec2};
+use egui::{CornerRadius, RichText, UiBuilder, pos2, vec2};
 use stinkshot_core::config::Config;
 use stinkshot_platform::Hwnd;
 
@@ -193,14 +193,19 @@ impl Surface for TourWindow {
                                     if v.is_empty() {
                                         ui.label(RichText::new(k).size(13.0).color(p.text));
                                     } else {
-                                        let (r, _) = ui
-                                            .allocate_exact_size(vec2(150.0, 20.0), Sense::hover());
-                                        ui.painter().text(
-                                            r.left_center(),
-                                            Align2::LEFT_CENTER,
-                                            k,
-                                            theme::semibold(13.0),
-                                            p.text,
+                                        // A real label (screen readers read the key), at
+                                        // least 150 wide so the names line up.
+                                        ui.allocate_ui_with_layout(
+                                            vec2(150.0, 20.0),
+                                            egui::Layout::left_to_right(egui::Align::Center),
+                                            |ui| {
+                                                ui.set_min_width(150.0);
+                                                ui.label(
+                                                    RichText::new(k)
+                                                        .font(theme::semibold(13.0))
+                                                        .color(p.text),
+                                                );
+                                            },
                                         );
                                         ui.label(
                                             RichText::new(v).size(13.0).color(p.text_secondary),

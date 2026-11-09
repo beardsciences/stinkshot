@@ -175,6 +175,12 @@ pub fn name_from_placeholder(resp: &egui::Response) {
     });
 }
 
+/// Name a stock control that has no visible label (a combo box showing only its value).
+pub fn name(resp: &egui::Response, name: &str) {
+    resp.ctx
+        .accesskit_node_builder(resp.id, |n| n.set_label(name.to_owned()));
+}
+
 /// Set only the role of a hand-painted control that is already named (by its tooltip).
 pub fn role(resp: &egui::Response, role: egui::accesskit::Role) {
     resp.ctx

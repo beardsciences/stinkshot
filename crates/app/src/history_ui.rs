@@ -1324,7 +1324,7 @@ impl Surface for HistoryWindow {
                 |ui| {
                     ui.spacing_mut().interact_size.y = 36.0;
                     let mut d = date;
-                    egui::ComboBox::from_id_salt("hist_date")
+                    let combo = egui::ComboBox::from_id_salt("hist_date")
                         .icon(widgets::combo_chevron)
                         .selected_text(d.label())
                         .width(date_w - 28.0)
@@ -1333,6 +1333,7 @@ impl Surface for HistoryWindow {
                                 ui.selectable_value(&mut d, opt, opt.label());
                             }
                         });
+                    crate::a11y::name(&combo.response, tr!("history.date.filter"));
                     if d != date {
                         new_date = Some(d);
                     }

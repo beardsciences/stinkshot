@@ -65,3 +65,15 @@ Screen readers (Narrator, NVDA), keyboard-only use, contrast themes and text siz
   difference beyond debug-build noise; not measured on a release build.
 - Not verified here: NVDA, real contrast themes and text-size changes on screen (code path
   unit-tested only: `theme::hc_tests`).
+
+## Review of the merged ux branch (Nov 8 2026)
+
+UIA dump on a debug build (profile `ux-review`), tour and pages driven through UIA only.
+- Fixed: Settings nav tabs were named by their l10n keys ("settings.nav.general") after the
+  integration; they now use the looked-up text.
+- Fixed: tour hotkey names were painter text, missing from the UIA tree; now labels.
+- Fixed: History's date filter combo had no name; now "Date Filter" (`a11y::name`).
+- Verified: tour opens once on first start, Done/Skip set `tour_seen`, Settings > About >
+  Show Tour reopens it; Help lists match `keys::sheet` and the tray behavior.
+- Not verified: the real full-screen overlay (no synthetic input, no display wake), NVDA,
+  Narrator speech.
