@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use egui::{Align2, RichText, Sense, Ui, vec2};
+use egui::{RichText, Ui, vec2};
 use stinkshot_core::config::{Config, Hotkeys};
 
 use crate::actions::Action;
@@ -89,7 +89,18 @@ pub fn editor_groups() -> Vec<Group> {
 
 fn rows_card(ui: &mut Ui, shared: &Shared, rows: &[(String, String)]) {
     let p = uc::pal(shared);
-    let key_w = 170.0;
+    // The key column fits the widest key (translated gesture names run long). When that
+    // leaves the descriptions too little room, each description goes under its key.
+    let widest = rows
+        .iter()
+        .map(|(k, _)| {
+            ui.painter()
+                .layout_no_wrap(k.clone(), theme::semibold(13.0), p.text)
+                .size()
+                .x
+        })
+        .fold(0.0_f32, f32::max);
+    let key_w = (widest + 16.0).max(150.0);
     egui::Frame::new()
         .fill(p.card)
         .stroke(egui::Stroke::new(1.0, p.stroke))
@@ -99,26 +110,33 @@ fn rows_card(ui: &mut Ui, shared: &Shared, rows: &[(String, String)]) {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.spacing_mut().interact_size.y = 18.0;
+            let stacked = ui.available_width() - key_w < 220.0;
+            let key_text = |k: &str| RichText::new(k).font(theme::semibold(13.0)).color(p.text);
+            let what_text = |w: &str| RichText::new(w).size(13.0).color(p.text_secondary);
             for (key, what) in rows {
-                ui.horizontal(|ui| {
-                    let (r, _) = ui.allocate_exact_size(vec2(key_w, 18.0), Sense::hover());
-                    ui.painter().text(
-                        r.left_center(),
-                        Align2::LEFT_CENTER,
-                        key,
-                        theme::semibold(13.0),
-                        p.text,
-                    );
-                    ui.label(
-                        RichText::new(what.as_str())
-                            .size(13.0)
-                            .color(p.text_secondary),
-                    );
-                });
+                if stacked {
+                    ui.add(egui::Label::new(key_text(key)).wrap());
+                    ui.horizontal(|ui| {
+                        ui.add_space(12.0);
+                        ui.add(egui::Label::new(what_text(what)).wrap());
+                    });
+                    ui.add_space(4.0);
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.allocate_ui_with_layout(
+                            vec2(key_w, 18.0),
+                            egui::Layout::left_to_right(egui::Align::Min),
+                            |ui| {
+                                ui.set_min_width(key_w);
+                                ui.label(key_text(key));
+                            },
+                        );
+                        ui.add(egui::Label::new(what_text(what)).wrap());
+                    });
+                }
             }
         });
 }
-
 fn group_title(ui: &mut Ui, shared: &Shared, title: &str, desc: &str) {
     let p = uc::pal(shared);
     ui.add_space(14.0);

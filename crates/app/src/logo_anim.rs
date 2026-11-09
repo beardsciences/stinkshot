@@ -336,7 +336,19 @@ pub fn header(ui: &mut Ui, title: FontId, body: FontId, text: Color32, secondary
     // The orb's view has empty space under the contact shadow; pull the text up into it.
     ui.add_space(-12.0);
     let w = ui.available_width();
-    let (r, _) = ui.allocate_exact_size(vec2(w, HEADER_TEXT), Sense::hover());
+    // The tagline wraps (centred) when a translation is wider than the page; extra lines
+    // grow the header.
+    let mut job = egui::text::LayoutJob::simple(
+        tr!("shell.about.tagline").to_owned(),
+        body.clone(),
+        secondary,
+        (w - 16.0).max(100.0),
+    );
+    job.halign = egui::Align::Center;
+    let tagline = ui.painter().layout_job(job);
+    let one_line = ui.fonts_mut(|f| f.row_height(&body));
+    let extra = (tagline.size().y - one_line).max(0.0);
+    let (r, _) = ui.allocate_exact_size(vec2(w, HEADER_TEXT + extra), Sense::hover());
     let x = r.center().x;
     let painter = ui.painter();
     painter.text(
@@ -350,18 +362,11 @@ pub fn header(ui: &mut Ui, title: FontId, body: FontId, text: Color32, secondary
         pos2(x, r.top() + 32.0),
         Align2::CENTER_TOP,
         tr!("shell.about.version", v = env!("CARGO_PKG_VERSION")),
-        body.clone(),
-        secondary,
-    );
-    painter.text(
-        pos2(x, r.top() + 52.0),
-        Align2::CENTER_TOP,
-        tr!("shell.about.tagline"),
         body,
         secondary,
     );
+    painter.galley(pos2(x, r.top() + 52.0), tagline, secondary);
 }
-
 /// Draws the animated logo, centred in the available width, `HEIGHT` tall.
 pub fn show(ui: &mut Ui) {
     let t0 = Instant::now();

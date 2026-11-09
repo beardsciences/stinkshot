@@ -12,7 +12,7 @@ use std::hash::Hash;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use egui::{Align2, Color32, CornerRadius, FontId, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
+use egui::{Color32, CornerRadius, FontId, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 use stinkshot_core::{PxRect, Rgba};
 use stinkshot_platform::Hwnd;
 
@@ -608,20 +608,38 @@ pub fn sidebar_link(
         icon,
         p.text_secondary,
     );
-    painter.text(
-        egui::pos2(r.left() + 38.0, r.center().y),
-        Align2::LEFT_CENTER,
-        label,
-        font(13.0),
+    // Long (translated) labels drop the shortcut hint first, then cut off with an ellipsis.
+    let label_x = r.left() + 38.0;
+    let short = painter.layout_no_wrap(shortcut.to_owned(), font(12.0), p.text_tertiary);
+    let full_w = r.right() - 10.0 - label_x;
+    let label_w = painter
+        .layout_no_wrap(label.to_owned(), font(13.0), p.text)
+        .size()
+        .x;
+    let show_short = label_w + 8.0 + short.size().x <= full_w;
+    let max_w = if show_short {
+        full_w - 8.0 - short.size().x
+    } else {
+        full_w
+    };
+    let mut job = egui::text::LayoutJob::simple_singleline(label.to_owned(), font(13.0), p.text);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(max_w);
+    let galley = painter.layout_job(job);
+    painter.galley(
+        egui::pos2(label_x, r.center().y - galley.size().y / 2.0),
+        galley,
         p.text,
     );
-    painter.text(
-        egui::pos2(r.right() - 10.0, r.center().y),
-        Align2::RIGHT_CENTER,
-        shortcut,
-        font(12.0),
-        p.text_tertiary,
-    );
+    if show_short {
+        painter.galley(
+            egui::pos2(
+                r.right() - 10.0 - short.size().x,
+                r.center().y - short.size().y / 2.0,
+            ),
+            short,
+            p.text_tertiary,
+        );
+    }
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
