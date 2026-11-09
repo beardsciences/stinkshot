@@ -20,6 +20,7 @@ use stinkshot_core::{PxPoint, PxRect, Rgba};
 use stinkshot_history::ItemId;
 use stinkshot_platform::Hwnd;
 
+use crate::l10n::tr;
 use crate::state::{Command, Shared, Surface, SurfaceStatus};
 use crate::theme::{self, Icon};
 use crate::toast::ui_common as uc;
@@ -357,12 +358,12 @@ impl Surface for Pin {
                     self.copy_rx = None;
                     let cmd = match res {
                         Ok(()) => Command::Notify {
-                            title: "Copied".into(),
-                            body: format!("{} is ready to paste.", self.title),
+                            title: tr!("shell.pin.copied").into(),
+                            body: tr!("shell.pin.ready", name = self.title),
                             error: false,
                         },
                         Err(e) => Command::Notify {
-                            title: "Could Not Copy".into(),
+                            title: tr!("shell.pin.copy_failed").into(),
                             body: e,
                             error: true,
                         },
@@ -400,7 +401,7 @@ impl Surface for Pin {
                 let o = opacity_step(self.opacity, notches);
                 if (o - self.opacity).abs() > f32::EPSILON {
                     self.opacity = o;
-                    self.set_chip(format!("Opacity {}%", (o * 100.0).round() as i32));
+                    self.set_chip(tr!("shell.pin.opacity", pct = (o * 100.0).round() as i32));
                 }
             } else {
                 let z = zoom_step(self.zoom, notches);
@@ -499,19 +500,19 @@ impl Surface for Pin {
                 edit = true;
             }
             bg.context_menu(|ui| {
-                if ui.button("Copy Image").clicked() {
+                if ui.button(tr!("shell.pin.copy_image")).clicked() {
                     want_copy = true;
                     ui.close();
                 }
-                if item.is_some() && ui.button("Open in Editor").clicked() {
+                if item.is_some() && ui.button(tr!("shell.pin.open_editor")).clicked() {
                     edit = true;
                     ui.close();
                 }
-                if ui.button("Reset Zoom to 100%").clicked() {
+                if ui.button(tr!("shell.pin.reset_zoom")).clicked() {
                     reset_zoom = true;
                     ui.close();
                 }
-                if ui.button("Close Pin").clicked() {
+                if ui.button(tr!("shell.pin.close")).clicked() {
                     close = true;
                     ui.close();
                 }
@@ -556,7 +557,7 @@ impl Surface for Pin {
                                     uc::font(11.0),
                                     icon_col,
                                 );
-                                if resp.on_hover_text("Opacity (Ctrl+scroll)").clicked()
+                                if resp.on_hover_text(tr!("shell.pin.opacity.tip")).clicked()
                                     && !recent_drag
                                 {
                                     cycle = true;
@@ -569,7 +570,9 @@ impl Surface for Pin {
                                     Icon::Copy,
                                     icon_col,
                                 );
-                                if resp.on_hover_text("Copy (Ctrl+C)").clicked() && !recent_drag {
+                                if resp.on_hover_text(tr!("shell.pin.copy.tip")).clicked()
+                                    && !recent_drag
+                                {
                                     want_copy = true;
                                 }
                             }
@@ -580,7 +583,9 @@ impl Surface for Pin {
                                     Icon::Close,
                                     icon_col,
                                 );
-                                if resp.on_hover_text("Close Pin (Esc)").clicked() && !recent_drag {
+                                if resp.on_hover_text(tr!("shell.pin.close.tip")).clicked()
+                                    && !recent_drag
+                                {
                                     close = true;
                                 }
                             }
@@ -615,9 +620,9 @@ impl Surface for Pin {
 
         if cycle {
             self.opacity = cycle_opacity(self.opacity);
-            self.set_chip(format!(
-                "Opacity {}%",
-                (self.opacity * 100.0).round() as i32
+            self.set_chip(tr!(
+                "shell.pin.opacity",
+                pct = (self.opacity * 100.0).round() as i32
             ));
         }
         if reset_zoom && (self.zoom - 1.0).abs() > f32::EPSILON {

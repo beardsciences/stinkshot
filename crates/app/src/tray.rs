@@ -59,9 +59,9 @@ const ID_UPDATE: &str = "update";
 
 fn header_text(config: &Config) -> String {
     let state = if config.privacy.check_for_updates {
-        "Update Check On"
+        tr!("shell.tray.update_check_on")
     } else {
-        "Offline"
+        tr!("shell.tray.offline")
     };
     format!("Stinkshot {} \u{b7} {}", env!("CARGO_PKG_VERSION"), state)
 }
@@ -292,7 +292,7 @@ impl Tray {
         if let Some(r) = release {
             let item = MenuItem::with_id(
                 ID_UPDATE,
-                format!("Update Available: {}", r.tag),
+                tr!("shell.tray.update_available", tag = r.tag),
                 !r.url.is_empty(),
                 None,
             );

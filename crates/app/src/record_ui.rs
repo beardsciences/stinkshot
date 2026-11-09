@@ -28,6 +28,7 @@ use stinkshot_core::PxRect;
 use stinkshot_platform::Hwnd;
 use stinkshot_record::{MediaInfo, Status};
 
+use crate::l10n::tr;
 use crate::state::{Command, Shared, Surface, SurfaceStatus};
 use crate::theme::{self, Icon};
 use crate::toast::ui_common as uc;
@@ -241,7 +242,7 @@ impl Surface for Countdown {
             painter.text(
                 pos2(rect.center().x, rect.bottom() - 14.0),
                 Align2::CENTER_CENTER,
-                "Esc to Cancel",
+                tr!("shell.countdown.cancel"),
                 uc::font(12.0),
                 p.text_secondary,
             );
@@ -341,9 +342,13 @@ pub struct HudToggles {
 /// Tooltip for a HUD toggle; a source that was not opened says where to turn it on.
 fn hud_toggle_tip(name: &str, on: bool, available: bool) -> String {
     if !available {
-        format!("{name} Is Off in Settings > Recording")
+        tr!("shell.hud.off_in_settings", name = name)
     } else {
-        format!("{name} {}", if on { "On" } else { "Off" })
+        if on {
+            tr!("shell.hud.on", name = name)
+        } else {
+            tr!("shell.hud.off", name = name)
+        }
     }
 }
 
@@ -450,9 +455,9 @@ impl Surface for RecordHud {
         let mut toggles = self.toggles;
         let available = self.available;
         let stop_tip = if self.stop_key.is_empty() {
-            "Stop and Trim".to_string()
+            tr!("shell.hud.stop_trim").to_string()
         } else {
-            format!("Stop and Trim ({})", self.stop_key)
+            tr!("shell.hud.stop_trim_key", key = self.stop_key)
         };
         let mut outbox: Vec<Command> = Vec::new();
         let summary = self.summary.clone();
@@ -508,9 +513,9 @@ impl Surface for RecordHud {
             // Pause / resume.
             let r = btn(x);
             let (icon, tip) = if paused {
-                (Icon::Play, "Resume")
+                (Icon::Play, tr!("shell.hud.resume"))
             } else {
-                (Icon::Pause, "Pause")
+                (Icon::Pause, tr!("shell.hud.pause"))
             };
             if place(ui, r, |ui| {
                 theme::widgets::icon_button(ui, icon, tip, false)
@@ -527,22 +532,27 @@ impl Surface for RecordHud {
 
             // Toggles.
             let items: [(Icon, &str, bool, &mut bool); 4] = [
-                (Icon::Mic, "Microphone", available.mic, &mut toggles.mic),
+                (
+                    Icon::Mic,
+                    tr!("shell.hud.microphone"),
+                    available.mic,
+                    &mut toggles.mic,
+                ),
                 (
                     Icon::Speaker,
-                    "System Audio",
+                    tr!("shell.hud.system_audio"),
                     available.system,
                     &mut toggles.system,
                 ),
                 (
                     Icon::Webcam,
-                    "Webcam",
+                    tr!("shell.hud.webcam"),
                     available.webcam,
                     &mut toggles.webcam,
                 ),
                 (
                     Icon::Clicks,
-                    "Show Clicks and Keys",
+                    tr!("shell.hud.show_input"),
                     available.overlays,
                     &mut toggles.overlays,
                 ),
@@ -579,7 +589,7 @@ impl Surface for RecordHud {
                 ui,
                 "stop",
                 stop,
-                "Stop",
+                tr!("shell.hud.stop"),
                 uc::BtnKind::Danger,
                 true,
                 p,
@@ -595,12 +605,9 @@ impl Surface for RecordHud {
             let line_y = row.bottom() + 8.0;
             let (text, col) = match &error {
                 // The shell logs the details and explains them in a toast as it stops.
-                Some(_) => (
-                    "Recording Problem, Stopping and Keeping What Was Recorded".to_string(),
-                    p.danger,
-                ),
+                Some(_) => (tr!("shell.hud.problem").to_string(), p.danger),
                 None if dropped > 0 => (
-                    format!("{summary} \u{b7} {dropped} dropped"),
+                    tr!("shell.hud.dropped", summary = summary, n = dropped),
                     p.text_secondary,
                 ),
                 None => (summary, p.text_secondary),
@@ -672,14 +679,12 @@ pub fn prompt_text(p: TrimPrompt, gif: bool) -> (&'static str, String) {
     let fmt = if gif { "GIF" } else { "MP4" };
     match p {
         TrimPrompt::Discard => (
-            "Discard This Recording?",
-            "It has not been saved yet. This cannot be undone.".to_string(),
+            tr!("shell.trim.discard_prompt"),
+            tr!("shell.trim.discard_prompt.body").to_string(),
         ),
         TrimPrompt::Close => (
-            "Save This Recording?",
-            format!(
-                "It has not been saved yet. Save Untrimmed keeps the whole recording as {fmt} in History. Discard asks once more, then deletes it."
-            ),
+            tr!("shell.trim.save_prompt"),
+            tr!("shell.trim.save_prompt.body", fmt = fmt),
         ),
     }
 }
@@ -1013,7 +1018,7 @@ impl Surface for TrimWindow {
             painter.text(
                 inner.left_top() + vec2(0.0, 2.0),
                 Align2::LEFT_TOP,
-                "Trim Recording",
+                tr!("shell.trim.title"),
                 theme::semibold(14.0),
                 p.text,
             );
@@ -1065,7 +1070,7 @@ impl Surface for TrimWindow {
                 painter.text(
                     preview_area.center(),
                     Align2::CENTER_CENTER,
-                    "Loading Preview",
+                    tr!("shell.trim.loading"),
                     uc::font(12.0),
                     // The preview well is always near-black, so use the dark theme's grey
                     // (the light theme's grey would fall below 4.5:1 here).
@@ -1122,7 +1127,7 @@ impl Surface for TrimWindow {
                 painter.text(
                     strip.center(),
                     Align2::CENTER_CENTER,
-                    "Reading Frames",
+                    tr!("shell.trim.reading"),
                     uc::font(12.0),
                     p.text_tertiary,
                 );
@@ -1231,7 +1236,7 @@ impl Surface for TrimWindow {
             painter.text(
                 labels.center(),
                 Align2::CENTER_CENTER,
-                format!("keep {}", uc::fmt_tenths(secs(end - start))),
+                tr!("shell.trim.keep", t = uc::fmt_tenths(secs(end - start))),
                 uc::font(12.0),
                 p.text_secondary,
             );
@@ -1291,7 +1296,7 @@ impl Surface for TrimWindow {
                 painter.text(
                     status_row.left_center(),
                     Align2::LEFT_CENTER,
-                    "Long clips make very large GIFs. MP4 is smaller.",
+                    tr!("shell.trim.gif_warning"),
                     uc::font(12.0),
                     p.text_tertiary,
                 );
@@ -1314,7 +1319,7 @@ impl Surface for TrimWindow {
                 ui,
                 "discard",
                 cell(0.0),
-                "Discard",
+                tr!("shell.trim.discard"),
                 uc::BtnKind::Neutral,
                 !busy,
                 p,
@@ -1380,12 +1385,18 @@ impl Surface for TrimWindow {
                     ui.spacing_mut().item_spacing.x = 8.0;
                     for (i, choice) in choices.iter().enumerate() {
                         let (label, kind) = match choice {
-                            PromptChoice::KeepEditing => ("Keep Editing", uc::BtnKind::Neutral),
-                            PromptChoice::Discard if prompt == TrimPrompt::Discard => {
-                                ("Discard", uc::BtnKind::Danger)
+                            PromptChoice::KeepEditing => {
+                                (tr!("shell.trim.keep_editing"), uc::BtnKind::Neutral)
                             }
-                            PromptChoice::Discard => ("Discard", uc::BtnKind::Neutral),
-                            PromptChoice::SaveUntrimmed => ("Save Untrimmed", uc::BtnKind::Accent),
+                            PromptChoice::Discard if prompt == TrimPrompt::Discard => {
+                                (tr!("shell.trim.discard"), uc::BtnKind::Danger)
+                            }
+                            PromptChoice::Discard => {
+                                (tr!("shell.trim.discard"), uc::BtnKind::Neutral)
+                            }
+                            PromptChoice::SaveUntrimmed => {
+                                (tr!("shell.trim.save_untrimmed"), uc::BtnKind::Accent)
+                            }
                         };
                         let (r, _) = ui.allocate_exact_size(vec2(btn_w, 34.0), Sense::hover());
                         if uc::rect_button(ui, ("trim_prompt", i), r, label, kind, true, p, accent)
@@ -1519,7 +1530,7 @@ impl Surface for ScrollHud {
             painter.text(
                 inner.left_top(),
                 Align2::LEFT_TOP,
-                format!("Stitching Frame {frames}"),
+                tr!("shell.scroll.stitching", n = frames),
                 uc::font(13.0),
                 p.text,
             );
@@ -1552,7 +1563,7 @@ impl Surface for ScrollHud {
                 ui,
                 "scroll_cancel",
                 b1,
-                "Cancel",
+                tr!("shell.scroll.cancel"),
                 uc::BtnKind::Neutral,
                 true,
                 p,
@@ -1566,7 +1577,7 @@ impl Surface for ScrollHud {
                 ui,
                 "scroll_stop",
                 b2,
-                "Stop Here",
+                tr!("shell.scroll.stop_here"),
                 uc::BtnKind::Accent,
                 true,
                 p,

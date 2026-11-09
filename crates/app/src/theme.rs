@@ -524,7 +524,11 @@ pub mod widgets {
     pub fn toggle(ui: &mut Ui, on: &mut bool) -> Response {
         let (dark, accent) = current(ui.ctx());
         let p = palette(dark);
-        let label = if *on { "On" } else { "Off" };
+        let label = if *on {
+            crate::l10n::tr!("shell.toggle.on")
+        } else {
+            crate::l10n::tr!("shell.toggle.off")
+        };
         let galley = ui.painter().layout_no_wrap(
             label.to_owned(),
             egui::FontId::proportional(13.0),

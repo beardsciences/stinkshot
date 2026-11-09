@@ -17,6 +17,8 @@ use windows::Win32::UI::Shell::{
 };
 use windows::core::{HRESULT, HSTRING, PCWSTR, w};
 
+use crate::l10n::tr;
+
 /// HRESULT_FROM_WIN32(ERROR_CANCELLED)
 const CANCELLED: HRESULT = HRESULT(0x800704C7u32 as i32);
 
@@ -48,17 +50,22 @@ unsafe fn show(
     unsafe {
         let dlg: IFileSaveDialog = CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER)
             .context("create save dialog")?;
+        let names = [
+            HSTRING::from(tr!("shell.save_as.png")),
+            HSTRING::from(tr!("shell.save_as.jpeg")),
+            HSTRING::from(tr!("shell.save_as.webp")),
+        ];
         let filters = [
             COMDLG_FILTERSPEC {
-                pszName: w!("PNG image"),
+                pszName: PCWSTR(names[0].as_ptr()),
                 pszSpec: w!("*.png"),
             },
             COMDLG_FILTERSPEC {
-                pszName: w!("JPEG image"),
+                pszName: PCWSTR(names[1].as_ptr()),
                 pszSpec: w!("*.jpg;*.jpeg"),
             },
             COMDLG_FILTERSPEC {
-                pszName: w!("WebP image"),
+                pszName: PCWSTR(names[2].as_ptr()),
                 pszSpec: w!("*.webp"),
             },
         ];
@@ -70,7 +77,7 @@ unsafe fn show(
         };
         dlg.SetFileTypeIndex(index)?;
         dlg.SetDefaultExtension(ext)?;
-        dlg.SetTitle(w!("Save Capture As"))?;
+        dlg.SetTitle(&HSTRING::from(tr!("shell.save_as.title")))?;
         dlg.SetFileName(&HSTRING::from(default_stem))?;
         let opts = dlg.GetOptions()?;
         dlg.SetOptions(
