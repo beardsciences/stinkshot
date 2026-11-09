@@ -727,7 +727,7 @@ pub struct TrimWindow {
 }
 
 impl TrimWindow {
-    /// `prefer_gif`: recording was started as GIF, so "Save GIF" is the primary button.
+    /// `prefer_gif`: recording was started as GIF, so tr!("shell.trim.save_gif") is the primary button.
     pub fn new(source: PathBuf, info: MediaInfo, prefer_gif: bool) -> Self {
         let area = uc::area_under_cursor();
         let dur = info.duration.as_secs_f64().max(0.1);
@@ -1329,13 +1329,31 @@ impl Surface for TrimWindow {
             {
                 ask_discard = true;
             }
-            if uc::rect_button(ui, "gif", cell(1.0), "Save GIF", gif_kind, !busy, p, accent)
-                .clicked()
+            if uc::rect_button(
+                ui,
+                "gif",
+                cell(1.0),
+                tr!("shell.trim.save_gif"),
+                gif_kind,
+                !busy,
+                p,
+                accent,
+            )
+            .clicked()
             {
                 save_gif = true;
             }
-            if uc::rect_button(ui, "mp4", cell(2.0), "Save MP4", mp4_kind, !busy, p, accent)
-                .clicked()
+            if uc::rect_button(
+                ui,
+                "mp4",
+                cell(2.0),
+                tr!("shell.trim.save_mp4"),
+                mp4_kind,
+                !busy,
+                p,
+                accent,
+            )
+            .clicked()
             {
                 save_mp4 = true;
             }
