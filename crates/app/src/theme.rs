@@ -401,7 +401,7 @@ pub fn install(
     style.spacing.button_padding = egui::vec2(12.0, 6.0);
     style.spacing.interact_size = egui::vec2(32.0, 32.0);
     style.spacing.window_margin = egui::Margin::same(12);
-    style.spacing.menu_margin = egui::Margin::same(4);
+    style.spacing.menu_margin = egui::Margin::same(6);
     style.spacing.scroll.bar_width = 6.0;
     style.spacing.slider_rail_height = 4.0;
     // Hover and press fades: quick enough to never feel sluggish.
@@ -1489,4 +1489,14 @@ mod tests {
         assert!(contrast(on_danger(true), DARK.danger) >= 4.5);
         assert!(contrast(on_danger(false), LIGHT.danger) >= 4.5);
     }
+}
+
+/// Compact rows for context menus: the global spacing (32 px controls plus 8 px gaps) is
+/// sized for forms and made menus look loose.
+pub fn menu_rows(ui: &mut egui::Ui) {
+    let s = ui.spacing_mut();
+    s.item_spacing.y = 0.0;
+    s.interact_size.y = 30.0;
+    s.button_padding = egui::vec2(10.0, 5.0);
+    ui.set_min_width(176.0);
 }

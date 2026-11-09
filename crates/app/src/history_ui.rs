@@ -1643,6 +1643,48 @@ impl Surface for HistoryWindow {
                                             continue;
                                         }
                                     }
+                                    // Delete button, next to the star. Starred captures don't
+                                    // get one (deleting them still works from the menu and
+                                    // the action bar, with the starred warning).
+                                    if hovered && !m.starred {
+                                        let del_r = Rect::from_center_size(
+                                            pos2(r.right() - 60.0, r.top() + 24.0),
+                                            vec2(30.0, 30.0),
+                                        );
+                                        let dresp = ui.interact(
+                                            del_r,
+                                            ui.scope_id().with(("hist_del", m.id)),
+                                            Sense::click(),
+                                        );
+                                        ui.painter().circle_filled(
+                                            del_r.center(),
+                                            15.0,
+                                            Color32::from_black_alpha(if dresp.hovered() {
+                                                130
+                                            } else {
+                                                80
+                                            }),
+                                        );
+                                        widgets::paint_icon(
+                                            ui.painter(),
+                                            Rect::from_center_size(
+                                                del_r.center(),
+                                                vec2(18.0, 18.0),
+                                            ),
+                                            Icon::Trash,
+                                            Color32::from_white_alpha(if dresp.hovered() {
+                                                230
+                                            } else {
+                                                150
+                                            }),
+                                        );
+                                        if dresp.on_hover_text(tr!("history.act.delete")).clicked()
+                                        {
+                                            act_req = Some((Act::Delete, m.id));
+                                            clicked = Some(m.id);
+                                            continue;
+                                        }
+                                    }
                                     if resp.clicked() || resp.secondary_clicked() {
                                         clicked = Some(m.id);
                                     }
@@ -1650,6 +1692,7 @@ impl Surface for HistoryWindow {
                                         act_req = Some((primary_act(m), m.id));
                                     }
                                     resp.context_menu(|ui| {
+                                        crate::theme::menu_rows(ui);
                                         for act in Act::MENU {
                                             let enabled = act.enabled(m, ocr_available);
                                             let b = ui.add_enabled(

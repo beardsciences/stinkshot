@@ -9,6 +9,14 @@ write entries for people who use Stinkshot, not for people who read the diff.
 
 ## [Unreleased]
 
+### Added
+
+- History cards show a Delete button next to the star on hover. Starred captures don't get one; delete them from the menu.
+
+### Fixed
+
+- Tighter rows in the History and pin right-click menus.
+
 ## [0.1.0] - 2026-11-08
 
 First public release.

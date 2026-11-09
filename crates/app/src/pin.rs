@@ -500,6 +500,7 @@ impl Surface for Pin {
                 edit = true;
             }
             bg.context_menu(|ui| {
+                crate::theme::menu_rows(ui);
                 if ui.button(tr!("shell.pin.copy_image")).clicked() {
                     want_copy = true;
                     ui.close();
