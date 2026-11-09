@@ -31,6 +31,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::l10n::tr;
 use egui::{
     Align2, Color32, ColorImage, FontId, Mesh, Pos2, Rect, Sense, Shape, TextureHandle,
     TextureOptions, Ui, pos2, vec2,
@@ -54,8 +55,6 @@ pub const VIEW: f32 = 184.0;
 pub const HEIGHT: f32 = 192.0;
 /// Height of the name, version and tagline under the orb in `header`.
 const HEADER_TEXT: f32 = 80.0;
-/// The tagline under the version.
-const TAGLINE: &str = "Local-first screenshots and screen recording for Windows";
 /// CPU frames are freed this long after the page was last shown or prewarmed.
 const KEEP: Duration = Duration::from_secs(60);
 /// Frames past the playhead kept covered by previews while rendering on screen (`pick`):
@@ -350,14 +349,14 @@ pub fn header(ui: &mut Ui, title: FontId, body: FontId, text: Color32, secondary
     painter.text(
         pos2(x, r.top() + 32.0),
         Align2::CENTER_TOP,
-        format!("Version {}", env!("CARGO_PKG_VERSION")),
+        tr!("shell.about.version", v = env!("CARGO_PKG_VERSION")),
         body.clone(),
         secondary,
     );
     painter.text(
         pos2(x, r.top() + 52.0),
         Align2::CENTER_TOP,
-        TAGLINE,
+        tr!("shell.about.tagline"),
         body,
         secondary,
     );

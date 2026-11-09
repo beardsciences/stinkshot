@@ -5,6 +5,7 @@
 
 use stinkshot_core::config::Hotkeys;
 
+use crate::l10n::tr;
 use crate::state::Command;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -37,30 +38,30 @@ impl Action {
     /// The one display name, used by Settings rows, tray items, hotkey errors and hints.
     pub fn label(self) -> &'static str {
         match self {
-            Action::Region => "Region",
-            Action::Window => "Window",
-            Action::Fullscreen => "Full Screen",
-            Action::Scrolling => "Scrolling",
-            Action::Ocr => "Copy Text (OCR)",
-            Action::RepeatLast => "Repeat Last Region",
-            Action::PickColor => "Pick Color",
-            Action::RecordMp4 => "Record MP4",
-            Action::RecordGif => "Record GIF",
+            Action::Region => tr!("shell.action.region"),
+            Action::Window => tr!("shell.action.window"),
+            Action::Fullscreen => tr!("shell.action.fullscreen"),
+            Action::Scrolling => tr!("shell.action.scrolling"),
+            Action::Ocr => tr!("shell.action.ocr"),
+            Action::RepeatLast => tr!("shell.action.repeat_last"),
+            Action::PickColor => tr!("shell.action.pick_color"),
+            Action::RecordMp4 => tr!("shell.action.record_mp4"),
+            Action::RecordGif => tr!("shell.action.record_gif"),
         }
     }
 
     /// Settings helper text (sentence case).
     pub fn description(self) -> &'static str {
         match self {
-            Action::Region => "Freeze the screen and drag a region.",
-            Action::Window => "Capture the active window with rounded corners and alpha.",
-            Action::Fullscreen => "Capture the monitor under the cursor.",
-            Action::Scrolling => "Select a region, Stinkshot scrolls and stitches it.",
-            Action::Ocr => "Select a region and copy the recognized text.",
-            Action::RepeatLast => "Capture the previous region again without selecting.",
-            Action::PickColor => "Click any pixel to copy its color as hex, RGB or HSL.",
-            Action::RecordMp4 => "Select a region and record with hardware encoding.",
-            Action::RecordGif => "Select a region and record a size-optimized GIF.",
+            Action::Region => tr!("shell.action.region.desc"),
+            Action::Window => tr!("shell.action.window.desc"),
+            Action::Fullscreen => tr!("shell.action.fullscreen.desc"),
+            Action::Scrolling => tr!("shell.action.scrolling.desc"),
+            Action::Ocr => tr!("shell.action.ocr.desc"),
+            Action::RepeatLast => tr!("shell.action.repeat_last.desc"),
+            Action::PickColor => tr!("shell.action.pick_color.desc"),
+            Action::RecordMp4 => tr!("shell.action.record_mp4.desc"),
+            Action::RecordGif => tr!("shell.action.record_gif.desc"),
         }
     }
 

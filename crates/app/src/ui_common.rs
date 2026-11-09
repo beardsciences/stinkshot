@@ -465,18 +465,21 @@ pub fn rect_button(
         painter.rect_stroke(rect, CornerRadius::same(6), stroke, StrokeKind::Inside);
     }
     // Filled (accent / danger) buttons are semibold like the design's primary buttons.
-    let text_font = if kind == BtnKind::Neutral {
-        font(13.0)
-    } else {
-        theme::semibold(13.0)
+    let text_font = |size: f32| {
+        if kind == BtnKind::Neutral {
+            font(size)
+        } else {
+            theme::semibold(size)
+        }
     };
-    painter.text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        text,
-        text_font,
-        text_col,
-    );
+    // Longer (translated) labels shrink to fit instead of running past the edges.
+    let avail = (rect.width() - 12.0).max(1.0);
+    let mut galley = painter.layout_no_wrap(text.to_owned(), text_font(13.0), text_col);
+    if galley.size().x > avail {
+        let size = (13.0 * avail / galley.size().x).max(10.0);
+        galley = painter.layout_no_wrap(text.to_owned(), text_font(size), text_col);
+    }
+    painter.galley(rect.center() - galley.size() / 2.0, galley, text_col);
     if enabled {
         resp.on_hover_cursor(egui::CursorIcon::PointingHand)
     } else {

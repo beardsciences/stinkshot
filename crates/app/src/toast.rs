@@ -17,6 +17,7 @@ use stinkshot_history::ItemId;
 use stinkshot_platform::Hwnd;
 
 use self::ui_common as uc;
+use crate::l10n::tr;
 use crate::state::{Command, Shared, Surface, SurfaceStatus};
 use crate::theme::{self, Icon};
 
@@ -78,12 +79,12 @@ pub enum ToastAction {
 impl ToastAction {
     fn label(self) -> &'static str {
         match self {
-            ToastAction::Edit => "Edit",
-            ToastAction::Copy => "Copy",
-            ToastAction::Pin => "Pin",
-            ToastAction::CopyText => "Copy Text",
-            ToastAction::Folder => "Folder",
-            ToastAction::Play => "Play",
+            ToastAction::Edit => tr!("shell.toast.edit"),
+            ToastAction::Copy => tr!("shell.toast.copy"),
+            ToastAction::Pin => tr!("shell.toast.pin"),
+            ToastAction::CopyText => tr!("shell.toast.copy_text"),
+            ToastAction::Folder => tr!("shell.toast.folder"),
+            ToastAction::Play => tr!("shell.toast.play"),
         }
     }
     fn command(self, id: ItemId) -> Command {
@@ -100,13 +101,13 @@ impl ToastAction {
     /// Hover text (Title Case).
     fn tooltip(self, recording: bool) -> &'static str {
         match self {
-            ToastAction::Edit => "Open in the Editor",
-            ToastAction::Copy if recording => "Copy the File to the Clipboard",
-            ToastAction::Copy => "Copy the Image to the Clipboard",
-            ToastAction::Pin => "Pin to Screen",
-            ToastAction::CopyText => "Copy Recognized Text",
-            ToastAction::Folder => "Show in Folder",
-            ToastAction::Play => "Play",
+            ToastAction::Edit => tr!("shell.toast.edit.tip"),
+            ToastAction::Copy if recording => tr!("shell.toast.copy_file.tip"),
+            ToastAction::Copy => tr!("shell.toast.copy_image.tip"),
+            ToastAction::Pin => tr!("shell.toast.pin.tip"),
+            ToastAction::CopyText => tr!("shell.toast.copy_text.tip"),
+            ToastAction::Folder => tr!("shell.toast.folder.tip"),
+            ToastAction::Play => tr!("shell.toast.play"),
         }
     }
 }
@@ -407,7 +408,11 @@ impl Surface for Toast {
                 }
                 if item.is_some() && (can_edit || is_recording) {
                     r.on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .on_hover_text(if can_edit { "Edit" } else { "Play" });
+                        .on_hover_text(if can_edit {
+                            tr!("shell.toast.edit")
+                        } else {
+                            tr!("shell.toast.play")
+                        });
                 }
                 text_x = thumb_rect.right() + 12.0;
             }
@@ -431,7 +436,7 @@ impl Surface for Toast {
                 Icon::Close,
                 p.text_secondary,
             );
-            if dr.on_hover_text("Dismiss").clicked() {
+            if dr.on_hover_text(tr!("shell.toast.dismiss")).clicked() {
                 close = true;
             }
 
@@ -548,9 +553,7 @@ impl Surface for Toast {
                         accent,
                     );
                     let resp = if !enabled {
-                        resp.on_disabled_hover_text(
-                            "Copy Text Needs an OCR Language in Windows Settings",
-                        )
+                        resp.on_disabled_hover_text(tr!("shell.toast.ocr_missing"))
                     } else {
                         resp.on_hover_text(a.tooltip(is_recording))
                     };
