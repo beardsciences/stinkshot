@@ -107,8 +107,39 @@ fn swatch(x: i32, y: i32, secs: f64) -> windows::core::Result<()> {
     Ok(())
 }
 
+/// `SMOKE_LOG=1`: recorder log on stderr, with seconds since start.
+struct StderrLog(Instant);
+
+impl log::Log for StderrLog {
+    fn enabled(&self, m: &log::Metadata) -> bool {
+        m.level() <= log::Level::Debug
+    }
+    fn log(&self, r: &log::Record) {
+        if self.enabled(r.metadata()) {
+            let t = self.0.elapsed().as_secs_f64();
+            eprintln!("[{t:7.3}] {} {}", r.level(), r.args());
+        }
+    }
+    fn flush(&self) {}
+}
+
+/// Ends the swatch child when dropped (also on an early error return).
+struct Child(std::process::Child);
+
+impl Drop for Child {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 fn run() -> anyhow::Result<String> {
     stinkshot_platform::dpi::init();
+    if std::env::var_os("SMOKE_LOG").is_some() {
+        static LOG: std::sync::OnceLock<StderrLog> = std::sync::OnceLock::new();
+        let _ = log::set_logger(LOG.get_or_init(|| StderrLog(Instant::now())));
+        log::set_max_level(log::LevelFilter::Debug);
+    }
     let mut args = std::env::args().skip(1);
     if std::env::args().nth(1).as_deref() == Some("--swatch") {
         let v: Vec<f64> = args.skip(1).map(|s| s.parse()).collect::<Result<_, _>>()?;
@@ -123,17 +154,21 @@ fn run() -> anyhow::Result<String> {
     let x: i32 = args.next().map(|s| s.parse()).transpose()?.unwrap_or(64);
     let y: i32 = args.next().map(|s| s.parse()).transpose()?.unwrap_or(64);
 
-    // Window up first, recording inside its lifetime with a margin on both ends. It runs in a
-    // child process: the recorder does not see windows of its own process (measured Nov 8: the
-    // frames showed what was under the swatch).
-    let mut window = std::process::Command::new(std::env::current_exe()?)
-        .args([
-            "--swatch",
-            &x.to_string(),
-            &y.to_string(),
-            &(secs + 4.0).to_string(),
-        ])
-        .spawn()?;
+    // Window up first; it stays until the recording has stopped. It runs in a child process:
+    // the recorder does not see windows of its own process (measured Nov 8: the frames showed
+    // what was under the swatch). A fixed lifetime is not enough: `Recorder::start` can take
+    // several seconds (3 s WGC timeout on PCs where WGC hangs), and the swatch closed
+    // mid-recording (Nov 8: black videos). The lifetime is only a cap if this process dies.
+    let mut window = Child(
+        std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--swatch",
+                &x.to_string(),
+                &y.to_string(),
+                &(secs + 120.0).to_string(),
+            ])
+            .spawn()?,
+    );
     std::thread::sleep(Duration::from_millis(2000));
     let _ = std::fs::remove_file(&out);
     let rec = Recorder::start(RecordOptions {
@@ -152,8 +187,12 @@ fn run() -> anyhow::Result<String> {
     })?;
     std::thread::sleep(Duration::from_secs_f64(secs));
     let backend = rec.capture_backend();
+    let swatch_gone = window.0.try_wait()?;
     let res = rec.stop()?;
-    let _ = window.wait();
+    drop(window);
+    if let Some(status) = swatch_gone {
+        anyhow::bail!("the swatch window closed during the recording ({status})");
+    }
 
     let info = probe(&res.path)?;
     let got = info.duration.as_secs_f64();
