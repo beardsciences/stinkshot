@@ -38,6 +38,11 @@ pub enum Command {
     CaptureScrolling,
     OcrRegion,
     RepeatLastRegion,
+    /// Capture the on-screen area of the text selected in the focused app (UI Automation),
+    /// grown to whole paragraphs when `paragraph`.
+    CaptureSelectedText {
+        paragraph: bool,
+    },
     /// Standalone color picker: freeze, click a pixel, its color is copied.
     PickColor,
     RecordMp4,
@@ -153,7 +158,7 @@ pub struct CaptureOutput {
     pub rect: PxRect,
     pub action: FinishAction,
     pub source: SourceInfo,
-    /// "region" | "window" | "fullscreen" | "scrolling"
+    /// "region" | "window" | "fullscreen" | "scrolling" | "text" (Capture Selected Text)
     pub mode: &'static str,
     /// Set when re-editing an existing history item: overwrite it instead of adding new.
     pub editing: Option<ItemId>,

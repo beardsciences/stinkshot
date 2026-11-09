@@ -80,6 +80,7 @@ pub fn get(key: &str) -> Option<&'static str> {
         "history.mode.fullscreen" => "fullscreen",
         "history.mode.scrolling" => "scrolling",
         "history.mode.recording" => "recording",
+        "history.mode.text" => "selected text",
         _ => return None,
     })
 }
@@ -153,4 +154,5 @@ pub const KEYS: &[&str] = &[
     "history.mode.fullscreen",
     "history.mode.scrolling",
     "history.mode.recording",
+    "history.mode.text",
 ];

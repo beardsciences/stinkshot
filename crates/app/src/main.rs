@@ -29,6 +29,7 @@ mod overlay;
 mod pin;
 mod recompress;
 mod record_ui;
+mod settings_search;
 mod settings_ui;
 mod shell;
 mod state;
