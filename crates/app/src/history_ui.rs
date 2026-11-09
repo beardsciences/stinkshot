@@ -1577,7 +1577,11 @@ impl Surface for HistoryWindow {
                                         Some(selected == Some(m.id)),
                                         || crate::a11y::item_name(m),
                                     );
-                                    let hovered = resp.hovered();
+                                    // The star and trash buttons sit on top of the card and
+                                    // take its hover, so `resp.hovered()` alone goes false
+                                    // over them; the buttons would hide, the card would get
+                                    // the hover back and they'd flash every frame.
+                                    let hovered = resp.hovered() || ui.rect_contains_pointer(r);
                                     paint_card(
                                         ui,
                                         r,
