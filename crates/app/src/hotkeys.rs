@@ -11,10 +11,18 @@
 //! The manager owns a hidden window on the thread that created it (the UI thread), so
 //! hotkey messages arrive through the winit event loop. A bridge thread forwards them to a
 //! channel and wakes the UI.
+//!
+//! A key another program holds (Greenshot, say) fails to register. Those keys are retried
+//! in the background (`Hotkeys::tick`, `RetryClock`): every few seconds at first, then
+//! slower, and at once when Settings opens, Check Again is clicked, or the session unlocks
+//! or resumes (`request_retry`). Once the other program lets go, the key works and its
+//! warning goes away without a restart.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
@@ -157,9 +165,151 @@ fn same_hotkey(a: &str, b: &str) -> bool {
     }
 }
 
+/// A combination bound to an action, with its display form for error texts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Binding {
+    hotkey: HotKey,
+    action: Action,
+    key: String,
+}
+
+/// A binding Windows refused; retried until it registers or the config changes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Pending {
+    binding: Binding,
+    in_use: bool,
+}
+
+impl Pending {
+    fn text(&self) -> String {
+        register_error_text(&self.binding.key, self.binding.action, self.in_use)
+    }
+}
+
+/// One problem text. `retry` is the hotkey id of a failed registration that is still being
+/// retried; the entry goes away when that hotkey registers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ErrorEntry {
+    text: String,
+    retry: Option<u32>,
+}
+
+/// Registration seam, so the retry logic is testable without Windows.
+trait Registrar {
+    fn register(&self, hotkey: HotKey) -> Result<(), global_hotkey::Error>;
+}
+
+impl Registrar for GlobalHotKeyManager {
+    fn register(&self, hotkey: HotKey) -> Result<(), global_hotkey::Error> {
+        GlobalHotKeyManager::register(self, hotkey)
+    }
+}
+
+/// Try every pending binding once. Returns the ones that registered (removed from
+/// `pending`) and whether a remaining one changed its error kind. Each hotkey is registered
+/// at most once: a success leaves `pending` in the same call.
+fn retry_pending(reg: &impl Registrar, pending: &mut Vec<Pending>) -> (Vec<Binding>, bool) {
+    let mut done = Vec::new();
+    let mut changed = false;
+    pending.retain_mut(|p| match reg.register(p.binding.hotkey) {
+        Ok(()) => {
+            done.push(p.binding.clone());
+            false
+        }
+        Err(e) => {
+            let in_use = matches!(e, global_hotkey::Error::AlreadyRegistered(_));
+            if in_use != p.in_use {
+                p.in_use = in_use;
+                changed = true;
+            }
+            true
+        }
+    });
+    (done, changed)
+}
+
+/// When to retry failed registrations: every `FAST` for the first `FAST_TRIES` attempts
+/// after something failed (or after a kick), then every `SLOW`. Idle when nothing fails.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RetryClock {
+    next: Option<Instant>,
+    tries: u32,
+}
+
+impl RetryClock {
+    const FAST: Duration = Duration::from_secs(3);
+    const FAST_TRIES: u32 = 40;
+    const SLOW: Duration = Duration::from_secs(30);
+
+    const fn idle() -> Self {
+        RetryClock {
+            next: None,
+            tries: 0,
+        }
+    }
+
+    fn interval(&self) -> Duration {
+        if self.tries < Self::FAST_TRIES {
+            Self::FAST
+        } else {
+            Self::SLOW
+        }
+    }
+
+    /// Something failed just now: first retry one fast interval from `now`.
+    fn start(&mut self, now: Instant) {
+        self.tries = 0;
+        self.next = Some(now + Self::FAST);
+    }
+
+    /// Nothing fails any more.
+    fn stop(&mut self) {
+        *self = Self::idle();
+    }
+
+    /// Retry at the next tick and go back to the fast pace. No effect when idle.
+    fn kick(&mut self, now: Instant) {
+        if self.next.is_some() {
+            self.tries = 0;
+            self.next = Some(now);
+        }
+    }
+
+    fn due(&self, now: Instant) -> bool {
+        self.next.is_some_and(|t| now >= t)
+    }
+
+    /// An attempt was made at `now` and something still fails.
+    fn attempted(&mut self, now: Instant) {
+        self.tries = self.tries.saturating_add(1);
+        self.next = Some(now + self.interval());
+    }
+
+    /// How long until the next attempt, if one is scheduled.
+    fn wait(&self, now: Instant) -> Option<Duration> {
+        self.next.map(|t| t.saturating_duration_since(now))
+    }
+}
+
+/// Set from any thread (session unlock or resume) to retry failed hotkeys on the next tick.
+static RETRY_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// Ask the UI thread to retry failed hotkeys now, and wake it. Safe from any thread.
+pub fn request_retry() {
+    RETRY_REQUESTED.store(true, Ordering::Relaxed);
+    crate::wake::wake();
+}
+
 pub struct Hotkeys {
     manager: Option<GlobalHotKeyManager>,
-    registered: Vec<HotKey>,
+    registered: Vec<Binding>,
+    /// Failed registrations being retried (`tick`).
+    pending: Vec<Pending>,
+    /// Problems from the last reload, minus retries that have since succeeded.
+    errors: Vec<ErrorEntry>,
+    /// `errors` changed outside `tick` (a key lost on resume); reported by the next `tick`.
+    errors_changed: bool,
+    retry: RetryClock,
     actions: HashMap<u32, Action>,
     suspended: bool,
     took_over_printscreen: bool,
@@ -221,6 +371,10 @@ impl Hotkeys {
         let mut hk = Hotkeys {
             manager,
             registered: Vec::new(),
+            pending: Vec::new(),
+            errors: Vec::new(),
+            errors_changed: false,
+            retry: RetryClock::idle(),
             actions: HashMap::new(),
             suspended: false,
             // Assume a takeover is in place, so the first reload hands PrtSc back to
@@ -238,9 +392,21 @@ impl Hotkeys {
         (hk, errors)
     }
 
-    /// Unregister all and register from `cfg`. Returns errors.
+    /// Unregister all and register from `cfg`. Returns errors (also kept for `errors`).
     pub fn reload(&mut self, cfg: &stinkshot_core::config::Hotkeys) -> Vec<String> {
-        let mut errors = Vec::new();
+        self.errors = self.reload_entries(cfg);
+        self.errors_changed = false;
+        if self.pending.is_empty() {
+            self.retry.stop();
+        } else {
+            self.retry.start(Instant::now());
+        }
+        self.errors.iter().map(|e| e.text.clone()).collect()
+    }
+
+    fn reload_entries(&mut self, cfg: &stinkshot_core::config::Hotkeys) -> Vec<ErrorEntry> {
+        let mut errors: Vec<ErrorEntry> = Vec::new();
+        let plain = |text: String| ErrorEntry { text, retry: None };
         self.unregister_all();
 
         let uses_printscreen = bindings(cfg)
@@ -270,7 +436,7 @@ impl Hotkeys {
                 }
                 Err(e) => {
                     log::warn!("PrintScreen takeover change failed: {e:#}");
-                    errors.push(tr!("shell.hotkey.prtsc_failed").to_string());
+                    errors.push(plain(tr!("shell.hotkey.prtsc_failed").to_string()));
                 }
             }
         }
@@ -278,7 +444,10 @@ impl Hotkeys {
         let Some(manager) = &self.manager else {
             return errors;
         };
+        // Every id a binding took, registered or not, so a second binding of the same
+        // combination is reported as a duplicate instead of being registered or retried twice.
         let mut claimed: HashMap<u32, Action> = HashMap::new();
+        let mut actions: HashMap<u32, Action> = HashMap::new();
         for (action, text) in bindings(cfg) {
             let text = text.trim();
             if text.is_empty() {
@@ -288,12 +457,12 @@ impl Hotkeys {
                 Ok(h) => h,
                 Err(e) => {
                     log::warn!("hotkey {text} for {} does not parse: {e}", action.label());
-                    errors.push(parse_error_text(&display(text), action));
+                    errors.push(plain(parse_error_text(&display(text), action)));
                     continue;
                 }
             };
             if let Some(other) = claimed.get(&hotkey.id()) {
-                errors.push(duplicate_text(&display(text), action, *other));
+                errors.push(plain(duplicate_text(&display(text), action, *other)));
                 continue;
             }
             if self.snip.is_some()
@@ -304,21 +473,33 @@ impl Hotkeys {
                 // The hook swallows this chord before Windows could deliver it as a hotkey
                 // and routes it to `action` itself (`snip_routes`).
                 claimed.insert(hotkey.id(), action);
+                actions.insert(hotkey.id(), action);
                 continue;
             }
+            claimed.insert(hotkey.id(), action);
+            let binding = Binding {
+                hotkey,
+                action,
+                key: display(text),
+            };
             match manager.register(hotkey) {
                 Ok(()) => {
-                    claimed.insert(hotkey.id(), action);
-                    self.registered.push(hotkey);
+                    actions.insert(hotkey.id(), action);
+                    self.registered.push(binding);
                 }
                 Err(e) => {
                     log::warn!("hotkey {text} for {} failed: {e}", action.label());
                     let in_use = matches!(e, global_hotkey::Error::AlreadyRegistered(_));
-                    errors.push(register_error_text(&display(text), action, in_use));
+                    let p = Pending { binding, in_use };
+                    errors.push(ErrorEntry {
+                        text: p.text(),
+                        retry: Some(hotkey.id()),
+                    });
+                    self.pending.push(p);
                 }
             }
         }
-        self.actions = claimed;
+        self.actions = actions;
         // Everything registered above is live again, whatever the previous state was.
         self.suspended = false;
         errors
@@ -326,14 +507,83 @@ impl Hotkeys {
 
     fn unregister_all(&mut self) {
         if let Some(m) = &self.manager {
-            for hk in self.registered.drain(..) {
-                if let Err(e) = m.unregister(hk) {
-                    log::debug!("unregister {hk}: {e}");
+            for b in self.registered.drain(..) {
+                if let Err(e) = m.unregister(b.hotkey) {
+                    log::debug!("unregister {}: {e}", b.hotkey);
                 }
             }
         }
         self.registered.clear();
+        self.pending.clear();
+        self.retry.stop();
         self.actions.clear();
+    }
+
+    /// Current problem texts (Settings > Hotkeys). Changes when a retry succeeds; `tick`
+    /// says when.
+    pub fn errors(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.manager.is_none() {
+            out.push(tr!("shell.hotkey.unavailable").to_string());
+        }
+        out.extend(self.errors.iter().map(|e| e.text.clone()));
+        out
+    }
+
+    /// Retry failed hotkeys on the next `tick` instead of waiting for the timer.
+    pub fn retry_now(&mut self) {
+        self.retry.kick(Instant::now());
+    }
+
+    /// Retry failed registrations when due. Call on the UI thread (the manager's window
+    /// lives there). Returns true when `errors()` changed. Does nothing while suspended:
+    /// every hotkey is released on purpose then, and resuming registers them again.
+    pub fn tick(&mut self) -> bool {
+        let now = Instant::now();
+        let flagged = std::mem::take(&mut self.errors_changed);
+        if RETRY_REQUESTED.swap(false, Ordering::Relaxed) {
+            self.retry.kick(now);
+        }
+        if self.suspended || !self.retry.due(now) {
+            return flagged;
+        }
+        let Some(m) = &self.manager else {
+            self.retry.stop();
+            return flagged;
+        };
+        let (done, kind_changed) = retry_pending(m, &mut self.pending);
+        let changed = flagged || kind_changed || !done.is_empty();
+        for b in done {
+            log::info!(
+                "hotkey {} for {} registered on retry",
+                b.key,
+                b.action.label()
+            );
+            let id = b.hotkey.id();
+            self.errors.retain(|e| e.retry != Some(id));
+            self.actions.insert(id, b.action);
+            self.registered.push(b);
+        }
+        if kind_changed {
+            for p in &self.pending {
+                let id = p.binding.hotkey.id();
+                if let Some(e) = self.errors.iter_mut().find(|e| e.retry == Some(id)) {
+                    e.text = p.text();
+                }
+            }
+        }
+        if self.pending.is_empty() {
+            self.retry.stop();
+        } else {
+            self.retry.attempted(now);
+        }
+        changed
+    }
+
+    /// How long until the next retry, so the caller can wake up for it. None when nothing
+    /// is being retried.
+    pub fn next_retry_in(&self) -> Option<Duration> {
+        self.retry.wait(Instant::now())
     }
 
     /// Install or remove the Snipping Tool hook.
@@ -423,23 +673,40 @@ impl Hotkeys {
         }
         let Some(m) = &self.manager else { return };
         if suspended {
-            for hk in &self.registered {
-                if let Err(e) = m.unregister(*hk) {
-                    log::debug!("suspend: unregister {hk}: {e}");
+            for b in &self.registered {
+                if let Err(e) = m.unregister(b.hotkey) {
+                    log::debug!("suspend: unregister {}: {e}", b.hotkey);
                 }
             }
         } else {
+            // Another program can grab a key in the moment it was released; such a key
+            // joins the retry list like a failure at load.
             let mut lost = Vec::new();
-            self.registered.retain(|hk| match m.register(*hk) {
+            self.registered.retain(|b| match m.register(b.hotkey) {
                 Ok(()) => true,
                 Err(e) => {
-                    log::warn!("could not re-register hotkey {hk}: {e}");
-                    lost.push(hk.id());
+                    log::warn!("could not re-register hotkey {}: {e}", b.hotkey);
+                    let in_use = matches!(e, global_hotkey::Error::AlreadyRegistered(_));
+                    lost.push(Pending {
+                        binding: b.clone(),
+                        in_use,
+                    });
                     false
                 }
             });
-            for id in lost {
+            for p in lost {
+                let id = p.binding.hotkey.id();
                 self.actions.remove(&id);
+                self.errors.push(ErrorEntry {
+                    text: p.text(),
+                    retry: Some(id),
+                });
+                self.pending.push(p);
+                self.errors_changed = true;
+            }
+            if !self.pending.is_empty() {
+                // Nothing was retried while suspended; try again soon.
+                self.retry.start(Instant::now());
             }
         }
     }
@@ -663,6 +930,157 @@ mod tests {
                 (SnipChord::Record, Action::RecordGif)
             ]
         );
+    }
+
+    fn pending(text: &str, action: Action) -> Pending {
+        Pending {
+            binding: Binding {
+                hotkey: text.parse().expect("test hotkey parses"),
+                action,
+                key: display(text),
+            },
+            in_use: true,
+        }
+    }
+
+    /// Fake Windows: ids in `held` are taken by another program; everything this registrar
+    /// registered is recorded, and registering an id twice is a test failure.
+    struct FakeRegistrar {
+        held: std::cell::RefCell<Vec<u32>>,
+        mine: std::cell::RefCell<Vec<u32>>,
+        fail_other: std::cell::RefCell<Vec<u32>>,
+    }
+
+    impl FakeRegistrar {
+        fn new(held: &[u32]) -> Self {
+            FakeRegistrar {
+                held: std::cell::RefCell::new(held.to_vec()),
+                mine: std::cell::RefCell::new(Vec::new()),
+                fail_other: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl Registrar for FakeRegistrar {
+        fn register(&self, hotkey: HotKey) -> Result<(), global_hotkey::Error> {
+            let id = hotkey.id();
+            assert!(
+                !self.mine.borrow().contains(&id),
+                "{hotkey} registered twice"
+            );
+            if self.held.borrow().contains(&id) {
+                return Err(global_hotkey::Error::AlreadyRegistered(hotkey));
+            }
+            if self.fail_other.borrow().contains(&id) {
+                return Err(global_hotkey::Error::FailedToRegister("test".into()));
+            }
+            self.mine.borrow_mut().push(id);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn retry_registers_once_when_the_other_program_lets_go() {
+        let a = pending("Control+Shift+F9", Action::Fullscreen);
+        let b = pending("Control+Shift+F10", Action::Window);
+        let (ida, idb) = (a.binding.hotkey.id(), b.binding.hotkey.id());
+        let reg = FakeRegistrar::new(&[ida, idb]);
+        let mut list = vec![a.clone(), b.clone()];
+
+        // Still held: nothing changes.
+        let (done, changed) = retry_pending(&reg, &mut list);
+        assert!(done.is_empty() && !changed);
+        assert_eq!(list.len(), 2);
+
+        // The other program quits and frees one key.
+        reg.held.borrow_mut().retain(|id| *id != ida);
+        let (done, changed) = retry_pending(&reg, &mut list);
+        assert_eq!(done, vec![a.binding.clone()]);
+        assert!(!changed);
+        assert_eq!(list, vec![b.clone()]);
+
+        // The freed key is not tried again (the fake panics on a double registration).
+        let (done, _) = retry_pending(&reg, &mut list);
+        assert!(done.is_empty());
+
+        // The other one now fails for a different reason: its kind changes.
+        reg.held.borrow_mut().clear();
+        reg.fail_other.borrow_mut().push(idb);
+        let (done, changed) = retry_pending(&reg, &mut list);
+        assert!(done.is_empty() && changed);
+        assert!(!list[0].in_use);
+        assert!(ErrorKind::of(&list[0].text()) == Some(ErrorKind::NotRegistered));
+
+        reg.fail_other.borrow_mut().clear();
+        let (done, _) = retry_pending(&reg, &mut list);
+        assert_eq!(done, vec![b.binding]);
+        assert!(list.is_empty());
+        assert_eq!(*reg.mine.borrow(), vec![ida, idb]);
+    }
+
+    #[test]
+    fn retry_clock_paces_kicks_and_stops() {
+        let t0 = Instant::now();
+        let mut c = RetryClock::idle();
+        assert!(!c.due(t0) && c.wait(t0).is_none());
+        // Idle: a kick (Settings opened, unlock) does not start anything.
+        c.kick(t0);
+        assert_eq!(c, RetryClock::idle());
+
+        c.start(t0);
+        assert!(!c.due(t0));
+        assert_eq!(c.wait(t0), Some(RetryClock::FAST));
+        let mut now = t0 + RetryClock::FAST;
+        assert!(c.due(now));
+
+        // Fast while young, then slow.
+        for _ in 0..RetryClock::FAST_TRIES {
+            assert!(c.due(now));
+            c.attempted(now);
+            now += c.wait(now).expect("scheduled");
+        }
+        assert_eq!(c.interval(), RetryClock::SLOW);
+        c.attempted(now);
+        assert_eq!(c.wait(now), Some(RetryClock::SLOW));
+
+        // A kick makes it due at once and fast again.
+        c.kick(now);
+        assert!(c.due(now));
+        assert_eq!(c.interval(), RetryClock::FAST);
+
+        // Nothing left to retry: idle, no wake-ups.
+        c.stop();
+        assert!(!c.due(now + RetryClock::SLOW * 10));
+        assert!(c.wait(now).is_none());
+    }
+
+    /// Real Windows conflict: a second hotkey window in this process holds an obscure
+    /// combination (no other program uses it), so registering it fails as "in use"; once the
+    /// holder lets go, a retry registers it. Needs a desktop session.
+    #[test]
+    #[ignore]
+    fn real_conflict_clears_on_retry() {
+        let text = "Control+Alt+Shift+F24";
+        let hk: HotKey = text.parse().expect("parses");
+        let holder = GlobalHotKeyManager::new().expect("holder manager");
+        let ours = GlobalHotKeyManager::new().expect("our manager");
+        holder.register(hk).expect("holder registers");
+
+        let mut list = vec![pending(text, Action::Fullscreen)];
+        let (done, changed) = retry_pending(&ours, &mut list);
+        assert!(done.is_empty() && !changed, "should still be in use");
+        assert!(list[0].in_use);
+
+        holder.unregister(hk).expect("holder lets go");
+        let (done, _) = retry_pending(&ours, &mut list);
+        assert_eq!(done.len(), 1);
+        assert!(list.is_empty());
+        // Ours now: the holder cannot take it back.
+        assert!(matches!(
+            holder.register(hk),
+            Err(global_hotkey::Error::AlreadyRegistered(_))
+        ));
+        ours.unregister(hk).expect("cleanup");
     }
 
     #[test]

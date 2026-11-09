@@ -295,7 +295,9 @@ pub fn get(key: &str) -> Option<&'static str> {
         }
         "shell.hotkey.row.invalid" => "Not a valid key combination. Record it again.",
         "shell.hotkey.row.duplicate" => "Also set for another action, so only one of them works.",
-        "shell.hotkey.row.in_use" => "Already used by another program. Pick a different key.",
+        "shell.hotkey.row.in_use" => {
+            "Already used by another program. Close it or pick a different key."
+        }
         "shell.hotkey.row.not_registered" => "Windows could not register it. Pick a different key.",
         "shell.hotkey.unavailable" => {
             "Global hotkeys are unavailable. Use the tray icon, or restart Stinkshot."
@@ -324,7 +326,7 @@ pub fn get(key: &str) -> Option<&'static str> {
             "{key} {phrase} {other} and {action}; only {other} works. Change one of them in Settings > Hotkeys."
         }
         "shell.hotkey.in_use" => {
-            "{key} ({action}) {phrase}. Pick a different key in Settings > Hotkeys."
+            "{key} ({action}) {phrase}. Close that program or pick a different key in Settings > Hotkeys. It works once the key is free."
         }
         "shell.hotkey.not_registered" => {
             "{key} ({action}) {phrase}. Pick a different key in Settings > Hotkeys."

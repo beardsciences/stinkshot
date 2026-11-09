@@ -127,6 +127,21 @@ fn error_for<'a>(errors: &'a [String], hotkey: &str) -> Option<&'a str> {
     })
 }
 
+/// When some problem is a key Windows refused (so Check Again can help), the sentence to show
+/// after a check that left it: "Still in use." when another program holds one, else
+/// "No change.". None when nothing is retryable.
+fn retry_status(errors: &[String]) -> Option<&'static str> {
+    use crate::hotkeys::ErrorKind;
+    let kinds: Vec<ErrorKind> = errors.iter().filter_map(|e| ErrorKind::of(e)).collect();
+    if kinds.contains(&ErrorKind::InUse) {
+        Some(tr!("settings.hotkeys.still_in_use"))
+    } else if kinds.contains(&ErrorKind::NotRegistered) {
+        Some(tr!("settings.hotkeys.no_change"))
+    } else {
+        None
+    }
+}
+
 /// Color of a status sentence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Tone {
@@ -278,6 +293,9 @@ pub struct SettingsWindow {
     hwnd: Option<Hwnd>,
     update_requested_at: Option<Instant>,
     copied_url_at: Option<Instant>,
+    /// When Check Again was clicked, and when the shell answered.
+    hotkey_check_requested: bool,
+    hotkey_checked_at: Option<Instant>,
 }
 
 impl SettingsWindow {
@@ -302,6 +320,8 @@ impl SettingsWindow {
             hwnd: None,
             update_requested_at: None,
             copied_url_at: None,
+            hotkey_check_requested: false,
+            hotkey_checked_at: None,
         }
     }
 
@@ -316,6 +336,13 @@ impl SettingsWindow {
     /// Shell reports hotkey registration failures (e.g. "Ctrl+Shift+KeyS: already in use").
     pub fn set_hotkey_errors(&mut self, errors: Vec<String>) {
         self.hotkey_errors = errors;
+    }
+
+    /// Shell finished the retry Check Again asked for (`hotkey_errors` is current).
+    pub fn hotkeys_checked(&mut self) {
+        if std::mem::take(&mut self.hotkey_check_requested) {
+            self.hotkey_checked_at = Some(Instant::now());
+        }
     }
 
     /// Shell reports whether the Replace Snipping Tool hook is running.
@@ -963,6 +990,43 @@ impl SettingsWindow {
         let _ = accent;
     }
 
+    /// Check Again under the hotkey problems, while one of them is a key Windows refused
+    /// (the shell also retries those on its own). Says "Still in use." for a moment after a
+    /// check that did not clear everything.
+    fn check_again_row(&mut self, ui: &mut Ui, shared: &mut Shared) {
+        let Some(still) = retry_status(&self.hotkey_errors) else {
+            self.hotkey_checked_at = None;
+            return;
+        };
+        let p = uc::pal(shared);
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            let checking = self.hotkey_check_requested;
+            let clicked = ui
+                .add_enabled_ui(!checking, |ui| {
+                    widgets::button(ui, tr!("settings.hotkeys.check_again"))
+                })
+                .inner
+                .clicked();
+            if clicked {
+                shared.outbox.push(Command::RetryHotkeys);
+                self.hotkey_check_requested = true;
+                self.hotkey_checked_at = None;
+            }
+            const SHOW: Duration = Duration::from_secs(4);
+            if let Some(at) = self.hotkey_checked_at {
+                let age = at.elapsed();
+                if age < SHOW {
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(still).size(12.0).color(p.text_tertiary));
+                    ui.ctx().request_repaint_after(SHOW - age);
+                } else {
+                    self.hotkey_checked_at = None;
+                }
+            }
+        });
+    }
+
     fn page_hotkeys(&mut self, ui: &mut Ui, shared: &mut Shared, key_consumed: bool) {
         let p = uc::pal(shared);
         let accent = uc::accent(shared);
@@ -1040,6 +1104,7 @@ impl SettingsWindow {
             );
             ui.painter()
                 .galley(r.min + vec2(14.0, 12.0), galley, p.danger);
+            self.check_again_row(ui, shared);
         }
         group_title(ui, p, tr!("settings.hotkeys.shortcuts"));
         let hk_snapshot = shared.config.hotkeys.clone();
@@ -1058,17 +1123,14 @@ impl SettingsWindow {
             }
             // Short form: the row already names the action, shows the key and sits in
             // Settings > Hotkeys; "Also used by" above already covers a duplicate.
-            if let Some(kind) =
-                error_for(&self.hotkey_errors, &current).and_then(crate::hotkeys::ErrorKind::of)
-                && (kind != crate::hotkeys::ErrorKind::Duplicate || dupes.is_empty())
-            {
-                desc.push_str("  ");
-                desc.push_str(kind.row_text());
-            }
+            let alert = error_for(&self.hotkey_errors, &current)
+                .and_then(crate::hotkeys::ErrorKind::of)
+                .filter(|kind| *kind != crate::hotkeys::ErrorKind::Duplicate || dupes.is_empty())
+                .map(crate::hotkeys::ErrorKind::row_text);
             let capturing = self.capturing == Some(field);
             let mut clear = false;
             let mut toggle_capture = false;
-            widgets::setting_row(ui, field.label(), &desc, |ui| {
+            widgets::setting_row_alert(ui, field.label(), &desc, alert, |ui| {
                 ui.horizontal(|ui| {
                     if !current.is_empty()
                         && !capturing
@@ -1993,6 +2055,38 @@ mod tests {
         let errors = vec!["Alt+PrtSc (Window) is already used by another program.".to_string()];
         assert_eq!(error_for(&errors, "Alt+P"), None);
         assert!(error_for(&errors, "Alt+PrintScreen").is_some());
+    }
+
+    #[test]
+    fn check_again_only_for_keys_windows_refused() {
+        let in_use = tr!(
+            "shell.hotkey.in_use",
+            key = "Ctrl+F9",
+            action = "Full Screen",
+            phrase = tr!("shell.hotkey.phrase.in_use")
+        );
+        let refused = tr!(
+            "shell.hotkey.not_registered",
+            key = "Ctrl+F9",
+            action = "Full Screen",
+            phrase = tr!("shell.hotkey.phrase.not_registered")
+        );
+        let invalid = tr!(
+            "shell.hotkey.invalid",
+            key = "Ctrl+F9",
+            action = "Full Screen",
+            phrase = tr!("shell.hotkey.phrase.invalid")
+        );
+        assert_eq!(retry_status(&[]), None);
+        assert_eq!(retry_status(std::slice::from_ref(&invalid)), None);
+        assert_eq!(
+            retry_status(&[invalid.clone(), refused.clone()]),
+            Some(tr!("settings.hotkeys.no_change"))
+        );
+        assert_eq!(
+            retry_status(&[refused, in_use]),
+            Some(tr!("settings.hotkeys.still_in_use"))
+        );
     }
 
     #[test]

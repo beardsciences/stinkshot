@@ -48,6 +48,8 @@ pub enum Command {
     OpenSettingsAt(crate::settings_ui::Section),
     /// The first-run tour (also Settings > About > Show Tour).
     OpenTour,
+    /// Retry hotkeys another program held at registration (Settings > Hotkeys > Check Again).
+    RetryHotkeys,
     /// Re-open a history item in the overlay editor (annotations editable).
     EditItem(ItemId),
     PinItem(ItemId),

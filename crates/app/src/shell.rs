@@ -243,8 +243,9 @@ fn quit_running() -> anyhow::Result<()> {
 }
 
 /// Warm the capture session up again after events that invalidate it (unlock, display change,
-/// resume). Without this the first PrtSc after any of them pays the cold session build
-/// (about 0.8 s) that the start-up warm-up removed. Bursts (a display change fires several
+/// resume), and retry hotkeys that failed to register on unlock and resume. Without the
+/// warm-up the first PrtSc after any of them pays the cold session build (about 0.8 s) that
+/// the start-up warm-up removed. Bursts (a display change fires several
 /// messages, resume is followed by unlock) are coalesced, and the warm-up waits a moment so
 /// the desktop has settled.
 fn start_capture_rewarm() {
@@ -259,6 +260,13 @@ fn start_capture_rewarm() {
                 return;
             }
             while let Ok(first) = rx.recv() {
+                // A program that held one of our hotkeys may have quit meanwhile.
+                if matches!(
+                    first,
+                    system::SessionEvent::Unlock | system::SessionEvent::Resume
+                ) {
+                    crate::hotkeys::request_retry();
+                }
                 std::thread::sleep(SETTLE);
                 // Anything that arrived meanwhile is covered by this warm-up.
                 while rx.try_recv().is_ok() {}
@@ -1106,6 +1114,10 @@ impl Shell {
             Command::OpenSettings => self.open_settings(None),
             Command::OpenSettingsAt(section) => self.open_settings(Some(section)),
             Command::OpenTour => self.open_tour(),
+            Command::RetryHotkeys => {
+                self.hotkeys.retry_now();
+                self.tick_hotkeys(true);
+            }
             Command::EditItem(id) => workers::edit_item(&self.env(), id),
             Command::PinItem(id) => workers::pin_item(&self.env(), id),
             Command::CaptureDone(out) => self.capture_done(*out),
@@ -1512,6 +1524,9 @@ impl Shell {
             Self::focus_window("Stinkshot Settings");
             return;
         }
+        // A key another program held may be free by now: check before showing it as taken.
+        self.hotkeys.retry_now();
+        self.tick_hotkeys(false);
         let mut w = SettingsWindow::new(&self.shared);
         w.set_hotkey_errors(self.hotkey_errors.clone());
         w.set_snip_status(self.hotkeys.snip_status());
@@ -2458,6 +2473,7 @@ impl Shell {
             self.pending.extend(t.poll());
         }
         self.pending.extend(self.hotkeys.poll());
+        self.tick_hotkeys(false);
         while let Ok(args) = self.ipc_rx.try_recv() {
             timing::point(format_args!("ipc: command taken by the shell"));
             match cli::command_from_args(&args) {
@@ -2467,6 +2483,27 @@ impl Shell {
         }
         while let Ok(msg) = self.worker_rx.try_recv() {
             self.handle_worker_msg(msg);
+        }
+    }
+
+    /// Retry hotkeys that failed to register when due (`Hotkeys::tick`), pass changed
+    /// problem texts to Settings, and wake up for the next retry. `checked`: Check Again was
+    /// clicked, so Settings reports the outcome.
+    fn tick_hotkeys(&mut self, checked: bool) {
+        if self.hotkeys.tick() {
+            self.hotkey_errors = self.hotkeys.errors();
+            if let Some(s) = &mut self.settings {
+                s.s.set_hotkey_errors(self.hotkey_errors.clone());
+            }
+            self.touch();
+        }
+        if checked && let Some(s) = &mut self.settings {
+            s.s.hotkeys_checked();
+            self.touch();
+        }
+        if let Some(wait) = self.hotkeys.next_retry_in() {
+            self.ctx
+                .request_repaint_after(wait.max(Duration::from_millis(100)));
         }
     }
 
