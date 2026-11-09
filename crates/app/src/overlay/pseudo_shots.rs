@@ -41,6 +41,7 @@ fn scenes() -> Vec<(&'static str, Vec2, Scene)> {
                 let st = ActionBarState {
                     ocr: true,
                     add_regions: Some(false),
+                    edit_window: Some(false),
                     ..Default::default()
                 };
                 ui::action_bar(

@@ -56,6 +56,8 @@ pub enum UiAction {
     ZoomFit,
     /// Add Regions toggle (multi-region capture).
     ToggleAddRegions,
+    /// Edit in Window: hand the capture to an Editor Window.
+    EditInWindow,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -324,12 +326,15 @@ pub struct ActionBarState {
     pub beautify: bool,
     /// Beautify applies on export.
     pub beautify_on: bool,
+    /// The Edit in Window button (not in an Editor Window itself); true when Enter does it
+    /// (then Copy is Ctrl+C).
+    pub edit_window: Option<bool>,
     /// Re-editing a history item: Save writes back to it, plus Save as Copy and Save As.
     pub editing: bool,
 }
 
 /// Action bar: Add Regions (screen overlay), Find Sensitive Info, Codes and Text, Beautify,
-/// OCR, Pin, Save, Cancel, then the accent Copy button.
+/// OCR, Pin, Save, Edit in Window (overlay only), Cancel, then the accent Copy button.
 pub fn action_bar(
     ctx: &Context,
     pos: Pos2,
@@ -342,6 +347,7 @@ pub fn action_bar(
         ocr,
         smart_open,
         add_regions,
+        edit_window,
         ..
     } = st;
     let panels = st;
@@ -416,6 +422,16 @@ pub fn action_bar(
                             out.push(UiAction::Finish(FinishAction::SaveAs));
                         }
                     }
+                    if let Some(on_enter) = edit_window {
+                        let tip = if on_enter {
+                            tr!("overlay.tip.edit_window_enter")
+                        } else {
+                            tr!("overlay.tip.edit_window")
+                        };
+                        if theme::widgets::icon_button(ui, Icon::OpenWindow, tip, false).clicked() {
+                            out.push(UiAction::EditInWindow);
+                        }
+                    }
                     if theme::widgets::icon_button(
                         ui,
                         Icon::Close,
@@ -426,8 +442,13 @@ pub fn action_bar(
                     {
                         out.push(UiAction::Cancel);
                     }
+                    let copy_tip = if edit_window == Some(true) {
+                        tr!("overlay.tip.copy_ctrl_c")
+                    } else {
+                        tr!("overlay.tip.copy")
+                    };
                     if theme::widgets::accent_button(ui, tr!("overlay.action.copy"))
-                        .on_hover_text(tr!("overlay.tip.copy"))
+                        .on_hover_text(copy_tip)
                         .clicked()
                     {
                         out.push(UiAction::Finish(FinishAction::Copy));

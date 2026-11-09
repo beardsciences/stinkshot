@@ -90,6 +90,19 @@ pub struct Capture {
     /// Window and full-screen captures open in the editor first. Off: they are finished
     /// right away (clipboard, history, toast) and the toast's Edit opens the editor.
     pub open_editor_after_capture: bool,
+    /// What confirming a selected region (Enter) does in the region overlay.
+    pub after_region: AfterRegion,
+}
+
+/// Region overlay: what Enter does once a region is selected.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AfterRegion {
+    /// Annotate on the frozen screen; Enter copies.
+    #[default]
+    Annotate,
+    /// Enter unfreezes the screen and opens the capture in an Editor Window.
+    Window,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -254,6 +267,7 @@ impl Default for Capture {
             scroll_delay_ms: 120,
             last_region: None,
             open_editor_after_capture: false,
+            after_region: AfterRegion::Annotate,
         }
     }
 }
@@ -648,6 +662,35 @@ open_editor_after_capture = true
                 .unwrap()
                 .capture
                 .open_editor_after_capture
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn after_region_defaults_to_annotate_and_round_trips() {
+        let d = tmp("after_region");
+        let p = d.join("config.toml");
+        std::fs::write(
+            &p,
+            "[capture]
+include_cursor = true
+",
+        )
+        .unwrap();
+        assert_eq!(
+            Config::load_from(&p).unwrap().capture.after_region,
+            AfterRegion::Annotate
+        );
+        std::fs::write(
+            &p,
+            "[capture]
+after_region = \"window\"
+",
+        )
+        .unwrap();
+        assert_eq!(
+            Config::load_from(&p).unwrap().capture.after_region,
+            AfterRegion::Window
         );
         let _ = std::fs::remove_dir_all(&d);
     }
