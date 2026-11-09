@@ -11,7 +11,7 @@ write entries for people who use Stinkshot, not for people who read the diff.
 
 ## [0.1.1] - 2026-11-09
 
-First public release. The full feature list is under 0.1.0, which was built but not published.
+First release with downloads. The full feature list is under 0.1.0.
 
 ### Added
 
@@ -25,7 +25,7 @@ First public release. The full feature list is under 0.1.0, which was built but 
 
 ## [0.1.0] - 2026-11-08
 
-Built but not published.
+Tagged in the repository; no downloads were published.
 
 ### Added
 
