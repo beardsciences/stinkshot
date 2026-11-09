@@ -326,7 +326,7 @@ pub fn get(key: &str) -> Option<&'static str> {
             "{key} {phrase} {other} and {action}; only {other} works. Change one of them in Settings > Hotkeys."
         }
         "shell.hotkey.in_use" => {
-            "{key} ({action}) {phrase}. Close that program or pick a different key in Settings > Hotkeys. It works once the key is free."
+            "{key} ({action}) {phrase}. Close that program or pick another key in Settings > Hotkeys."
         }
         "shell.hotkey.not_registered" => {
             "{key} ({action}) {phrase}. Pick a different key in Settings > Hotkeys."

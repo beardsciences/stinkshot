@@ -9,6 +9,19 @@ write entries for people who use Stinkshot, not for people who read the diff.
 
 ## [Unreleased]
 
+### Added
+
+- Box mode for the Highlighter. Pick Freehand or Box in the tool bar, or hold Shift while
+  dragging to use the other one. A selected freehand stroke has a To Box button.
+- The mouse pointer is kept as an object in the editor. It starts selected, so Del removes it.
+  Turn it off with Settings > Capture > Cursor as Object.
+- Settings > Hotkeys shows hotkeys another program holds, with a Check Again button.
+
+### Fixed
+
+- A hotkey that another program held now starts working once that program closes, without
+  restarting Stinkshot.
+
 ## [0.1.1] - 2026-11-09
 
 First release with downloads. The full feature list is under 0.1.0.
