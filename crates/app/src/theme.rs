@@ -1491,12 +1491,19 @@ mod tests {
     }
 }
 
-/// Compact rows for context menus: the global spacing (32 px controls plus 8 px gaps) is
-/// sized for forms and made menus look loose.
-pub fn menu_rows(ui: &mut egui::Ui) {
+/// Rows for every popup list (context menus and dropdowns), Windows 11 menu proportions:
+/// 34 pt rows with a 2 pt gap (hover highlights never touch), text 16 pt in from the popup
+/// edge (6 pt `menu_margin` + 10 pt padding), highlight 6 pt in from it. The global
+/// spacing (32 pt controls plus 8 pt gaps) is sized for forms and made lists look loose.
+pub fn popup_rows(ui: &mut egui::Ui) {
     let s = ui.spacing_mut();
-    s.item_spacing.y = 0.0;
-    s.interact_size.y = 30.0;
-    s.button_padding = egui::vec2(10.0, 5.0);
-    ui.set_min_width(176.0);
+    s.item_spacing.y = 2.0;
+    s.interact_size.y = 34.0;
+    s.button_padding = egui::vec2(10.0, 7.0);
+}
+
+/// `popup_rows` plus a minimum width, for right-click menus.
+pub fn menu_rows(ui: &mut egui::Ui) {
+    popup_rows(ui);
+    ui.set_min_width(200.0);
 }

@@ -692,6 +692,7 @@ fn combo_row<T: Copy + PartialEq>(
             .selected_text(cur)
             .width(150.0)
             .show_ui(ui, |ui| {
+                crate::theme::popup_rows(ui);
                 for (o, l) in opts {
                     ui.selectable_value(v, *o, *l);
                 }
@@ -863,6 +864,7 @@ impl SettingsWindow {
                     .selected_text(label)
                     .width(170.0)
                     .show_ui(ui, |ui| {
+                        crate::theme::popup_rows(ui);
                         for (value, key) in THEMES {
                             ui.selectable_value(&mut g.theme, value.to_string(), l10n::lookup(key));
                         }
@@ -883,6 +885,7 @@ impl SettingsWindow {
                     .selected_text(current)
                     .width(170.0)
                     .show_ui(ui, |ui| {
+                        crate::theme::popup_rows(ui);
                         for (value, key) in l10n::CHOICES {
                             // Pseudo is a layout test, not a language: debug builds only
                             // (and while selected, so it can be switched back).
@@ -1498,6 +1501,7 @@ impl SettingsWindow {
                         .selected_text(cur.to_string())
                         .width(240.0)
                         .show_ui(ui, |ui| {
+                            crate::theme::popup_rows(ui);
                             for (v, l) in opts {
                                 ui.selectable_value(value, v.clone(), l.as_str());
                             }

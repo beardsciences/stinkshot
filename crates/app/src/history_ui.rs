@@ -1329,6 +1329,7 @@ impl Surface for HistoryWindow {
                         .selected_text(d.label())
                         .width(date_w - 28.0)
                         .show_ui(ui, |ui| {
+                            crate::theme::popup_rows(ui);
                             for opt in DateFilter::ALL {
                                 ui.selectable_value(&mut d, opt, opt.label());
                             }
