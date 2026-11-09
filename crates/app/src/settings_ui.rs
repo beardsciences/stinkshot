@@ -47,10 +47,11 @@ pub enum Section {
     Recording,
     History,
     Privacy,
+    Help,
     About,
 }
 
-const SECTIONS: [(Section, &str); 8] = [
+const SECTIONS: [(Section, &str); 9] = [
     (Section::General, "General"),
     (Section::Hotkeys, "Hotkeys"),
     (Section::Capture, "Capture"),
@@ -58,6 +59,7 @@ const SECTIONS: [(Section, &str); 8] = [
     (Section::Recording, "Recording"),
     (Section::History, "History"),
     (Section::Privacy, "Privacy"),
+    (Section::Help, "Help"),
     (Section::About, "About"),
 ];
 
@@ -563,6 +565,7 @@ impl Surface for SettingsWindow {
                             Section::Recording => self.page_recording(ui, shared),
                             Section::History => self.page_history(ui, shared),
                             Section::Privacy => self.page_privacy(ui, shared, accent),
+                            Section::Help => crate::help::page(ui, shared),
                             Section::About => self.page_about(ui, shared),
                         }
                         ui.add_space(16.0);

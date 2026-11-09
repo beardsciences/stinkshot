@@ -38,7 +38,7 @@
 
 mod beautify_panel;
 mod hover;
-mod keys;
+pub(crate) mod keys;
 mod measure;
 mod multi;
 mod paint;

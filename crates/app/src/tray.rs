@@ -53,6 +53,7 @@ pub struct Tray {
 
 const ID_HISTORY: &str = "history";
 const ID_SETTINGS: &str = "settings";
+const ID_HELP: &str = "help";
 const ID_QUIT: &str = "quit";
 const ID_UPDATE: &str = "update";
 
@@ -117,6 +118,8 @@ impl Tray {
         menu.append(&MenuItem::with_id(ID_HISTORY, "History", true, None))
             .context("tray menu")?;
         menu.append(&MenuItem::with_id(ID_SETTINGS, "Settings", true, None))
+            .context("tray menu")?;
+        menu.append(&MenuItem::with_id(ID_HELP, "Help", true, None))
             .context("tray menu")?;
         menu.append(&MenuItem::with_id(ID_QUIT, "Quit", true, None))
             .context("tray menu")?;
@@ -323,6 +326,7 @@ impl Tray {
         Some(match id {
             ID_HISTORY => Command::OpenHistory,
             ID_SETTINGS => Command::OpenSettings,
+            ID_HELP => Command::OpenSettingsAt(crate::settings_ui::Section::Help),
             ID_QUIT => Command::Quit,
             ID_UPDATE => return self.update_url.clone().map(Command::OpenUrl),
             _ => return None,

@@ -17,6 +17,7 @@ mod cli;
 mod errors;
 mod filedialog;
 mod gpu;
+mod help;
 mod history_ui;
 mod hotkeys;
 mod icon_gen;
