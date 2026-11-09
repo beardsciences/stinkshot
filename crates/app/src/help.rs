@@ -9,65 +9,51 @@ use egui::{Align2, RichText, Sense, Ui, vec2};
 use stinkshot_core::config::{Config, Hotkeys};
 
 use crate::actions::Action;
+use crate::l10n::lookup;
 use crate::state::{Command, Shared};
 use crate::theme::{self, widgets};
 use crate::toast::ui_common as uc;
 
-/// Every user-visible string on this page (one place, for the localization lookup later).
+/// Lookup keys of every user-visible string on this page (`l10n::lookup`; English text in
+/// l10n/en/settings.rs).
 mod text {
-    pub const HOTKEYS: &str = "Global Hotkeys";
-    pub const HOTKEYS_DESC: &str = "Work anywhere while Stinkshot runs.";
-    pub const CHANGE_HOTKEYS: &str = "Change Hotkeys";
-    pub const NOT_SET: &str = "Not Set";
-    pub const EDITOR: &str = "Editor Shortcuts";
-    pub const EDITOR_DESC: &str = "In the capture overlay. Press F1 or ? there for this list.";
-    pub const TRAY: &str = "Tray Icon";
+    pub const HOTKEYS: &str = "settings.help.hotkeys";
+    pub const HOTKEYS_DESC: &str = "settings.help.hotkeys.desc";
+    pub const CHANGE_HOTKEYS: &str = "settings.help.change_hotkeys";
+    pub const NOT_SET: &str = "shell.hotkey.not_set";
+    pub const EDITOR: &str = "settings.help.editor";
+    pub const EDITOR_DESC: &str = "settings.help.editor.desc";
+    pub const TRAY: &str = "settings.help.tray";
     pub const TRAY_ROWS: [(&str, &str); 3] = [
-        ("Click", "Capture a Region"),
-        ("Double-Click", "Open History"),
-        ("Right-Click", "All Capture Modes and Settings"),
+        ("settings.help.tray.click", "settings.help.tray.click.what"),
+        ("settings.help.tray.dbl", "settings.help.tray.dbl.what"),
+        ("settings.help.tray.right", "settings.help.tray.right.what"),
     ];
-    pub const FEATURES: &str = "Features";
+    pub const FEATURES: &str = "settings.help.features";
     pub const FEATURE_ROWS: [(&str, &str); 9] = [
+        ("settings.help.f.capture", "settings.help.f.capture.desc"),
+        ("settings.help.f.scroll", "settings.help.f.scroll.desc"),
+        ("settings.help.f.ocr", "settings.help.f.ocr.desc"),
+        ("settings.help.f.annotate", "settings.help.f.annotate.desc"),
         (
-            "Region, Window, Full Screen",
-            "Freeze the screen, then select or click.",
+            "settings.help.f.sensitive",
+            "settings.help.f.sensitive.desc",
         ),
-        ("Scrolling", "Scrolls a window and stitches one tall image."),
-        (
-            "Copy Text (OCR)",
-            "Windows' offline OCR; also searchable in History.",
-        ),
-        (
-            "Annotate",
-            "Arrows, shapes, text, steps, blur, redact and more.",
-        ),
-        (
-            "Find Sensitive Info",
-            "Spots emails, keys and numbers to redact.",
-        ),
-        ("Beautify", "Frame a capture with padding and a background."),
-        ("Pin", "Keep a capture on top of other windows."),
-        (
-            "Record MP4 or GIF",
-            "Hardware-encoded video, trim before saving.",
-        ),
-        (
-            "History",
-            "Every capture, searchable. Ctrl+H from Settings.",
-        ),
+        ("settings.help.f.beautify", "settings.help.f.beautify.desc"),
+        ("settings.help.f.pin", "settings.help.f.pin.desc"),
+        ("settings.help.f.record", "settings.help.f.record.desc"),
+        ("settings.help.f.history", "settings.help.f.history.desc"),
     ];
-    pub const FILES: &str = "File Locations";
-    pub const CAPTURES: &str = "Captures";
-    pub const SETTINGS_FILE: &str = "Settings File";
-    pub const LOG: &str = "Log";
-    pub const OPEN: &str = "Open";
-    pub const SHOW: &str = "Show";
-    pub const OPEN_FAILED: &str = "Could Not Open";
-    pub const OPEN_FAILED_HINT: &str = "Windows could not open it. Check that the path exists.";
-    pub const OFFLINE: &str = "Help is built in and works offline.";
+    pub const FILES: &str = "settings.help.files";
+    pub const CAPTURES: &str = "settings.help.captures";
+    pub const SETTINGS_FILE: &str = "settings.help.settings_file";
+    pub const LOG: &str = "settings.help.log";
+    pub const OPEN: &str = "settings.help.open";
+    pub const SHOW: &str = "settings.help.show";
+    pub const OPEN_FAILED: &str = "settings.help.open_failed";
+    pub const OPEN_FAILED_HINT: &str = "settings.help.open_failed.hint";
+    pub const OFFLINE: &str = "settings.help.offline";
 }
-
 /// A group of (keys, what they do) rows.
 pub struct Group {
     pub title: &'static str,
@@ -81,7 +67,7 @@ pub fn hotkey_rows(cfg: &Hotkeys) -> Vec<(String, String)> {
         .map(|a| {
             let key = crate::hotkeys::display(a.hotkey(cfg));
             let key = if key.is_empty() {
-                text::NOT_SET.to_string()
+                lookup(text::NOT_SET).to_string()
             } else {
                 key
             };
@@ -156,8 +142,8 @@ fn open(shared: &mut Shared, path: &Path, reveal: bool) {
     if let Err(e) = r {
         log::warn!("help: open {}: {e:#}", path.display());
         shared.outbox.push(Command::Notify {
-            title: text::OPEN_FAILED.into(),
-            body: text::OPEN_FAILED_HINT.into(),
+            title: lookup(text::OPEN_FAILED).into(),
+            body: lookup(text::OPEN_FAILED_HINT).into(),
             error: true,
         });
     }
@@ -166,9 +152,9 @@ fn open(shared: &mut Shared, path: &Path, reveal: bool) {
 /// (label, path, reveal-in-Explorer instead of open) for the File Locations rows.
 fn locations(cfg: &Config) -> [(&'static str, PathBuf, bool); 3] {
     [
-        (text::CAPTURES, cfg.history_folder(), false),
-        (text::SETTINGS_FILE, Config::path(), true),
-        (text::LOG, crate::logger::path(), true),
+        (lookup(text::CAPTURES), cfg.history_folder(), false),
+        (lookup(text::SETTINGS_FILE), Config::path(), true),
+        (lookup(text::LOG), crate::logger::path(), true),
     ]
 }
 
@@ -176,45 +162,50 @@ fn locations(cfg: &Config) -> [(&'static str, PathBuf, bool); 3] {
 pub fn page(ui: &mut Ui, shared: &mut Shared) {
     let p = uc::pal(shared);
     ui.label(
-        RichText::new(text::OFFLINE)
+        RichText::new(lookup(text::OFFLINE))
             .size(13.0)
             .color(p.text_secondary),
     );
 
-    group_title(ui, shared, text::HOTKEYS, text::HOTKEYS_DESC);
+    group_title(
+        ui,
+        shared,
+        lookup(text::HOTKEYS),
+        lookup(text::HOTKEYS_DESC),
+    );
     rows_card(ui, shared, &hotkey_rows(&shared.config.hotkeys));
     ui.add_space(4.0);
-    if widgets::button(ui, text::CHANGE_HOTKEYS).clicked() {
+    if widgets::button(ui, lookup(text::CHANGE_HOTKEYS)).clicked() {
         shared.outbox.push(Command::OpenSettingsAt(
             crate::settings_ui::Section::Hotkeys,
         ));
     }
 
-    group_title(ui, shared, text::TRAY, "");
+    group_title(ui, shared, lookup(text::TRAY), "");
     let tray: Vec<(String, String)> = text::TRAY_ROWS
         .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .map(|(k, v)| (lookup(k).to_string(), lookup(v).to_string()))
         .collect();
     rows_card(ui, shared, &tray);
 
-    group_title(ui, shared, text::EDITOR, text::EDITOR_DESC);
+    group_title(ui, shared, lookup(text::EDITOR), lookup(text::EDITOR_DESC));
     for g in editor_groups() {
         ui.add_space(4.0);
         ui.label(RichText::new(g.title).size(12.0).color(p.text_tertiary));
         rows_card(ui, shared, &g.rows);
     }
 
-    group_title(ui, shared, text::FEATURES, "");
+    group_title(ui, shared, lookup(text::FEATURES), "");
     for (name, desc) in text::FEATURE_ROWS {
-        widgets::setting_row(ui, name, desc, |_| {});
+        widgets::setting_row(ui, lookup(name), lookup(desc), |_| {});
     }
 
-    group_title(ui, shared, text::FILES, "");
+    group_title(ui, shared, lookup(text::FILES), "");
     let mut clicked: Option<(PathBuf, bool)> = None;
     for (label, path, reveal) in locations(&shared.config) {
         let shown = path.display().to_string();
         widgets::setting_row(ui, label, &shown, |ui| {
-            let b = if reveal { text::SHOW } else { text::OPEN };
+            let b = lookup(if reveal { text::SHOW } else { text::OPEN });
             if widgets::button(ui, b).clicked() {
                 clicked = Some((path.clone(), reveal));
             }
@@ -246,7 +237,7 @@ mod tests {
         for a in Action::ALL {
             let key = crate::hotkeys::display(a.hotkey(&cfg));
             let want = if key.is_empty() {
-                text::NOT_SET.to_string()
+                lookup(text::NOT_SET).to_string()
             } else {
                 key
             };
@@ -265,7 +256,7 @@ mod tests {
         *Action::Window.hotkey_mut(&mut cfg) = String::new();
         let rows = hotkey_rows(&cfg);
         assert!(rows.contains(&("Ctrl+Shift+Q".into(), Action::Region.label().into())));
-        assert!(rows.contains(&(text::NOT_SET.into(), Action::Window.label().into())));
+        assert!(rows.contains(&(lookup(text::NOT_SET).into(), Action::Window.label().into())));
     }
 
     #[test]
@@ -345,13 +336,16 @@ mod tests {
             text::SETTINGS_FILE,
             text::OPEN_FAILED,
         ] {
+            let t = lookup(t);
             assert!(title_case(t), "{t}");
         }
         for (name, desc) in text::FEATURE_ROWS {
+            let (name, desc) = (lookup(name), lookup(desc));
             assert!(title_case(name), "{name}");
             assert!(desc.len() <= 60, "{desc}");
         }
         for (k, v) in text::TRAY_ROWS {
+            let (k, v) = (lookup(k), lookup(v));
             assert!(title_case(k) && title_case(v), "{k} {v}");
         }
     }

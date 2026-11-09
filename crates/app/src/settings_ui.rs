@@ -1864,11 +1864,16 @@ impl SettingsWindow {
             ui.ctx().request_repaint_after(Duration::from_millis(500));
         }
         let mut show_tour = false;
-        widgets::setting_row(ui, "Tour", "The short intro from the first start.", |ui| {
-            if widgets::button(ui, "Show Tour").clicked() {
-                show_tour = true;
-            }
-        });
+        widgets::setting_row(
+            ui,
+            tr!("settings.about.tour"),
+            tr!("settings.about.tour.desc"),
+            |ui| {
+                if widgets::button(ui, tr!("settings.about.show_tour")).clicked() {
+                    show_tour = true;
+                }
+            },
+        );
         if show_tour {
             shared.outbox.push(Command::OpenTour);
         }

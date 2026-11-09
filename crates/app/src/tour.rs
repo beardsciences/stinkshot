@@ -9,36 +9,14 @@ use stinkshot_core::config::Config;
 use stinkshot_platform::Hwnd;
 
 use crate::actions::Action;
+use crate::l10n::tr;
 use crate::state::{Command, Shared, Surface, SurfaceStatus};
 use crate::theme::{self, Icon, widgets};
 use crate::toast::ui_common as uc;
 
-/// Every user-visible string of the tour (one place, for the localization lookup later).
-mod text {
-    pub const WINDOW_TITLE: &str = "Welcome to Stinkshot";
-    pub const SKIP: &str = "Skip Tour";
-    pub const BACK: &str = "Back";
-    pub const NEXT: &str = "Next";
-    pub const DONE: &str = "Done";
-    pub const OPEN_HELP: &str = "Open Help";
-
-    pub const HOTKEYS_TITLE: &str = "Capture With a Hotkey";
-    /// `{key}` is the region hotkey.
-    pub const HOTKEYS_BODY: &str = "Press {key} to capture a region. Then draw, copy or save.";
-    pub const HOTKEYS_BODY_UNSET: &str =
-        "Set a region hotkey in Settings > Hotkeys, or use the tray icon.";
-    pub const NOT_SET: &str = "Not Set";
-
-    pub const TRAY_TITLE: &str = "It Lives in the Tray";
-    pub const TRAY_BODY: &str = "Click the tray icon to capture, double-click for History.";
-
-    pub const PRIVACY_TITLE: &str = "Nothing Ever Leaves Your PC";
-    pub const PRIVACY_BODY: &str = "No accounts, uploads or telemetry. Update checks are opt-in.";
-
-    pub const FILES_TITLE: &str = "Where Captures Go";
-    pub const FILES_BODY: &str =
-        "Saved here and listed in History. Change it in Settings > History.";
-}
+/// The window title stays English: the shell finds an open tour by it (like History and
+/// Settings).
+const WINDOW_TITLE: &str = "Welcome to Stinkshot";
 
 /// Which global hotkeys the first step lists (the rest are in Help).
 const STEP_ACTIONS: [Action; 4] = [
@@ -69,10 +47,10 @@ impl Step {
     }
     fn title(self) -> &'static str {
         match self {
-            Step::Hotkeys => text::HOTKEYS_TITLE,
-            Step::Tray => text::TRAY_TITLE,
-            Step::Privacy => text::PRIVACY_TITLE,
-            Step::Files => text::FILES_TITLE,
+            Step::Hotkeys => tr!("shell.tour.hotkeys.title"),
+            Step::Tray => tr!("shell.tour.tray.title"),
+            Step::Privacy => tr!("shell.tour.privacy.title"),
+            Step::Files => tr!("shell.tour.files.title"),
         }
     }
 }
@@ -83,14 +61,14 @@ fn body(step: Step, cfg: &Config) -> String {
         Step::Hotkeys => {
             let key = crate::hotkeys::display(&cfg.hotkeys.region);
             if key.is_empty() {
-                text::HOTKEYS_BODY_UNSET.into()
+                tr!("shell.tour.hotkeys.body_unset").into()
             } else {
-                text::HOTKEYS_BODY.replace("{key}", &key)
+                tr!("shell.tour.hotkeys.body", key = key)
             }
         }
-        Step::Tray => text::TRAY_BODY.into(),
-        Step::Privacy => text::PRIVACY_BODY.into(),
-        Step::Files => text::FILES_BODY.into(),
+        Step::Tray => tr!("shell.tour.tray.body").into(),
+        Step::Privacy => tr!("shell.tour.privacy.body").into(),
+        Step::Files => tr!("shell.tour.files.body").into(),
     }
 }
 
@@ -102,7 +80,7 @@ fn detail_rows(step: Step, cfg: &Config) -> Vec<(String, String)> {
             .map(|a| {
                 let k = crate::hotkeys::display(a.hotkey(&cfg.hotkeys));
                 let k = if k.is_empty() {
-                    text::NOT_SET.to_string()
+                    tr!("shell.hotkey.not_set").to_string()
                 } else {
                     k
                 };
@@ -128,7 +106,7 @@ impl TourWindow {
     }
 
     /// The window title (the shell focuses an open tour by it).
-    pub const TITLE: &'static str = text::WINDOW_TITLE;
+    pub const TITLE: &'static str = WINDOW_TITLE;
 }
 
 impl Surface for TourWindow {
@@ -238,18 +216,22 @@ impl Surface for TourWindow {
             let bar = egui::Rect::from_min_max(pos2(area.left(), area.bottom() - 34.0), area.max);
             ui.scope_builder(UiBuilder::new().max_rect(bar), |ui| {
                 ui.horizontal_centered(|ui| {
-                    if !last && widgets::button(ui, text::SKIP).clicked() {
+                    if !last && widgets::button(ui, tr!("shell.tour.skip")).clicked() {
                         close = true;
                     }
-                    if last && widgets::button(ui, text::OPEN_HELP).clicked() {
+                    if last && widgets::button(ui, tr!("shell.tour.open_help")).clicked() {
                         help = true;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let primary = if last { text::DONE } else { text::NEXT };
+                        let primary = if last {
+                            tr!("shell.tour.done")
+                        } else {
+                            tr!("shell.tour.next")
+                        };
                         if widgets::accent_button(ui, primary).clicked() {
                             next = true;
                         }
-                        if self.step > 0 && widgets::button(ui, text::BACK).clicked() {
+                        if self.step > 0 && widgets::button(ui, tr!("shell.tour.back")).clicked() {
                             back = true;
                         }
                     });
@@ -309,12 +291,18 @@ mod tests {
         cfg.hotkeys.region = "PrintScreen".into();
         assert!(body(Step::Hotkeys, &cfg).contains("Press PrtSc"));
         cfg.hotkeys.region.clear();
-        assert_eq!(body(Step::Hotkeys, &cfg), text::HOTKEYS_BODY_UNSET);
+        assert_eq!(
+            body(Step::Hotkeys, &cfg),
+            tr!("shell.tour.hotkeys.body_unset")
+        );
         let rows = detail_rows(Step::Hotkeys, &cfg);
         assert_eq!(rows.len(), STEP_ACTIONS.len());
         assert_eq!(
             rows[0],
-            (text::NOT_SET.into(), Action::Region.label().into())
+            (
+                tr!("shell.hotkey.not_set").into(),
+                Action::Region.label().into()
+            )
         );
     }
 

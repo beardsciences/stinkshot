@@ -337,6 +337,25 @@ pub fn get(key: &str) -> Option<&'static str> {
         "shell.trim.save_gif" => "Save GIF",
         "shell.trim.save_mp4" => "Save MP4",
         "shell.tray.help" => "Help",
+        "shell.tour.skip" => "Skip Tour",
+        "shell.tour.back" => "Back",
+        "shell.tour.next" => "Next",
+        "shell.tour.done" => "Done",
+        "shell.tour.open_help" => "Open Help",
+        "shell.tour.hotkeys.title" => "Capture With a Hotkey",
+        "shell.tour.hotkeys.body" => "Press {key} to capture a region. Then draw, copy or save.",
+        "shell.tour.hotkeys.body_unset" => {
+            "Set a region hotkey in Settings > Hotkeys, or use the tray icon."
+        }
+        "shell.tour.tray.title" => "It Lives in the Tray",
+        "shell.tour.tray.body" => "Click the tray icon to capture, double-click for History.",
+        "shell.tour.privacy.title" => "Nothing Ever Leaves Your PC",
+        "shell.tour.privacy.body" => "No accounts, uploads or telemetry. Update checks are opt-in.",
+        "shell.tour.files.title" => "Where Captures Go",
+        "shell.tour.files.body" => {
+            "Saved here and listed in History. Change it in Settings > History."
+        }
+        "shell.a11y.item" => "{source}, {w} by {h}, {date}",
         _ => return None,
     })
 }
@@ -583,4 +602,19 @@ pub const KEYS: &[&str] = &[
     "shell.trim.save_gif",
     "shell.trim.save_mp4",
     "shell.tray.help",
+    "shell.tour.skip",
+    "shell.tour.back",
+    "shell.tour.next",
+    "shell.tour.done",
+    "shell.tour.open_help",
+    "shell.tour.hotkeys.title",
+    "shell.tour.hotkeys.body",
+    "shell.tour.hotkeys.body_unset",
+    "shell.tour.tray.title",
+    "shell.tour.tray.body",
+    "shell.tour.privacy.title",
+    "shell.tour.privacy.body",
+    "shell.tour.files.title",
+    "shell.tour.files.body",
+    "shell.a11y.item",
 ];
