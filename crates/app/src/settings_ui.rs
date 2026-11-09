@@ -519,7 +519,12 @@ impl Surface for SettingsWindow {
                 y += 38.0;
                 let resp = ui.interact(r, ui.scope_id().with(("nav", name)), Sense::click());
                 let selected = sec == section;
-                crate::a11y::describe(&resp, egui::accesskit::Role::Tab, name, Some(selected));
+                crate::a11y::describe(
+                    &resp,
+                    egui::accesskit::Role::Tab,
+                    l10n::lookup(name),
+                    Some(selected),
+                );
                 if selected {
                     ui.painter().rect_filled(
                         r,
@@ -879,6 +884,14 @@ impl SettingsWindow {
                     .width(170.0)
                     .show_ui(ui, |ui| {
                         for (value, key) in l10n::CHOICES {
+                            // Pseudo is a layout test, not a language: debug builds only
+                            // (and while selected, so it can be switched back).
+                            if *value == "pseudo"
+                                && !cfg!(debug_assertions)
+                                && g.language != "pseudo"
+                            {
+                                continue;
+                            }
                             let r = ui.selectable_value(
                                 &mut g.language,
                                 value.to_string(),
