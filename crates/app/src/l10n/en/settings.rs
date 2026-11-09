@@ -88,6 +88,11 @@ pub fn get(key: &str) -> Option<&'static str> {
         }
         "settings.general.sound" => "Play Sound",
         "settings.general.sound.desc" => "A short shutter sound after capturing.",
+        "settings.general.pins" => "Pins",
+        "settings.general.pin_task_view" => "Show Pins in Task View",
+        "settings.general.pin_task_view.desc" => "List pins in Alt+Tab, Task View and the taskbar.",
+        "settings.general.pin_toolbar" => "Always Show Pin Toolbar",
+        "settings.general.pin_toolbar.desc" => "Toolbar above each pin. Off: it shows on hover.",
         "settings.hotkeys.integration" => "Windows Integration",
         "settings.hotkeys.replace_snip" => "Replace Snipping Tool",
         "settings.hotkeys.replace_snip.desc" => {
@@ -390,6 +395,11 @@ pub const KEYS: &[&str] = &[
     "settings.general.toast_duration.desc",
     "settings.general.sound",
     "settings.general.sound.desc",
+    "settings.general.pins",
+    "settings.general.pin_task_view",
+    "settings.general.pin_task_view.desc",
+    "settings.general.pin_toolbar",
+    "settings.general.pin_toolbar.desc",
     "settings.hotkeys.integration",
     "settings.hotkeys.replace_snip",
     "settings.hotkeys.replace_snip.desc",

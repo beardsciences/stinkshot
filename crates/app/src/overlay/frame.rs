@@ -1250,6 +1250,7 @@ impl Overlay {
                     scan: self.scan.is_some(),
                     beautify: self.beautify_open,
                     beautify_on: self.beautify.enabled,
+                    editing: self.editing_item(),
                 },
                 lifted,
                 actions,

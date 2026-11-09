@@ -15,6 +15,7 @@ mod actions;
 mod app_icon;
 mod capture_ops;
 mod cli;
+mod edit_save;
 mod errors;
 mod filedialog;
 mod gpu;
