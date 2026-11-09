@@ -38,8 +38,11 @@ ab_glyph = "0.2"
 rusqlite = { version = "0.41", features = ["bundled", "chrono"] }
 gif = "0.14"
 imagequant = "4"
-eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts"] }
+# `accesskit`: UI Automation for screen readers (root viewport; `a11y.rs` wires the rest).
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "accesskit"] }
 egui = "0.37"
+# Same version eframe's accesskit_winit uses; `a11y.rs` adapts each surface window.
+accesskit_windows = "0.35"
 tray-icon = "0.26"
 global-hotkey = "0.9"
 clap = { version = "4", features = ["derive"] }

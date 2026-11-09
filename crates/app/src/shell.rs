@@ -568,6 +568,8 @@ struct HwndState {
     tries: u32,
     /// The window and the DPI its native icon was picked for (re-applied on DPI change).
     icon: Option<(stinkshot_platform::Hwnd, u32)>,
+    /// UI Automation provider for screen readers (`a11y.rs`).
+    a11y: Option<crate::a11y::Attached>,
 }
 
 struct Slot<T> {
@@ -620,6 +622,7 @@ fn drive(
                 ));
                 st.created = true;
                 st.icon = Some((hwnd, crate::app_icon::apply_native(hwnd)));
+                st.a11y = crate::a11y::attach(ctx, id, hwnd);
                 surf.on_created(hwnd, shared);
                 if focus {
                     window_util::force_foreground(hwnd);
@@ -732,6 +735,8 @@ struct Shell {
     scroll: Option<ScrollFlow>,
 
     resolved_theme: (bool, [u8; 4]),
+    /// Windows contrast theme and Text size the theme was last installed with.
+    a11y_prefs: crate::a11y::Prefs,
     last_theme_check: Instant,
     update_release: Option<Release>,
     update_inflight: bool,
@@ -827,6 +832,7 @@ impl Shell {
         timing::point(format_args!("eframe up (wgpu initialized), Shell::new"));
         let ctx = cc.egui_ctx.clone();
         wake::set_context(ctx.clone());
+        crate::a11y::install(&ctx);
 
         let Boot {
             ipc_rx,
@@ -905,6 +911,7 @@ impl Shell {
             trim_closed_by_user: false,
             scroll: None,
             resolved_theme,
+            a11y_prefs: crate::a11y::prefs(),
             last_theme_check: Instant::now(),
             update_release: None,
             update_inflight: false,
@@ -2428,8 +2435,11 @@ impl Shell {
 
     fn refresh_theme(&mut self, force: bool) {
         let resolved = resolve_theme(&self.shared.config);
-        if force || resolved != self.resolved_theme {
+        // Contrast theme or Text size changed in Windows settings (`theme::install` reads them).
+        let a11y = crate::a11y::prefs();
+        if force || resolved != self.resolved_theme || a11y != self.a11y_prefs {
             self.resolved_theme = resolved;
+            self.a11y_prefs = a11y;
             theme::install(
                 &self.ctx,
                 &self.shared.fonts,
