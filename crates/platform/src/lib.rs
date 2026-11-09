@@ -23,6 +23,7 @@ pub mod snip;
 pub mod system;
 pub mod uia;
 mod util;
+pub mod wgc_memo;
 pub mod window_util;
 pub mod windows_enum;
 

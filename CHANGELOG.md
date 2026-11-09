@@ -9,6 +9,10 @@ write entries for people who use Stinkshot, not for people who read the diff.
 
 ## [Unreleased]
 
+### Fixed
+
+- On PCs where Windows Graphics Capture hangs, the first recording and window capture after each launch no longer wait about 3 seconds for it. Stinkshot remembers the hang for a week, then tries once more.
+
 ## [0.1.0] - 2026-11-08
 
 First public release.

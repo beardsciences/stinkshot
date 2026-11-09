@@ -1654,6 +1654,9 @@ static WGC_GATE: crate::hang::HangGate =
 /// Run WGC on a private MTA thread: the caller's apartment (UI thread = STA) is irrelevant
 /// and a window that never delivers a frame costs this call at most `WGC_TIMEOUT`.
 fn wgc_with_timeout(hwnd: Hwnd, include_cursor: bool) -> anyhow::Result<Rgba> {
+    if crate::wgc_memo::known_hung() {
+        anyhow::bail!("Windows.Graphics.Capture skipped (it hung on this PC recently)");
+    }
     match WGC_GATE.run("stinkshot-wgc", WGC_TIMEOUT, move || {
         crate::util::ensure_com();
         wgc_capture(HWND(hwnd as *mut _), include_cursor)
@@ -1662,7 +1665,10 @@ fn wgc_with_timeout(hwnd: Hwnd, include_cursor: bool) -> anyhow::Result<Rgba> {
         Err(crate::hang::Hang::Skipped(why)) => {
             anyhow::bail!("Windows.Graphics.Capture skipped ({why})")
         }
-        Err(crate::hang::Hang::TimedOut) => anyhow::bail!("Windows.Graphics.Capture timed out"),
+        Err(crate::hang::Hang::TimedOut) => {
+            crate::wgc_memo::remember_hang();
+            anyhow::bail!("Windows.Graphics.Capture timed out")
+        }
         Err(e) => anyhow::bail!("Windows.Graphics.Capture: {e}"),
     }
 }

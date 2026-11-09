@@ -364,6 +364,9 @@ impl Capturer {
         include_cursor: bool,
         fps: u32,
     ) -> Result<Capturer> {
+        if stinkshot_platform::wgc_memo::known_hung() {
+            bail!("WGC skipped (it hung on this PC recently)");
+        }
         let plan = plan.clone();
         let r = WGC_GATE.run("record-wgc-init", WGC_INIT_TIMEOUT, move || {
             let _com = ComGuard::new();
@@ -375,9 +378,12 @@ impl Capturer {
             Ok(Ok(c)) => Ok(c.0),
             Ok(Err(e)) => Err(anyhow!(e)),
             // A timed-out helper stays blocked inside the OS call; it holds nothing we need.
-            Err(Hang::TimedOut) => Err(anyhow!(
-                "WGC session creation did not complete within {WGC_INIT_TIMEOUT:?}"
-            )),
+            Err(Hang::TimedOut) => {
+                stinkshot_platform::wgc_memo::remember_hang();
+                Err(anyhow!(
+                    "WGC session creation did not complete within {WGC_INIT_TIMEOUT:?}"
+                ))
+            }
             Err(Hang::Skipped(why)) => Err(anyhow!("WGC skipped ({why})")),
             Err(e) => Err(anyhow!("WGC init: {e}")),
         }
