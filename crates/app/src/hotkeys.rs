@@ -21,51 +21,67 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use stinkshot_platform::snip::{SnipChord, SnipHook};
 
 use crate::actions::Action;
+use crate::l10n::tr;
 use crate::state::Command;
 
 fn bindings(cfg: &stinkshot_core::config::Hotkeys) -> [(Action, &str); Action::ALL.len()] {
     Action::ALL.map(|a| (a, a.hotkey(cfg).as_str()))
 }
 
-/// Phrases that identify each hotkey problem in its long text (`ErrorKind::of`).
-const INVALID: &str = "is not a valid key combination";
-const DUPLICATE: &str = "is set for both";
-const IN_USE: &str = "is already used by another program";
-const NOT_REGISTERED: &str = "could not be registered with Windows";
+/// Phrases that identify each hotkey problem in its long text (`ErrorKind::of`). Looked up so
+/// a translated long text still matches its kind.
+fn invalid_phrase() -> &'static str {
+    tr!("shell.hotkey.phrase.invalid")
+}
+fn duplicate_phrase() -> &'static str {
+    tr!("shell.hotkey.phrase.duplicate")
+}
+fn in_use_phrase() -> &'static str {
+    tr!("shell.hotkey.phrase.in_use")
+}
+fn not_registered_phrase() -> &'static str {
+    tr!("shell.hotkey.phrase.not_registered")
+}
 
 /// Hotkey problem texts (long form, for the startup toast and the summary box in Settings).
 /// Each starts with the key's display form so Settings can attach it to the matching row
 /// (`settings_ui::error_for`), and each says what to do.
 fn parse_error_text(key: &str, action: Action) -> String {
-    format!(
-        "{key} ({}) {INVALID}. Record it again in Settings > Hotkeys.",
-        action.label()
+    tr!(
+        "shell.hotkey.invalid",
+        key = key,
+        action = action.label(),
+        phrase = invalid_phrase()
     )
 }
 
 fn duplicate_text(key: &str, action: Action, other: Action) -> String {
-    format!(
-        "{key} {DUPLICATE} {} and {}; only {} works. Change one of them in Settings > Hotkeys.",
-        other.label(),
-        action.label(),
-        other.label()
+    tr!(
+        "shell.hotkey.duplicate",
+        key = key,
+        phrase = duplicate_phrase(),
+        other = other.label(),
+        action = action.label()
     )
 }
 
 fn register_error_text(key: &str, action: Action, in_use: bool) -> String {
     if in_use {
-        format!(
-            "{key} ({}) {IN_USE}. Pick a different key in Settings > Hotkeys.",
-            action.label()
+        tr!(
+            "shell.hotkey.in_use",
+            key = key,
+            action = action.label(),
+            phrase = in_use_phrase()
         )
     } else {
-        format!(
-            "{key} ({}) {NOT_REGISTERED}. Pick a different key in Settings > Hotkeys.",
-            action.label()
+        tr!(
+            "shell.hotkey.not_registered",
+            key = key,
+            action = action.label(),
+            phrase = not_registered_phrase()
         )
     }
 }
-
 /// Which hotkey problem a long error text describes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrorKind {
@@ -78,10 +94,10 @@ pub enum ErrorKind {
 impl ErrorKind {
     pub fn of(text: &str) -> Option<ErrorKind> {
         [
-            (INVALID, ErrorKind::Invalid),
-            (DUPLICATE, ErrorKind::Duplicate),
-            (IN_USE, ErrorKind::InUse),
-            (NOT_REGISTERED, ErrorKind::NotRegistered),
+            (invalid_phrase(), ErrorKind::Invalid),
+            (duplicate_phrase(), ErrorKind::Duplicate),
+            (in_use_phrase(), ErrorKind::InUse),
+            (not_registered_phrase(), ErrorKind::NotRegistered),
         ]
         .into_iter()
         .find(|(p, _)| text.contains(p))
@@ -92,10 +108,10 @@ impl ErrorKind {
     /// Settings path, which the row already shows.
     pub fn row_text(self) -> &'static str {
         match self {
-            ErrorKind::Invalid => "Not a valid key combination. Record it again.",
-            ErrorKind::Duplicate => "Also set for another action, so only one of them works.",
-            ErrorKind::InUse => "Already used by another program. Pick a different key.",
-            ErrorKind::NotRegistered => "Windows could not register it. Pick a different key.",
+            ErrorKind::Invalid => tr!("shell.hotkey.row.invalid"),
+            ErrorKind::Duplicate => tr!("shell.hotkey.row.duplicate"),
+            ErrorKind::InUse => tr!("shell.hotkey.row.in_use"),
+            ErrorKind::NotRegistered => tr!("shell.hotkey.row.not_registered"),
         }
     }
 }
@@ -197,10 +213,7 @@ impl Hotkeys {
             Ok(m) => Some(m),
             Err(e) => {
                 log::error!("global hotkey manager failed: {e}");
-                errors.push(
-                    "Global hotkeys are unavailable. Use the tray icon, or restart Stinkshot."
-                        .to_string(),
-                );
+                errors.push(tr!("shell.hotkey.unavailable").to_string());
                 None
             }
         };
@@ -257,10 +270,7 @@ impl Hotkeys {
                 }
                 Err(e) => {
                     log::warn!("PrintScreen takeover change failed: {e:#}");
-                    errors.push(
-                        "Windows did not let Stinkshot take over PrtSc, so it may still open the Snipping Tool. Turn off Take Over PrintScreen or try again."
-                            .to_string(),
-                    );
+                    errors.push(tr!("shell.hotkey.prtsc_failed").to_string());
                 }
             }
         }
@@ -356,9 +366,8 @@ impl Hotkeys {
                     });
                 if let Err(e) = spawned {
                     log::error!("cannot start Snipping Tool bridge thread: {e}");
-                    self.snip_status = SnipStatus::Unavailable(
-                        "Stinkshot could not start its shortcut listener. Restart Stinkshot and try again.".into(),
-                    );
+                    self.snip_status =
+                        SnipStatus::Unavailable(tr!("shell.hotkey.snip_thread_failed").into());
                     return;
                 }
                 log::info!("Snipping Tool shortcuts routed to Stinkshot");
@@ -367,9 +376,7 @@ impl Hotkeys {
             }
             Err(e) => {
                 log::warn!("Snipping Tool hook failed: {e:#}");
-                self.snip_status = SnipStatus::Unavailable(
-                    "Windows did not let Stinkshot listen for Win+Shift+S and Win+Shift+R, so they still open the Snipping Tool. Turn the option off and on again, or restart Stinkshot.".into(),
-                );
+                self.snip_status = SnipStatus::Unavailable(tr!("shell.hotkey.snip_failed").into());
             }
         }
     }

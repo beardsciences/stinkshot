@@ -2,9 +2,13 @@
 //! what to do in one or two sentences; the raw error chain (paths, HRESULTs, OS messages)
 //! goes to the log only. Use `report` / `report_str` at every user-facing failure site.
 
+use crate::l10n::tr;
+
 /// Appended once, at the end of the body, when the cause is not one we recognise. Settings >
 /// About has the Open Log button it points to.
-pub const LOG_HINT: &str = "Details are in the log (Settings > About > Open Log).";
+pub fn log_hint() -> &'static str {
+    tr!("shell.error.log_hint")
+}
 
 /// Failure causes common enough to explain in plain words.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,23 +28,23 @@ impl Cause {
     /// What happened and what to do, or `None` when the caller's fallback should be used.
     pub fn sentence(self) -> Option<&'static str> {
         Some(match self {
-            Cause::DiskFull => "The disk is full. Free up some space, then try again.",
+            Cause::DiskFull => tr!("shell.error.disk_full"),
             Cause::AccessDenied => {
-                "Windows blocked access to the file or folder. Check that it is not read-only or protected, or choose another folder."
+                tr!("shell.error.access_denied")
             }
             Cause::PathTooLong => {
-                "The file path is too long. Choose a shorter folder or file name pattern."
+                tr!("shell.error.path_too_long")
             }
             Cause::NotFound => {
-                "The file or folder could not be found. It may have been moved or deleted."
+                tr!("shell.error.not_found")
             }
-            Cause::InUse => "Another program is using the file. Close it, then try again.",
+            Cause::InUse => tr!("shell.error.in_use"),
             Cause::NetworkPath => {
-                "The network location is not reachable. Check the connection, then try again."
+                tr!("shell.error.network_path")
             }
-            Cause::ClipboardBusy => "Another app is using the clipboard. Try again in a moment.",
+            Cause::ClipboardBusy => tr!("shell.error.clipboard_busy"),
             Cause::Offline => {
-                "Stinkshot could not reach the server. Check your internet connection and try again later."
+                tr!("shell.error.offline")
             }
             Cause::Unknown => return None,
         })
@@ -168,7 +172,7 @@ fn compose(cause: Cause, fallback: &str, tail: &str) -> String {
     }
     if cause.sentence().is_none() {
         out.push(' ');
-        out.push_str(LOG_HINT);
+        out.push_str(log_hint());
     }
     out
 }
@@ -282,13 +286,16 @@ mod tests {
     fn log_hint_ends_combined_bodies() {
         let e = anyhow::anyhow!("weird");
         let s = report_with("t", &e, "It failed.", "Kept what was recorded.");
-        assert_eq!(s, format!("It failed. Kept what was recorded. {LOG_HINT}"));
+        assert_eq!(
+            s,
+            format!("It failed. Kept what was recorded. {}", log_hint())
+        );
         let e = anyhow::Error::new(std::io::Error::from_raw_os_error(112));
         let s = report_with("t", &e, "It failed.", "Kept what was recorded.");
         assert!(s.starts_with("The disk is full."));
         assert!(s.ends_with("Kept what was recorded."));
         let s = report_str_with("t", "weird", "It failed.", "");
-        assert_eq!(s, format!("It failed. {LOG_HINT}"));
+        assert_eq!(s, format!("It failed. {}", log_hint()));
     }
 
     #[test]
@@ -296,7 +303,7 @@ mod tests {
         let e = anyhow::anyhow!("weird failure 0xC00D36B4 in C:\\Users\\x\\file.mp4");
         let s = explain(&e, "The recording could not be saved.");
         assert!(s.starts_with("The recording could not be saved."));
-        assert!(s.ends_with(LOG_HINT));
+        assert!(s.ends_with(log_hint()));
         assert!(!s.contains("0xC00D"));
         assert!(!s.contains("C:\\"));
         let s = explain_str("Access is denied. (os error 5) C:\\x", "Fallback.");
