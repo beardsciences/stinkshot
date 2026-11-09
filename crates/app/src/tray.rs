@@ -17,6 +17,7 @@ use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, 
 use crate::actions::Action;
 use crate::hotkeys::display;
 use crate::icon_gen;
+use crate::l10n::tr;
 use crate::state::Command;
 use crate::update::Release;
 
@@ -114,12 +115,27 @@ impl Tray {
         }
         menu.append(&PredefinedMenuItem::separator())
             .context("tray menu")?;
-        menu.append(&MenuItem::with_id(ID_HISTORY, "History", true, None))
-            .context("tray menu")?;
-        menu.append(&MenuItem::with_id(ID_SETTINGS, "Settings", true, None))
-            .context("tray menu")?;
-        menu.append(&MenuItem::with_id(ID_QUIT, "Quit", true, None))
-            .context("tray menu")?;
+        menu.append(&MenuItem::with_id(
+            ID_HISTORY,
+            tr!("shell.tray.history"),
+            true,
+            None,
+        ))
+        .context("tray menu")?;
+        menu.append(&MenuItem::with_id(
+            ID_SETTINGS,
+            tr!("shell.tray.settings"),
+            true,
+            None,
+        ))
+        .context("tray menu")?;
+        menu.append(&MenuItem::with_id(
+            ID_QUIT,
+            tr!("shell.tray.quit"),
+            true,
+            None,
+        ))
+        .context("tray menu")?;
 
         let accent = accent_of(config);
         let dpi_size = icon_gen::tray_size_for_dpi(crate::sysutil::system_dpi());
