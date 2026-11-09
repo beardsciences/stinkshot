@@ -466,7 +466,7 @@ pub fn layout_bars(
     };
 
     let below_y = sel.bottom() as f32 + 14.0;
-    let above_y = sel.y as f32 - 14.0 - block_h - 34.0; // leave room for the size label
+    let above_y = sel.y as f32 - 14.0 - block_h - super::CHIP_ABOVE_PT; // room for the size label
     let y = if below_y + block_h <= bounds.bottom() as f32 - pad {
         below_y
     } else if above_y >= bounds.y as f32 + pad {

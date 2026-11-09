@@ -100,6 +100,8 @@ use crate::state::{
 use crate::theme;
 
 /// Selection handle grab radius and shape handle grab radius, in egui points.
+/// How far the size / zoom chips sit above the selection (chip height plus a 12 pt gap).
+const CHIP_ABOVE_PT: f32 = 42.0;
 const SEL_HANDLE_PT: f32 = 9.0;
 const SHAPE_HANDLE_PT: f32 = 9.0;
 const SHAPE_TOL_PT: f32 = 4.0;

@@ -1216,12 +1216,12 @@ impl Overlay {
         if let (Some(r), false) = (chip_rect, manipulating) {
             let rs = self.canvas_rect_screen(r);
             let mon = self.monitor_for(rs);
-            let y = (rs.y as f32 * k - 34.0).max(mon.y as f32 * k + 52.0);
+            let y = (rs.y as f32 * k - super::CHIP_ABOVE_PT).max(mon.y as f32 * k + 52.0);
             let x = (rs.x as f32 * k).clamp(
                 mon.x as f32 * k + 6.0,
                 (mon.right() as f32 * k - 260.0).max(mon.x as f32 * k + 6.0),
             );
-            let pos_pt = if (rs.y as f32) * k >= 40.0 {
+            let pos_pt = if (rs.y as f32) * k >= super::CHIP_ABOVE_PT + 6.0 {
                 Pos2::new(x, y)
             } else {
                 Pos2::new(rs.x as f32 * k + 6.0, rs.y as f32 * k + 6.0)

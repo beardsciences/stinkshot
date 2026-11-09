@@ -23,7 +23,7 @@ use crate::toast::ui_common as uc;
 /// Space around the picture, in points: sides, top (hint bar and size chip above the
 /// picture) and the gap under the bars.
 const SIDE_PT: f32 = 16.0;
-const TOP_PT: f32 = 88.0;
+const TOP_PT: f32 = 100.0;
 const BAR_GAP_PT: f32 = 8.0;
 /// Smallest window (client area, points) and the initial size cap (share of the work area).
 const MIN_CLIENT_PT: (f32, f32) = (640.0, 420.0);
