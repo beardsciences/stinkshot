@@ -73,7 +73,8 @@ UIA dump on a debug build (profile `ux-review`), tour and pages driven through U
   integration; they now use the looked-up text.
 - Fixed: tour hotkey names were painter text, missing from the UIA tree; now labels.
 - Fixed: History's date filter combo had no name; now "Date Filter" (`a11y::name`).
-- Verified: tour opens once on first start, Done/Skip set `tour_seen`, Settings > About >
+- Fixed: `--tray` (autostart, silent upgrade, smoke test) opened the tour; now plain launch only.
+- Verified: tour opens once on first plain start, Done/Skip set `tour_seen`, Settings > About >
   Show Tour reopens it; Help lists match `keys::sheet` and the tray behavior.
 - Not verified: the real full-screen overlay (no synthetic input, no display wake), NVDA,
   Narrator speech.

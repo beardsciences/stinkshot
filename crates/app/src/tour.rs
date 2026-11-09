@@ -1,6 +1,7 @@
 //! First-run tour: four short, skippable steps (hotkeys, tray, privacy, where captures go).
-//! The shell opens it once, when `general.tour_seen` is false; closing it any way (Done,
-//! Skip, Esc, the close box) sets the flag. Settings > About > Show Tour opens it again.
+//! The shell opens it once, on a plain launch while `general.tour_seen` is false; closing it
+//! any way (Done, Skip, Esc, the close box) sets the flag. Settings > About > Show Tour opens it
+//! again.
 
 use std::time::Duration;
 

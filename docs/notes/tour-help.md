@@ -8,7 +8,8 @@
 - Skippable at every step (Skip Tour, Esc, close box). Enter / Right go forward, Left goes back.
   The last step has Open Help (Settings > Help) and Done.
 - Shown once: the shell queues `Command::OpenTour` at start-up when `general.tour_seen` is false
-  and the launch did not carry a capture command. Closing it any way sets `tour_seen = true`
+  and the launch was a plain one (no subcommand, not `--tray`: autostart, silent upgrades and
+  the smoke test stay silent; the tour waits for the next plain launch). Closing it any way sets `tour_seen = true`
   and marks the config dirty, so the shell saves it.
 - Existing configs lack the field, so serde defaults it to false: users upgrading to the first
   build with the tour see it once too. Deliberate (0.1.0 is the first public release).

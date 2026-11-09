@@ -972,9 +972,10 @@ impl Shell {
             let body = welcome_body(&shell.shared.config.hotkeys.region);
             shell.notify(tr!("shell.welcome.title"), body, false);
         }
-        // First run: the short tour, once (it sets `general.tour_seen` when closed). Not over
-        // a capture the launch asked for.
-        if !launched_with_command && !shell.shared.config.general.tour_seen {
+        // First run: the short tour, once (it sets `general.tour_seen` when closed). Only on a
+        // plain launch: not over a capture the launch asked for, and not from `--tray`
+        // (autostart, silent upgrades, scripts), which stays silent.
+        if welcome && !shell.shared.config.general.tour_seen {
             shell.pending.push_back(Command::OpenTour);
         }
         shell.maybe_check_updates(false);
