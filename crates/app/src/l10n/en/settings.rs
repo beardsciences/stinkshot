@@ -260,6 +260,7 @@ pub fn get(key: &str) -> Option<&'static str> {
             "Local only: no uploads, no accounts, no telemetry. The single optional network call is the update check."
         }
         "settings.about.offline" => "Offline by Default",
+        "settings.nav.help" => "Help",
         _ => return None,
     })
 }
@@ -465,4 +466,5 @@ pub const KEYS: &[&str] = &[
     "settings.about.privacy",
     "settings.about.privacy.desc",
     "settings.about.offline",
+    "settings.nav.help",
 ];

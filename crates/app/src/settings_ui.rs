@@ -48,11 +48,25 @@ pub enum Section {
     Recording,
     History,
     Privacy,
+    Help,
     About,
 }
 
+impl Section {
+    /// Page by its English name, any case ("help", "About"), for `stinkshot settings --page`.
+    pub fn from_name(name: &str) -> Option<Section> {
+        SECTIONS
+            .iter()
+            .find(|(_, k)| {
+                k.strip_prefix("settings.nav.")
+                    .is_some_and(|n| n.eq_ignore_ascii_case(name.trim()))
+            })
+            .map(|(s, _)| *s)
+    }
+}
+
 /// Pages and their name keys (looked up when drawn; the key doubles as a stable id).
-const SECTIONS: [(Section, &str); 8] = [
+const SECTIONS: [(Section, &str); 9] = [
     (Section::General, "settings.nav.general"),
     (Section::Hotkeys, "settings.nav.hotkeys"),
     (Section::Capture, "settings.nav.capture"),
@@ -60,6 +74,7 @@ const SECTIONS: [(Section, &str); 8] = [
     (Section::Recording, "settings.nav.recording"),
     (Section::History, "settings.nav.history"),
     (Section::Privacy, "settings.nav.privacy"),
+    (Section::Help, "settings.nav.help"),
     (Section::About, "settings.nav.about"),
 ];
 
@@ -598,6 +613,7 @@ impl Surface for SettingsWindow {
                             Section::Recording => self.page_recording(ui, shared),
                             Section::History => self.page_history(ui, shared),
                             Section::Privacy => self.page_privacy(ui, shared, accent),
+                            Section::Help => crate::help::page(ui, shared),
                             Section::About => self.page_about(ui, shared),
                         }
                         ui.add_space(16.0);
@@ -1846,6 +1862,15 @@ impl SettingsWindow {
         }
         if copied {
             ui.ctx().request_repaint_after(Duration::from_millis(500));
+        }
+        let mut show_tour = false;
+        widgets::setting_row(ui, "Tour", "The short intro from the first start.", |ui| {
+            if widgets::button(ui, "Show Tour").clicked() {
+                show_tour = true;
+            }
+        });
+        if show_tour {
+            shared.outbox.push(Command::OpenTour);
         }
         let mut open_log = false;
         widgets::setting_row(

@@ -46,6 +46,8 @@ pub enum Command {
     OpenSettings,
     /// Open Settings on a given page, or switch an open Settings window to it.
     OpenSettingsAt(crate::settings_ui::Section),
+    /// The first-run tour (also Settings > About > Show Tour).
+    OpenTour,
     /// Re-open a history item in the overlay editor (annotations editable).
     EditItem(ItemId),
     PinItem(ItemId),

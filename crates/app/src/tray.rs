@@ -54,6 +54,7 @@ pub struct Tray {
 
 const ID_HISTORY: &str = "history";
 const ID_SETTINGS: &str = "settings";
+const ID_HELP: &str = "help";
 const ID_QUIT: &str = "quit";
 const ID_UPDATE: &str = "update";
 
@@ -115,27 +116,15 @@ impl Tray {
         }
         menu.append(&PredefinedMenuItem::separator())
             .context("tray menu")?;
-        menu.append(&MenuItem::with_id(
-            ID_HISTORY,
-            tr!("shell.tray.history"),
-            true,
-            None,
-        ))
-        .context("tray menu")?;
-        menu.append(&MenuItem::with_id(
-            ID_SETTINGS,
-            tr!("shell.tray.settings"),
-            true,
-            None,
-        ))
-        .context("tray menu")?;
-        menu.append(&MenuItem::with_id(
-            ID_QUIT,
-            tr!("shell.tray.quit"),
-            true,
-            None,
-        ))
-        .context("tray menu")?;
+        for (id, key) in [
+            (ID_HISTORY, "shell.tray.history"),
+            (ID_SETTINGS, "shell.tray.settings"),
+            (ID_HELP, "shell.tray.help"),
+            (ID_QUIT, "shell.tray.quit"),
+        ] {
+            menu.append(&MenuItem::with_id(id, crate::l10n::lookup(key), true, None))
+                .context("tray menu")?;
+        }
 
         let accent = accent_of(config);
         let dpi_size = icon_gen::tray_size_for_dpi(crate::sysutil::system_dpi());
@@ -339,6 +328,7 @@ impl Tray {
         Some(match id {
             ID_HISTORY => Command::OpenHistory,
             ID_SETTINGS => Command::OpenSettings,
+            ID_HELP => Command::OpenSettingsAt(crate::settings_ui::Section::Help),
             ID_QUIT => Command::Quit,
             ID_UPDATE => return self.update_url.clone().map(Command::OpenUrl),
             _ => return None,

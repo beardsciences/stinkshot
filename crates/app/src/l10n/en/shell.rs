@@ -336,6 +336,7 @@ pub fn get(key: &str) -> Option<&'static str> {
         "shell.save_as.title" => "Save Capture As",
         "shell.trim.save_gif" => "Save GIF",
         "shell.trim.save_mp4" => "Save MP4",
+        "shell.tray.help" => "Help",
         _ => return None,
     })
 }
@@ -581,4 +582,5 @@ pub const KEYS: &[&str] = &[
     "shell.save_as.title",
     "shell.trim.save_gif",
     "shell.trim.save_mp4",
+    "shell.tray.help",
 ];
