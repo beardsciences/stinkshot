@@ -9,6 +9,8 @@ write entries for people who use Stinkshot, not for people who read the diff.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-09
+
 ### Added
 
 - Box mode for the Highlighter. Pick Freehand or Box in the tool bar, or hold Shift while
@@ -97,6 +99,7 @@ Tagged in the repository; no downloads were published.
 - No upload targets, accounts or telemetry. The update check is the only network request and
   is off by default.
 
-[Unreleased]: https://code.mccullough.dev/christian/stinkshot/compare/v0.1.1...main
+[Unreleased]: https://code.mccullough.dev/christian/stinkshot/compare/v0.1.2...main
+[0.1.2]: https://code.mccullough.dev/christian/stinkshot/compare/v0.1.1...v0.1.2
 [0.1.1]: https://code.mccullough.dev/christian/stinkshot/releases/tag/v0.1.1
 [0.1.0]: https://code.mccullough.dev/christian/stinkshot/releases/tag/v0.1.0

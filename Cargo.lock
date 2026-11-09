@@ -3868,7 +3868,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "stinkshot"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "accesskit_windows",
  "anyhow",
@@ -3898,7 +3898,7 @@ dependencies = [
 
 [[package]]
 name = "stinkshot-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -3921,7 +3921,7 @@ dependencies = [
 
 [[package]]
 name = "stinkshot-history"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3935,11 +3935,11 @@ dependencies = [
 
 [[package]]
 name = "stinkshot-logo"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "stinkshot-platform"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "image",
@@ -3950,7 +3950,7 @@ dependencies = [
 
 [[package]]
 name = "stinkshot-record"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -3965,7 +3965,7 @@ dependencies = [
 
 [[package]]
 name = "stinkshot-stitch"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "log",
  "stinkshot-core",
