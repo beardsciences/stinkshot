@@ -23,6 +23,7 @@ use stinkshot_stitch::drive::{self, DriveControl, DriveParams};
 use stinkshot_stitch::{StitchOptions, Stitcher};
 
 use crate::capture_ops;
+use crate::edit_save::{self, EditResult, encode_save};
 use crate::errors::{self, report};
 use crate::filedialog;
 use crate::l10n::tr;
@@ -245,115 +246,6 @@ static LAST_SAVE_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 // ------------------------------------------------------------------------------ capture
 
-fn encode_save(img: &Rgba, path: &Path, cfg: &Config) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-    }
-    let bytes = img
-        .encode(filedialog::format_for_path(path), cfg.capture.jpeg_quality)
-        .with_context(|| format!("encode {}", path.display()))?;
-    // A queued re-compression of this file must not swap in an older picture after this.
-    let _g = crate::recompress::write_lock();
-    stinkshot_core::image::write_atomic(path, &bytes)
-        .with_context(|| format!("write {}", path.display()))
-}
-
-/// Write the flattened image (+ re-edit sidecar) into the history folder and index it.
-#[allow(clippy::too_many_arguments)]
-fn save_to_history(
-    env: &Env,
-    base: &Rgba,
-    doc: &Doc,
-    flat: &Rgba,
-    unframed: Option<&Rgba>,
-    source: &SourceInfo,
-    mode: &str,
-    editing: Option<ItemId>,
-) -> anyhow::Result<(ItemId, PathBuf)> {
-    let cfg = &env.cfg;
-    if let Some(id) = editing
-        && let Some(meta) = env.history.get(id)?
-    {
-        let path = meta.path;
-        encode_save(flat, &path, cfg)?;
-        write_sidecar(cfg, &path, base, doc, unframed, true);
-        env.history.touch(id, flat.width, flat.height)?;
-        crate::recompress::enqueue(&path, Some((env.history.clone(), id)));
-        return Ok((id, path));
-    }
-    let fmt = cfg.capture.format;
-    let parts = NameParts {
-        now: chrono::Local::now(),
-        app: &source.app,
-        title: &source.window_title,
-        width: flat.width,
-        height: flat.height,
-    };
-    let path = naming::unique_path(
-        env.history.folder(),
-        &cfg.capture.filename_pattern,
-        &parts,
-        fmt.extension(),
-    );
-    let t0 = std::time::Instant::now();
-    encode_save(flat, &path, cfg)?;
-    log::debug!(
-        "saved {}x{} {:?} in {:.1} ms (encode + write)",
-        flat.width,
-        flat.height,
-        fmt,
-        t0.elapsed().as_secs_f64() * 1000.0
-    );
-    write_sidecar(cfg, &path, base, doc, unframed, false);
-    let id = env.history.add(NewItem {
-        path: path.clone(),
-        kind: Some(ItemKind::Image),
-        width: flat.width,
-        height: flat.height,
-        app: source.app.clone(),
-        window_title: source.window_title.clone(),
-        mode: mode.to_string(),
-    })?;
-    crate::recompress::enqueue(&path, Some((env.history.clone(), id)));
-    Ok((id, path))
-}
-
-/// The re-edit sidecar: the unannotated base and the document when Keep Editable Originals
-/// is on and there are annotations. Otherwise, for a framed export (Beautify), the picture
-/// without the frame and no annotations: it holds nothing the export does not show
-/// (redactions are already in it), and a re-edit starts from it instead of framing the frame.
-fn write_sidecar(
-    cfg: &Config,
-    path: &Path,
-    base: &Rgba,
-    doc: &Doc,
-    unframed: Option<&Rgba>,
-    was_editing: bool,
-) {
-    let flat_doc;
-    let keep = if cfg.history.keep_editable && !doc.shapes.is_empty() {
-        Some((base, doc))
-    } else if let Some(u) = unframed {
-        flat_doc = Doc::new(u.width, u.height);
-        Some((u, &flat_doc))
-    } else {
-        None
-    };
-    if let Some((b, d)) = keep {
-        if let Err(e) = annotate::save_editable(path, b, d) {
-            log::warn!(
-                "could not save editable sidecar for {}: {e:#}",
-                path.display()
-            );
-        }
-    } else if was_editing && let Err(e) = annotate::delete_editable(path) {
-        log::warn!(
-            "could not remove stale sidecar for {}: {e:#}",
-            path.display()
-        );
-    }
-}
-
 pub fn finish_capture(env: &Env, out: CaptureOutput) {
     job(env, "capture-save", move |env| {
         let CaptureOutput {
@@ -369,17 +261,27 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
         } = out;
         let (width, height) = (flattened.width, flattened.height);
 
-        let (item, path) = match save_to_history(
-            env,
-            &base,
-            &doc,
-            &flattened,
-            unframed.as_ref(),
-            &source,
-            mode,
-            editing,
-        ) {
-            Ok((id, p)) => (Some(id), Some(p)),
+        let target = edit_save::history_target(action, editing);
+        let written = edit_save::write_to_history(
+            &env.history,
+            &env.cfg,
+            &EditResult {
+                base: &base,
+                doc: &doc,
+                flat: &flattened,
+                unframed: unframed.as_ref(),
+                source: &source,
+                mode,
+            },
+            target,
+        );
+        let mut updated = false;
+        let (item, path) = match written {
+            Ok(w) => {
+                updated = w.updated;
+                crate::recompress::enqueue(&w.path, Some((env.history.clone(), w.id)));
+                (Some(w.id), Some(w.path))
+            }
             Err(e) => {
                 let body = report(
                     "saving capture to history",
@@ -392,13 +294,7 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
         };
         drop(base);
 
-        let want_copy = match action {
-            FinishAction::Copy => true,
-            FinishAction::SaveAs | FinishAction::Pin | FinishAction::Quick => {
-                env.cfg.general.copy_to_clipboard
-            }
-            FinishAction::CopyText => false,
-        };
+        let want_copy = edit_save::copies_image(action, env.cfg.general.copy_to_clipboard);
         let mut copied_image = false;
         if want_copy {
             match clipboard::set_image(&flattened) {
@@ -495,7 +391,7 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
             action,
             rect,
             pin_image,
-            editing: editing.is_some(),
+            editing: updated,
         })));
         if item.is_some() {
             env.send(WorkerMsg::HistoryChanged);
@@ -1312,7 +1208,7 @@ mod tests {
             )
             .unwrap();
             // No annotations, Beautify applied: the re-edit base is the original size.
-            write_sidecar(&cfg, &path, &base, &Doc::new(40, 30), Some(&base), false);
+            edit_save::write_sidecar(&cfg, &path, &base, &Doc::new(40, 30), Some(&base), false);
             let (b, d) = annotate::load_editable(&path).unwrap().expect("sidecar");
             assert_eq!(
                 (b.width, b.height),

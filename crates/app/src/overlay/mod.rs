@@ -251,6 +251,8 @@ struct Keys {
     paste: bool,
     duplicate: bool,
     save: bool,
+    /// Shift held with the save chord (Save As while re-editing).
+    save_shift: bool,
     pin: bool,
     text: bool,
     smart: bool,
@@ -446,6 +448,9 @@ pub struct Overlay {
     /// Editor Window: annotations came from the overlay (not saved anywhere yet), so closing
     /// asks even before the first edit here.
     carried_edits: bool,
+    /// Editor Window: the document as last saved back to its history item (the window stays
+    /// open after Save); no prompt on close while it is unchanged.
+    clean_doc: Option<Doc>,
     /// Settings > Capture > After Selecting a Region is Open Editor Window.
     after_region_window: bool,
 }
@@ -697,6 +702,7 @@ impl Overlay {
             windowed: false,
             fixed_rect: None,
             carried_edits: false,
+            clean_doc: None,
             after_region_window: shared.config.capture.after_region
                 == stinkshot_core::config::AfterRegion::Window,
         };
@@ -1279,6 +1285,7 @@ impl Overlay {
             });
             k.duplicate = keys::DUPLICATE.pressed(i);
             k.save = keys::SAVE.pressed(i);
+            k.save_shift = i.modifiers.shift;
             k.pin = keys::PIN.pressed(i);
             k.text = keys::COPY_TEXT.pressed(i);
             k.smart = keys::FIND_SENSITIVE.pressed(i);
@@ -1445,7 +1452,8 @@ impl Overlay {
         }
         if self.annotating() && self.sel.is_some() {
             if k.save {
-                self.finish(ctx, shared, FinishAction::SaveAs);
+                let action = crate::edit_save::save_shortcut(self.editing_item(), k.save_shift);
+                self.finish(ctx, shared, action);
                 return;
             }
             if k.pin {
@@ -1663,11 +1671,17 @@ impl Overlay {
         self.cancel(shared);
     }
 
+    /// Re-editing a history item (Save writes back to it).
+    fn editing_item(&self) -> bool {
+        matches!(self.annotate_meta, Some((_, Some(_), _)))
+    }
+
     /// Annotations the user drew or changed in this session (lost on cancel).
     fn has_unsaved_edits(&self) -> bool {
         self.annotating()
             && !self.doc.shapes.is_empty()
             && (self.undo.can_undo() || self.carried_edits)
+            && self.clean_doc.as_ref() != Some(&self.doc)
     }
 
     /// True while the discard prompt is showing.

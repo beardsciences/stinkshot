@@ -19,6 +19,7 @@ pub struct Config {
     pub recording: Recording,
     pub history: HistoryCfg,
     pub privacy: Privacy,
+    pub pins: Pins,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -181,6 +182,27 @@ pub struct HistoryCfg {
     /// Keep the unannotated original + annotation sidecar so captures stay re-editable.
     /// NOTE: the original contains pixels that were later redacted; it never leaves the PC.
     pub keep_editable: bool,
+}
+
+/// Pinned captures (always-on-top image windows).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Pins {
+    /// Pins are normal app windows: listed in Alt+Tab, Task View and the taskbar (still
+    /// always on top). Off: tool windows that stay out of those.
+    pub show_in_task_view: bool,
+    /// The pin toolbar is always shown in a strip above the image. Off: it appears on hover
+    /// over the image.
+    pub always_show_toolbar: bool,
+}
+
+impl Default for Pins {
+    fn default() -> Self {
+        Self {
+            show_in_task_view: true,
+            always_show_toolbar: true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -606,6 +628,8 @@ mod tests {
         assert!(!cfg.editor.highlighter_box);
         assert_eq!(cfg.editor.beautify, crate::beautify::Beautify::default());
         assert!(cfg.hotkeys.pick_color.is_empty());
+        // Pin options added later: both on for old files.
+        assert!(cfg.pins.show_in_task_view && cfg.pins.always_show_toolbar);
         let _ = std::fs::remove_dir_all(&d);
     }
 

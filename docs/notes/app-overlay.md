@@ -716,7 +716,11 @@ at most one per history item.
   a selected region does Edit in Window (hint bar "Enter Edit in Window", "Ctrl+C Copy";
   tooltips "Edit in Window (Enter)" and "Copy to Clipboard (Ctrl+C)"); Ctrl+C still copies
   and closes. Window and full-screen captures still open in place.
-- Finishing (Copy, Save As, Pin, Copy Text) works as in the overlay and closes the window.
+- Finishing goes through the same `Command::CaptureDone` path as the overlay
+  (`edit_save.rs`, #6). For a history item, Save (Ctrl+S) writes back to it and the window
+  stays open (`window_host::stays_open`; the saved doc becomes the clean state, so closing
+  afterwards does not ask). Save as Copy, Save As (Ctrl+Shift+S), Copy, Pin and Copy Text
+  close the window, like the full-screen editor.
   Closing with unsaved annotations (edits here, or annotations carried over from the overlay
   that were never saved) asks "Discard Changes?" with Keep Editing / Discard (Esc keeps
   editing); Esc's own discard prompt is unchanged. A close while a finish renders waits for it.

@@ -711,7 +711,13 @@ impl Overlay {
                 mode,
                 editing,
             })));
-        self.closed = true;
+        if super::window_host::stays_open(self.windowed, action, editing) {
+            // Saved back to its history item: the Editor Window keeps editing it.
+            self.clean_doc = Some(self.doc.clone());
+            self.carried_edits = false;
+        } else {
+            self.closed = true;
+        }
     }
 
     // ---------------------------------------------------------------- toolbar actions

@@ -101,6 +101,17 @@ pub fn base_title(name: Option<&str>) -> String {
     }
 }
 
+/// Whether finishing with `action` keeps the editor open: only an Editor Window saving back
+/// to the history item it edits (Ctrl+S / Save); everything else closes it, like the
+/// full-screen editor.
+pub(super) fn stays_open(
+    windowed: bool,
+    action: FinishAction,
+    editing: Option<stinkshot_history::ItemId>,
+) -> bool {
+    windowed && editing.is_some() && action == FinishAction::Save
+}
+
 /// `rect` (outer, px) centred in `work`, kept inside it.
 pub(super) fn centred_in(rect: PxRect, work: PxRect) -> PxRect {
     let w = rect.w.min(work.w);
@@ -489,6 +500,22 @@ mod tests {
         let taken = vec![TITLE.to_string(), format!("{TITLE} (2)")];
         assert_eq!(unique_title(TITLE, &taken), format!("{TITLE} (3)"));
         assert_eq!(unique_title("a.png - x", &taken), "a.png - x");
+    }
+
+    #[test]
+    fn only_save_back_to_the_item_keeps_the_window_open() {
+        assert!(stays_open(true, FinishAction::Save, Some(3)));
+        assert!(!stays_open(false, FinishAction::Save, Some(3)));
+        assert!(!stays_open(true, FinishAction::Save, None));
+        for a in [
+            FinishAction::SaveCopy,
+            FinishAction::SaveAs,
+            FinishAction::Copy,
+            FinishAction::Pin,
+            FinishAction::CopyText,
+        ] {
+            assert!(!stays_open(true, a, Some(3)), "{a:?}");
+        }
     }
 
     #[test]

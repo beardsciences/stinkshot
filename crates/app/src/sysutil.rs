@@ -132,6 +132,17 @@ pub fn find_own_window(title: &str) -> Option<stinkshot_platform::Hwnd> {
     None
 }
 
+/// Set a window's caption (what Alt+Tab, Task View and the taskbar show). Best effort.
+pub fn set_window_text(hwnd: stinkshot_platform::Hwnd, text: &str) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::SetWindowTextW;
+    let t: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: `t` is NUL-terminated and outlives the call; the handle is one of our windows.
+    if let Err(e) = unsafe { SetWindowTextW(HWND(hwnd as *mut _), PCWSTR(t.as_ptr())) } {
+        log::debug!("SetWindowTextW: {e}");
+    }
+}
+
 /// A process handle that can only be waited on. Closed on drop.
 pub struct ProcessWaiter(windows::Win32::Foundation::HANDLE);
 

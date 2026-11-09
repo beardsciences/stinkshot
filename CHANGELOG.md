@@ -21,6 +21,9 @@ write entries for people who use Stinkshot, not for people who read the diff.
 
 - A hotkey that another program held now starts working once that program closes, without
   restarting Stinkshot.
+- GIFs (and trimmed MP4s) of a region whose width isn't a multiple of 16 came out as diagonal
+  streaks.
+- The star and trash buttons on History thumbnails flashed on hover and could miss clicks.
 
 ## [0.1.1] - 2026-11-09
 

@@ -849,6 +849,12 @@ pub enum Icon {
     Ocr,
     Pin,
     Save,
+    /// Save as a new history item (two stacked disks).
+    SaveCopy,
+    /// Save to a file of your choice (disk with a pen).
+    SaveAs,
+    /// Open in the editor (pen on a page).
+    Edit,
     Close,
     Copy,
     Pause,
@@ -928,6 +934,18 @@ mod icons {
             Icon::Ocr => &[Path("M4 8V5h3M17 5h3v3M20 16v3h-3M7 19H4v-3M8 9h8M12 9v7")],
             Icon::Pin => &[Path("M9 4h6l-1 6 3 3H7l3-3zM12 13v7")],
             Icon::Save => &[Path("M5 4h11l3 3v13H5z M8 4v5h7V4 M8 20v-6h8v6")],
+            Icon::SaveCopy => &[
+                Path("M8 3h10l3 3v11"),
+                Path("M3 7h10l3 3v11H3z M6 7v4h6V7 M6 21v-5h7v5"),
+            ],
+            Icon::SaveAs => &[
+                Path("M12 20H4V4h10l3 3v3 M7 4v5h6V4"),
+                Path("M14 21l.6-3 5.4-5.4 2.4 2.4-5.4 5.4z"),
+            ],
+            Icon::Edit => &[
+                Path("M11 4H5v16h14v-6"),
+                Path("M10 14l.8-3.2L18 3.6l2.4 2.4-7.2 7.2z"),
+            ],
             Icon::Close => &[Path("M6 6l12 12M18 6L6 18")],
             Icon::Copy => &[Rect(8.0, 8.0, 12.0, 12.0, 2.0), Path("M4 16V4h12")],
             Icon::Pause => &[

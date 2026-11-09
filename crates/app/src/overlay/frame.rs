@@ -1281,6 +1281,7 @@ impl Overlay {
                     beautify: self.beautify_open,
                     beautify_on: self.beautify.enabled,
                     edit_window: (!self.windowed).then(|| self.enter_opens_window()),
+                    editing: self.editing_item(),
                 },
                 lifted,
                 actions,

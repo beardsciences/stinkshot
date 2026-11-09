@@ -54,7 +54,7 @@ use crate::history_ui::HistoryWindow;
 use crate::hotkeys::Hotkeys;
 use crate::l10n::tr;
 use crate::overlay::{EditorWindow, Overlay};
-use crate::pin::Pin;
+use crate::pin::{Pin, PinOpts};
 use crate::record_ui::{Countdown, HudToggles, RecordFrame, RecordHud, ScrollHud, TrimWindow};
 use crate::settings_ui::SettingsWindow;
 use crate::state::{
@@ -1054,8 +1054,13 @@ impl Shell {
 
     fn add_pin(&mut self, image: Rgba, title: String, item: Option<ItemId>, at: Option<PxRect>) {
         let id = self.new_id();
+        let pins = &self.shared.config.pins;
+        let opts = PinOpts {
+            task_view: pins.show_in_task_view,
+            always_toolbar: pins.always_show_toolbar,
+        };
         self.pins
-            .push(Slot::new(Pin::new(image, title, item, at, id)));
+            .push(Slot::new(Pin::new(image, title, item, at, id, opts)));
         self.touch();
     }
 
@@ -2305,6 +2310,8 @@ impl Shell {
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default()
                 )
+            } else if s.action == FinishAction::SaveCopy && s.item.is_some() {
+                tr!("shell.saved.copy").to_string()
             } else if s.editing {
                 tr!("shell.saved.updated").to_string()
             } else if s.action == FinishAction::Pin {

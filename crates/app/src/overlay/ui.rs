@@ -329,6 +329,8 @@ pub struct ActionBarState {
     /// The Edit in Window button (not in an Editor Window itself); true when Enter does it
     /// (then Copy is Ctrl+C).
     pub edit_window: Option<bool>,
+    /// Re-editing a history item: Save writes back to it, plus Save as Copy and Save As.
+    pub editing: bool,
 }
 
 /// Action bar: Add Regions (screen overlay), Find Sensitive Info, Codes and Text, Beautify,
@@ -412,9 +414,13 @@ pub fn action_bar(
                     if theme::widgets::icon_button(ui, Icon::Pin, &pin_tip, false).clicked() {
                         out.push(UiAction::Finish(FinishAction::Pin));
                     }
-                    let save_tip = tr!("overlay.tip.save_as", key = super::keys::SAVE.label);
-                    if theme::widgets::icon_button(ui, Icon::Save, &save_tip, false).clicked() {
-                        out.push(UiAction::Finish(FinishAction::SaveAs));
+                    if st.editing {
+                        save_buttons_editing(ui, out);
+                    } else {
+                        let save_tip = tr!("overlay.tip.save_as", key = super::keys::SAVE.label);
+                        if theme::widgets::icon_button(ui, Icon::Save, &save_tip, false).clicked() {
+                            out.push(UiAction::Finish(FinishAction::SaveAs));
+                        }
                     }
                     if let Some(on_enter) = edit_window {
                         let tip = if on_enter {
@@ -451,6 +457,32 @@ pub fn action_bar(
             });
         });
     resp.response.rect
+}
+
+/// Re-editing a history item: Save (back to the item), Save as Copy, Save As.
+fn save_buttons_editing(ui: &mut egui::Ui, out: &mut Vec<UiAction>) {
+    let buttons = [
+        (
+            Icon::Save,
+            tr!("overlay.tip.save", key = super::keys::SAVE.label),
+            FinishAction::Save,
+        ),
+        (
+            Icon::SaveCopy,
+            tr!("overlay.tip.save_copy").to_string(),
+            FinishAction::SaveCopy,
+        ),
+        (
+            Icon::SaveAs,
+            tr!("overlay.tip.save_as", key = super::keys::SAVE_AS_EDITING),
+            FinishAction::SaveAs,
+        ),
+    ];
+    for (icon, tip, action) in buttons {
+        if theme::widgets::icon_button(ui, icon, &tip, false).clicked() {
+            out.push(UiAction::Finish(action));
+        }
+    }
 }
 
 /// Popup anchored under (or above) a toolbar button.

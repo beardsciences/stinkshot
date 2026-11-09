@@ -70,6 +70,23 @@ pub fn sample_to_bgra(sample: &IMFSample, w: usize, h: usize) -> Result<Vec<u8>>
     }
 }
 
+/// Crop (or pad with black) a tight BGRA buffer from `sw` x `sh` to `dw` x `dh`, top-left
+/// aligned. Returns the input unchanged when the sizes match.
+fn crop_bgra(src: Vec<u8>, sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<u8> {
+    if (sw, sh) == (dw, dh) {
+        return src;
+    }
+    let mut out = vec![0u8; dw * dh * 4];
+    let (cw, ch) = (sw.min(dw), sh.min(dh));
+    for y in 0..ch {
+        out[y * dw * 4..y * dw * 4 + cw * 4].copy_from_slice(&src[y * sw * 4..y * sw * 4 + cw * 4]);
+    }
+    for px in out.chunks_exact_mut(4) {
+        px[3] = 255;
+    }
+    out
+}
+
 pub struct Reader {
     reader: IMFSourceReader,
     pub width: u32,
@@ -78,6 +95,11 @@ pub struct Reader {
     pub duration_hns: i64,
     pub has_audio: bool,
     pub has_video: bool,
+    /// Size of the decoded buffers. Decoders pad to whole macroblocks (566 wide becomes 576)
+    /// and announce it mid-stream; `width`/`height` stay the picture size and frames are
+    /// cropped back to it.
+    dec_w: u32,
+    dec_h: u32,
     _session: MfSession,
 }
 
@@ -152,6 +174,8 @@ impl Reader {
                 reader,
                 width,
                 height,
+                dec_w: width,
+                dec_h: height,
                 fps,
                 duration_hns,
                 has_audio,
@@ -179,8 +203,12 @@ impl Reader {
                     if let Ok(cur) = self.reader.GetCurrentMediaType(VIDEO) {
                         let (w, h) = unpack(cur.GetUINT64(&MF_MT_FRAME_SIZE).unwrap_or(0));
                         if w > 0 && h > 0 {
-                            self.width = w;
-                            self.height = h;
+                            self.dec_w = w;
+                            self.dec_h = h;
+                            if self.width == 0 || self.height == 0 {
+                                self.width = w;
+                                self.height = h;
+                            }
                         }
                     }
                 }
@@ -195,7 +223,14 @@ impl Reader {
                 continue;
             };
             let dur = unsafe { sample.GetSampleDuration() }.unwrap_or(0);
-            let bgra = sample_to_bgra(&sample, self.width as usize, self.height as usize)?;
+            let decoded = sample_to_bgra(&sample, self.dec_w as usize, self.dec_h as usize)?;
+            let bgra = crop_bgra(
+                decoded,
+                self.dec_w as usize,
+                self.dec_h as usize,
+                self.width as usize,
+                self.height as usize,
+            );
             return Ok(Some(VideoFrame {
                 pts_hns: ts,
                 dur_hns: dur,
@@ -251,5 +286,37 @@ impl Reader {
                 .map_err(|e| anyhow!("ReadSample failed: {e}"))?;
         }
         Ok((flags, ts, sample))
+    }
+}
+
+#[cfg(test)]
+mod crop_tests {
+    use super::crop_bgra;
+
+    #[test]
+    fn padded_decode_is_cropped_to_the_picture() {
+        // 3x2 picture decoded into 4x2 buffers (one padding column per row).
+        let mut src = Vec::new();
+        for y in 0..2u8 {
+            for x in 0..4u8 {
+                src.extend_from_slice(&[x, y, 9, 255]);
+            }
+        }
+        let out = crop_bgra(src, 4, 2, 3, 2);
+        assert_eq!(out.len(), 3 * 2 * 4);
+        for y in 0..2usize {
+            for x in 0..3usize {
+                assert_eq!(
+                    &out[(y * 3 + x) * 4..(y * 3 + x) * 4 + 2],
+                    &[x as u8, y as u8]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn same_size_is_untouched() {
+        let src = vec![1, 2, 3, 255, 4, 5, 6, 255];
+        assert_eq!(crop_bgra(src.clone(), 2, 1, 2, 1), src);
     }
 }

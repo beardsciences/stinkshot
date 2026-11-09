@@ -987,6 +987,20 @@ impl SettingsWindow {
             tr!("settings.general.sound.desc"),
             &mut g.play_sound,
         );
+        group_title(ui, p, tr!("settings.general.pins"));
+        let pins = &mut shared.config.pins;
+        toggle_row(
+            ui,
+            tr!("settings.general.pin_task_view"),
+            tr!("settings.general.pin_task_view.desc"),
+            &mut pins.show_in_task_view,
+        );
+        toggle_row(
+            ui,
+            tr!("settings.general.pin_toolbar"),
+            tr!("settings.general.pin_toolbar.desc"),
+            &mut pins.always_show_toolbar,
+        );
         let _ = accent;
     }
 
