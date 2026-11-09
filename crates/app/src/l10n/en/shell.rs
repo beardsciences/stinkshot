@@ -351,7 +351,7 @@ pub fn get(key: &str) -> Option<&'static str> {
         "shell.tour.tray.body" => "Click the tray icon to capture, double-click for History.",
         "shell.tour.privacy.title" => "Nothing Ever Leaves Your PC",
         "shell.tour.privacy.body" => {
-            "Stinkshot has no accounts, uploads or telemetry. Update checks are opt-in."
+            "Nothing is uploaded or tracked. Update checks are opt-in."
         }
         "shell.tour.files.title" => "Where Captures Go",
         "shell.tour.files.body" => {
