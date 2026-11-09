@@ -36,9 +36,10 @@ select and annotate in place, and saves every capture to a plain folder you can 
 
 Everything stays on your machine. There are no upload targets and no telemetry.
 
-The only network call Stinkshot can make is an update check against the project's Forgejo
-releases. It is off until you turn it on in Settings, Privacy, and you can run it manually with
-Check Now. Nothing about you or your captures is sent. Release info is trusted only after its
+The only network call Stinkshot can make is an update check that fetches signed
+release info from stinkshot.com. It is off until you turn it on in Settings, Privacy, and you can
+run it manually with Check Now. It sends only what any web request carries (your IP address and a
+`Stinkshot/<version>` user agent), nothing about your captures. Release info is trusted only after its
 minisign signature checks out against the key built into the app, and Stinkshot never downloads
 or runs installers itself. See SECURITY.md.
 
