@@ -5,6 +5,7 @@
 //!
 //! Mounted from `settings_ui.rs` with `#[path]`.
 
+use crate::l10n::tr;
 use egui::{Event, Key, Modifiers};
 
 /// `global-hotkey` code name for an egui key, or None for keys that cannot be a hotkey
@@ -274,11 +275,11 @@ fn friendly_part(part: &str) -> String {
     }
 }
 
-/// "Control+Shift+KeyS" -> "Ctrl+Shift+S"; "" -> "Not Set".
+/// "Control+Shift+KeyS" -> "Ctrl+Shift+S"; "" -> tr!("shell.hotkey.not_set").
 pub fn display(hotkey: &str) -> String {
     let t = hotkey.trim();
     if t.is_empty() {
-        return "Not Set".into();
+        return tr!("shell.hotkey.not_set").into();
     }
     t.split('+')
         .map(|p| friendly_part(p.trim()))

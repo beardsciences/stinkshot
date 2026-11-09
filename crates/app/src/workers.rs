@@ -25,6 +25,7 @@ use stinkshot_stitch::{StitchOptions, Stitcher};
 use crate::capture_ops;
 use crate::errors::{self, report};
 use crate::filedialog;
+use crate::l10n::tr;
 use crate::state::{CaptureOutput, Command, FinishAction, SourceInfo};
 use crate::update::{self, Release};
 
@@ -195,43 +196,32 @@ fn job_inner(
                 e2.send(recover());
             }
             e2.notify(
-                "Something Went Wrong",
-                format!(
-                    "Stinkshot hit an internal error and stopped that task. Try again. {}",
-                    errors::LOG_HINT
-                ),
+                tr!("shell.internal.title"),
+                tr!("shell.internal.body", hint = errors::log_hint()),
                 true,
             );
         }
     });
 }
 
-/// Toast title and body when Windows has no OCR language. One wording for every surface.
-pub const NO_OCR_TITLE: &str = "No OCR Language Installed";
-pub const NO_OCR_HELP: &str = "Add a language with text recognition in Windows Settings > Time & language > Language & region.";
-
 /// Clipboard failures in words a user can act on. A busy clipboard (another app holding it
 /// open, common with clipboard managers and remote desktop) is the usual cause.
 pub fn clipboard_error(e: &anyhow::Error) -> String {
     log::warn!("clipboard: {e:#}");
     if errors::classify(e) == errors::Cause::ClipboardBusy {
-        "Another app is using the clipboard. The capture is saved; press Copy on its toast or in History in a moment.".to_string()
+        tr!("shell.clipboard.busy_saved").to_string()
     } else {
-        "Windows did not accept the image on the clipboard. The capture is saved in History; try Copy there.".to_string()
+        tr!("shell.clipboard.refused_saved").to_string()
     }
 }
 
 /// Like `clipboard_error` for copies that can simply be retried (text, history items); other
 /// failures keep their own message.
 pub fn clipboard_text_error(e: &anyhow::Error) -> String {
-    report(
-        "copy",
-        e,
-        "Windows did not accept it on the clipboard. Try again in a moment.",
-    )
+    report("copy", e, tr!("shell.clipboard.refused"))
 }
 
-/// Marker error for "no OCR engine" inside item jobs (mapped to `NO_OCR_HELP`).
+/// Marker error for "no OCR engine" inside item jobs (mapped to `shell.ocr.none.body`).
 const NO_OCR_MARK: &str = "no OCR language is installed";
 
 /// Context added to the clipboard step of item copies, so a failure there is not reported as
@@ -245,11 +235,7 @@ fn item_copy_error(e: &anyhow::Error) -> String {
     if on_clipboard || errors::classify(e) == errors::Cause::ClipboardBusy {
         clipboard_text_error(e)
     } else {
-        report(
-            "copy item",
-            e,
-            "The file could not be read. It may have been moved or deleted.",
-        )
+        report("copy item", e, tr!("shell.item.unreadable"))
     }
 }
 
@@ -396,9 +382,9 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
                 let body = report(
                     "saving capture to history",
                     &e,
-                    "The capture could not be written to the history folder.",
+                    tr!("shell.save.history_failed.body"),
                 );
-                env.notify("Could Not Save to History", body, true);
+                env.notify(tr!("shell.save.history_failed"), body, true);
                 (None, None)
             }
         };
@@ -417,7 +403,7 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
                 Ok(()) => copied_image = true,
                 Err(e) => {
                     log::error!("clipboard copy failed: {e:#}");
-                    env.notify("Could Not Copy to Clipboard", clipboard_error(&e), true);
+                    env.notify(tr!("shell.clipboard.failed"), clipboard_error(&e), true);
                 }
             }
         }
@@ -444,23 +430,15 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
                         saved_as = Some(target);
                     }
                     Err(e) => env.notify(
-                        "Could Not Save the File",
-                        report(
-                            "save as",
-                            &e,
-                            "The file could not be written there. Try another folder.",
-                        ),
+                        tr!("shell.save_as.failed"),
+                        report("save as", &e, tr!("shell.save_as.failed.body")),
                         true,
                     ),
                 },
                 Ok(None) => {}
                 Err(e) => env.notify(
-                    "Could Not Open Save As",
-                    report(
-                        "save dialog",
-                        &e,
-                        "The Save As dialog could not open. The capture is still in History.",
-                    ),
+                    tr!("shell.save_as.open_failed"),
+                    report("save dialog", &e, tr!("shell.save_as.open_failed.body")),
                     true,
                 ),
             }
@@ -469,21 +447,17 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
         let mut copied_text = None;
         if action == FinishAction::CopyText {
             match &env.ocr {
-                None => env.notify(NO_OCR_TITLE, NO_OCR_HELP, true),
+                None => env.notify(tr!("shell.ocr.none"), tr!("shell.ocr.none.body"), true),
                 Some(engine) => match engine.recognize(&flattened) {
                     Ok(r) => {
                         let text = r.text.trim().to_string();
                         if text.is_empty() {
-                            env.notify(
-                                "No Text Found",
-                                "Nothing readable in the selection.",
-                                false,
-                            );
+                            env.notify(tr!("shell.ocr.no_text"), tr!("shell.ocr.nothing"), false);
                         } else {
                             match clipboard::set_text(&text) {
                                 Ok(()) => copied_text = Some(text),
                                 Err(e) => env.notify(
-                                    "Could Not Copy Text",
+                                    tr!("shell.ocr.copy_failed"),
                                     clipboard_text_error(&e),
                                     true,
                                 ),
@@ -491,12 +465,8 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
                         }
                     }
                     Err(e) => env.notify(
-                        "Could Not Recognize Text",
-                        report(
-                            "ocr on finish",
-                            &e,
-                            "Windows could not read text from the capture. Try a larger or sharper selection.",
-                        ),
+                        tr!("shell.ocr.failed"),
+                        report("ocr on finish", &e, tr!("shell.ocr.failed.capture")),
                         true,
                     ),
                 },
@@ -557,28 +527,26 @@ pub fn capture_window(env: &Env, frozen: Frozen, windows: Vec<WinInfo>, win: Win
 pub fn ocr_image(env: &Env, img: Rgba) {
     job(env, "ocr-region", move |env| {
         let Some(engine) = &env.ocr else {
-            env.notify(NO_OCR_TITLE, NO_OCR_HELP, true);
+            env.notify(tr!("shell.ocr.none"), tr!("shell.ocr.none.body"), true);
             return;
         };
         match engine.recognize(&img) {
             Ok(r) => {
                 let text = r.text.trim().to_string();
                 if text.is_empty() {
-                    env.notify("No Text Found", "Nothing readable in the selection.", false);
+                    env.notify(tr!("shell.ocr.no_text"), tr!("shell.ocr.nothing"), false);
                     return;
                 }
                 match clipboard::set_text(&text) {
-                    Ok(()) => env.notify("Text Copied", preview(&text, 140), false),
-                    Err(e) => env.notify("Could Not Copy Text", clipboard_text_error(&e), true),
+                    Ok(()) => env.notify(tr!("shell.saved.text"), preview(&text, 140), false),
+                    Err(e) => {
+                        env.notify(tr!("shell.ocr.copy_failed"), clipboard_text_error(&e), true)
+                    }
                 }
             }
             Err(e) => env.notify(
-                "Could Not Recognize Text",
-                report(
-                    "ocr region",
-                    &e,
-                    "Windows could not read text from the selection. Try a larger or sharper selection.",
-                ),
+                tr!("shell.ocr.failed"),
+                report("ocr region", &e, tr!("shell.ocr.failed.selection")),
                 true,
             ),
         }
@@ -936,17 +904,17 @@ pub fn copy_item_image(env: &Env, id: ItemId) {
                     let img = Rgba::load(&meta.path)?;
                     clipboard::set_file_and_image(&meta.path, Some(&img))
                         .context(CLIPBOARD_MARK)?;
-                    Ok("Image Copied")
+                    Ok(tr!("shell.item.image_copied"))
                 }
                 _ => {
                     clipboard::set_file_and_image(&meta.path, None).context(CLIPBOARD_MARK)?;
-                    Ok("File Copied")
+                    Ok(tr!("shell.item.file_copied"))
                 }
             }
         };
         match run() {
-            Ok(title) => env.notify(title, "Ready to paste.", false),
-            Err(e) => env.notify("Could Not Copy", item_copy_error(&e), true),
+            Ok(title) => env.notify(title, tr!("shell.item.ready"), false),
+            Err(e) => env.notify(tr!("shell.pin.copy_failed"), item_copy_error(&e), true),
         }
     });
 }
@@ -978,16 +946,12 @@ pub fn copy_item_text(env: &Env, id: ItemId) {
             Ok(Some(text))
         };
         match run() {
-            Ok(Some(t)) => env.notify("Text Copied", preview(&t, 140), false),
-            Ok(None) => env.notify(
-                "No Text Found",
-                "This item has no recognizable text.",
-                false,
-            ),
+            Ok(Some(t)) => env.notify(tr!("shell.saved.text"), preview(&t, 140), false),
+            Ok(None) => env.notify(tr!("shell.ocr.no_text"), tr!("shell.ocr.item_none"), false),
             Err(e) if format!("{e:#}").contains(NO_OCR_MARK) => {
-                env.notify(NO_OCR_TITLE, NO_OCR_HELP, true)
+                env.notify(tr!("shell.ocr.none"), tr!("shell.ocr.none.body"), true)
             }
-            Err(e) => env.notify("Could Not Copy Text", item_copy_error(&e), true),
+            Err(e) => env.notify(tr!("shell.ocr.copy_failed"), item_copy_error(&e), true),
         }
     });
 }
@@ -1016,12 +980,8 @@ pub fn pin_item(env: &Env, id: ItemId) {
                 item: id,
             }),
             Err(e) => env.notify(
-                "Could Not Pin",
-                report(
-                    "pin item",
-                    &e,
-                    "Only images can be pinned, and this one could not be loaded. It may have been moved or deleted.",
-                ),
+                tr!("shell.item.pin_failed"),
+                report("pin item", &e, tr!("shell.item.pin_failed.body")),
                 true,
             ),
         }
@@ -1062,12 +1022,8 @@ pub fn edit_item(env: &Env, id: ItemId) {
                 });
             }
             Err(e) => env.notify(
-                "Could Not Open for Editing",
-                report(
-                    "edit item",
-                    &e,
-                    "Only images can be edited, and this one could not be loaded. It may have been moved or deleted.",
-                ),
+                tr!("shell.item.edit_failed"),
+                report("edit item", &e, tr!("shell.item.edit_failed.body")),
                 true,
             ),
         }
@@ -1083,26 +1039,18 @@ pub fn delete_item(env: &Env, id: ItemId) {
         if let Ok(Some(meta)) = env.history.get(id)
             && let Err(e) = crate::sysutil::recycle(&meta.path)
         {
-            let why = report(
-                "recycle",
-                &e,
-                "Close any program that has it open, then try again.",
-            );
+            let why = report("recycle", &e, tr!("shell.item.in_use"));
             env.notify(
-                "Could Not Delete",
-                format!("Windows could not move it to the Recycle Bin, so it was kept. {why}"),
+                tr!("shell.item.delete_failed"),
+                tr!("shell.item.recycle_failed", why = why),
                 true,
             );
             env.send(WorkerMsg::HistoryChanged);
             return;
         }
         if let Err(e) = env.history.delete(id) {
-            let body = report(
-                "history delete",
-                &e,
-                "The file is in the Recycle Bin, but History could not forget it. Restart Stinkshot to refresh History.",
-            );
-            env.notify("Could Not Delete", body, true);
+            let body = report("history delete", &e, tr!("shell.item.forget_failed.body"));
+            env.notify(tr!("shell.item.delete_failed"), body, true);
         }
         env.send(WorkerMsg::HistoryChanged);
     });
@@ -1118,26 +1066,18 @@ fn with_item_job(
     job(env, name, move |env| match env.history.get(id) {
         Ok(Some(meta)) => {
             if let Err(e) = f(&meta.path) {
-                let body = report(
-                    name,
-                    &e,
-                    "Windows could not open it. Check that the file still exists.",
-                );
-                env.notify("Could Not Open", body, true);
+                let body = report(name, &e, tr!("shell.item.open_failed.body"));
+                env.notify(tr!("shell.item.open_failed"), body, true);
             }
         }
         Ok(None) => env.notify(
-            "Could Not Find That Item",
-            "It may have been moved or deleted.",
+            tr!("shell.item.not_found"),
+            tr!("shell.item.not_found.body"),
             true,
         ),
         Err(e) => {
-            let body = report(
-                name,
-                &e,
-                "The history index could not be read. Restart Stinkshot and try again.",
-            );
-            env.notify("Could Not Read History", body, true)
+            let body = report(name, &e, tr!("shell.history.read_failed.body"));
+            env.notify(tr!("shell.history.read_failed"), body, true)
         }
     });
 }
@@ -1153,12 +1093,8 @@ pub fn open_item(env: &Env, id: ItemId) {
 pub fn open_url(env: &Env, url: String) {
     job(env, "open-url", move |env| {
         if let Err(e) = system::open_path(Path::new(&url)) {
-            let body = report(
-                "open url",
-                &e,
-                "Windows could not open your web browser. Check that a default browser is set.",
-            );
-            env.notify("Could Not Open the Page", body, true);
+            let body = report("open url", &e, tr!("shell.url.failed.body"));
+            env.notify(tr!("shell.url.failed"), body, true);
         }
     });
 }

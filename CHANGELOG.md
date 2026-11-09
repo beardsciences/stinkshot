@@ -37,6 +37,17 @@ First public release.
   and `stinkshot quit` for installers and scripts.
 - Per-user installer (no admin) and a portable zip.
 - Opt-in update check that only trusts release info signed with the project's minisign key.
+- Accessibility: Narrator and other screen readers can read and use every window, the capture
+  overlay can be driven by keyboard alone (arrows start, move and resize a selection),
+  Windows contrast themes are followed, and most text follows the Windows text size.
+- A short first-run tour (Settings > About > Show Tour reopens it) and an offline Help page
+  listing every hotkey and editor shortcut.
+- All UI text is ready for translation. English is the only language so far.
+
+### Fixed
+
+- TODO: resource leaks (GPU, handle and thread growth over long sessions in capture,
+  recording and History). Replace with the merged leak fixes.
 
 ### Security
 

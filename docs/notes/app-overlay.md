@@ -10,8 +10,9 @@ All three modes of `OverlayMode`:
   -> window, falls back to `windows_enum::window_at` over `req.windows`, then the monitor rect),
   click snaps, drag draws a free region (Space moves the region while dragging, Shift forces
   1:1, a chosen aspect preset constrains it). Selected state has 8 handles, Space+drag or
-  Select-tool drag on empty space moves, arrows nudge 1 px (Shift 10 px, Ctrl resizes the
-  right/bottom edge), size label + presets chip (Free, 16:9, 4:3, 1:1, Exact W x H input),
+  Select-tool drag on empty space moves, arrows move the region 1 px (Shift+arrows resize
+  the right/bottom edge, Ctrl makes either 10 px; shapes keep Shift = 10 px). Arrows with
+  no region start one (keyboard-only path, see accessibility.md), size label + presets chip (Free, 16:9, 4:3, 1:1, Exact W x H input),
   tool bar and action bar placed per `selection::layout_bars` (below, else above, else inside;
   stacked when too wide for the monitor).
 - **SelectRegion(purpose)**: no annotation bars. The purpose label ("Select area to record",
@@ -179,7 +180,7 @@ stubs).
 2. Hover a window, a button inside it, then wheel up/down: highlight cycles element -> parent
    -> window. Click captures the highlighted rect.
 3. Drag a region spanning two monitors; size label shows physical px; handles resize; Space
-   moves; arrows nudge; Shift+arrows 10 px; Ctrl+arrows resize.
+   moves; arrows move; Shift+arrows resize; Ctrl+arrows 10 px steps.
 4. Presets: 16:9, 4:3, 1:1 snap the rect and constrain further resizes; Exact accepts
    "1280x720", Enter applies, Esc closes.
 5. Loupe: 11x11 grid, coordinates are virtual-desktop px, hex matches the pixel (check against
@@ -627,3 +628,31 @@ binding a hotkey, Tab, recent picks after a restart; U across a button (edges sn
 Shift straight) on a 150 % monitor; F with each background and aspect, then Copy / Save /
 Pin, and a cancelled capture keeps the settings; type Chinese / Japanese / Korean / emoji with
 the IME in a text annotation and in the History search box.
+
+## Localization (Nov 8 2026)
+
+See docs/notes/l10n.md for the framework.
+
+
+- Every overlay string is in `l10n/en/overlay.rs`; the checker reports 0 for `overlay/`.
+- Keyboard key names (Ctrl, Shift, Enter, Esc, Tab, F1, letters) stay as typed in code and are
+  not translated. Mouse gestures in the hint bar and cheat sheet are keys
+  (`overlay.keys.k.drag`, `overlay.keys.k.wheel`, ...), so "Drag" can be translated.
+- Shortcut labels are placeholders: `"Pin to Screen ({key})"` with `key = keys::PIN.label`.
+- `Tool::name()` is the translated tool name; `Tool::label()` appends the key from
+  `keys::TOOL_KEYS` ("Arrow (A)") and returns a `String`.
+- Core enums keep their English `label()` for other callers; the overlay maps the words it
+  shows to its own keys (`beautify_panel::aspect_label` for Free, `smart_redact::kind_label`
+  for the sensitive-info kinds). Format names stay English: barcode symbologies from
+  `stinkshot_core::codes` ("QR Code"), color formats (Hex, RGB, HSL), aspect ratios.
+- UIA control types in the element chip ("Pane", "Button") come from Windows in English and
+  are not translated; only the "Level {level} of {count}" frame is.
+- Pseudo renders without opening an overlay: `overlay/pseudo_shots.rs` (ignored test) draws the
+  bars, hint bar, loupe, cheat sheet and the Beautify, Codes and Text, Find Sensitive Info and
+  picker panels offscreen with wgpu and saves PNGs:
+  `$env:STINKSHOT_SHOTS_DIR='C:\dev\stinkshot-bench\ux-shots\pseudo-overlay'; cargo test -p stinkshot pseudo_shots -- --ignored`.
+  It switches the global language, so run it alone.
+- Found with it: long sensitive-kind names ran into the masked preview in Find Sensitive Info;
+  the name now truncates with an ellipsis before the preview. Still to watch: the hint bar is
+  one line (~1300 px in pseudo with the discard prompt), and the cheat sheet wraps to two rows
+  of three at 1920 px in pseudo (same height as English on 1080p).

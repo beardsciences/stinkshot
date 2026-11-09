@@ -4,6 +4,7 @@
 use egui::Key;
 
 use super::shapes::Tool;
+use crate::l10n::tr;
 
 /// Plain-letter tool shortcuts (no Ctrl / Alt), in toolbar order.
 pub const TOOL_KEYS: [(Tool, Key); 16] = [
@@ -100,8 +101,7 @@ pub const HELP_CHAR: &str = "?";
 
 /// Tool name without its shortcut suffix ("Arrow (A)" -> "Arrow").
 pub fn tool_name(t: Tool) -> &'static str {
-    let l = t.label();
-    l.rsplit_once(" (").map(|(n, _)| n).unwrap_or(l)
+    t.name()
 }
 
 #[cfg(test)]
@@ -116,97 +116,169 @@ pub type Sheet = Vec<(&'static str, Vec<(String, &'static str)>)>;
 /// recording, scrolling capture), so tools, editing and the finish shortcuts do nothing there.
 pub fn sheet(select_only: bool) -> Sheet {
     let select = vec![
-        ("Drag".to_string(), "Select a Region"),
-        ("Click".to_string(), "Window or Element"),
         (
-            "Wheel".to_string(),
-            "Parent or Child Element, Scroll When Zoomed",
+            tr!("overlay.keys.k.drag").to_string(),
+            tr!("overlay.keys.select_region"),
         ),
-        ("Shift+Wheel".to_string(), "Scroll Sideways When Zoomed"),
-        ("Enter".to_string(), "Select the Highlight"),
-        ("Shift+Drag".to_string(), "Square or Preset Ratio"),
         (
-            "Space+Drag".to_string(),
-            "Pan (Editor or Zoomed), Otherwise Move the Selection",
+            tr!("overlay.keys.k.click").to_string(),
+            tr!("overlay.keys.window_or_element"),
         ),
-        ("Arrows".to_string(), "Nudge 1 px, Shift 10 px"),
-        ("Ctrl+Arrows".to_string(), "Resize the Selection"),
         (
-            COPY_COLOR.label.to_string(),
-            "Copy the Color Under the Cursor",
+            tr!("overlay.keys.k.wheel").to_string(),
+            tr!("overlay.keys.parent_child_scroll"),
         ),
+        (
+            tr!("overlay.keys.k.shift_wheel").to_string(),
+            tr!("overlay.keys.scroll_sideways"),
+        ),
+        ("Enter".to_string(), tr!("overlay.keys.select_highlight")),
+        (
+            tr!("overlay.keys.k.shift_drag").to_string(),
+            tr!("overlay.keys.square_or_ratio"),
+        ),
+        (
+            tr!("overlay.keys.k.space_drag").to_string(),
+            tr!("overlay.keys.pan_or_move"),
+        ),
+        // Keyboard-only selection (`Overlay::handle_keys`): arrows start a region when none
+        // exists, then move it; Enter confirms, Esc cancels.
+        (
+            tr!("overlay.keys.k.arrows").to_string(),
+            tr!("overlay.keys.start_or_move"),
+        ),
+        (
+            tr!("overlay.keys.k.shift_arrows").to_string(),
+            tr!("overlay.keys.resize_selection"),
+        ),
+        (
+            tr!("overlay.keys.k.ctrl_arrows").to_string(),
+            tr!("overlay.keys.ten_px_steps"),
+        ),
+        (COPY_COLOR.label.to_string(), tr!("overlay.keys.copy_color")),
     ];
     let help = (
-        format!("{} or {}", HELP.label, HELP_CHAR),
-        "Show or Hide This Help",
+        tr!("overlay.keys.k.either", a = HELP.label, b = HELP_CHAR),
+        tr!("overlay.keys.toggle_help"),
     );
     if select_only {
         let finish = vec![
-            ("Enter".to_string(), "Use This Region"),
-            ("Esc".to_string(), "Cancel"),
+            ("Enter".to_string(), tr!("overlay.keys.use_region")),
+            ("Esc".to_string(), tr!("overlay.keys.cancel")),
             help,
         ];
-        return vec![("Select", select), ("Finish", finish)];
+        return vec![
+            (tr!("overlay.keys.group.select"), select),
+            (tr!("overlay.keys.group.finish"), finish),
+        ];
     }
     let mut select = select;
-    select.push(("Shift+Drag Outside".to_string(), "Add a Region"));
+    select.push((
+        tr!("overlay.keys.k.shift_drag_outside").to_string(),
+        tr!("overlay.keys.add_region"),
+    ));
     let tools = TOOL_KEYS
         .iter()
         .map(|(t, k)| (k.name().to_string(), tool_name(*t)))
         .collect();
     let edit = vec![
-        ("1-8".to_string(), "Palette Color"),
-        (EYEDROPPER.label.to_string(), "Pick Color from Image"),
-        ("[  ]".to_string(), "Thinner or Thicker"),
-        (UNDO.label.to_string(), "Undo (Typing Too)"),
-        (REDO.label.to_string(), "Redo (Typing Too)"),
-        (format!("Ctrl+Shift+{}", UNDO.key.name()), "Redo"),
-        ("Shift+Drag".to_string(), "Straight Line, Square or Circle"),
+        ("1-8".to_string(), tr!("overlay.keys.palette_color")),
+        (EYEDROPPER.label.to_string(), tr!("overlay.keys.pick_color")),
+        ("[  ]".to_string(), tr!("overlay.keys.thinner_thicker")),
+        (UNDO.label.to_string(), tr!("overlay.keys.undo")),
+        (REDO.label.to_string(), tr!("overlay.keys.redo")),
         (
-            "Alt+Drag".to_string(),
-            "Draw, Move or Resize Without Snapping",
+            format!("Ctrl+Shift+{}", UNDO.key.name()),
+            tr!("overlay.keys.redo_short"),
         ),
-        ("Del or Backspace".to_string(), "Delete the Selected Shapes"),
-        ("Double-Click".to_string(), "Edit Text"),
-        (BOLD.label.to_string(), "Bold Text"),
-        (FIND_SENSITIVE.label.to_string(), "Find Sensitive Info"),
-        (SCAN.label.to_string(), "Read Codes and Text"),
-        (BEAUTIFY.label.to_string(), "Beautify"),
-        ("Esc".to_string(), "Deselect, Then Cancel"),
+        (
+            tr!("overlay.keys.k.shift_drag").to_string(),
+            tr!("overlay.keys.straight"),
+        ),
+        (
+            tr!("overlay.keys.k.alt_drag").to_string(),
+            tr!("overlay.keys.no_snap"),
+        ),
+        (
+            tr!("overlay.keys.k.del").to_string(),
+            tr!("overlay.keys.delete_shapes"),
+        ),
+        (
+            tr!("overlay.keys.k.double_click").to_string(),
+            tr!("overlay.keys.edit_text"),
+        ),
+        (BOLD.label.to_string(), tr!("overlay.keys.bold")),
+        (
+            FIND_SENSITIVE.label.to_string(),
+            tr!("overlay.keys.find_sensitive"),
+        ),
+        (SCAN.label.to_string(), tr!("overlay.keys.scan")),
+        (BEAUTIFY.label.to_string(), tr!("overlay.keys.beautify")),
+        ("Esc".to_string(), tr!("overlay.keys.deselect_cancel")),
     ];
     let arrange = vec![
-        ("Shift+Click".to_string(), "Add or Remove a Shape"),
-        ("Drag Empty Space".to_string(), "Select Shapes in an Area"),
-        ("Arrows".to_string(), "Move the Selected Shapes"),
-        (DUPLICATE.label.to_string(), "Duplicate"),
-        (COPY.label.to_string(), "Copy the Selected Shapes"),
-        (PASTE.label.to_string(), "Paste Shapes"),
-        (format!("{FORWARD}  {BACKWARD}"), "Forward or Backward"),
-        (format!("{TO_FRONT}  {TO_BACK}"), "To Front or Back"),
+        (
+            tr!("overlay.keys.k.shift_click").to_string(),
+            tr!("overlay.keys.toggle_shape"),
+        ),
+        (
+            tr!("overlay.keys.k.drag_empty").to_string(),
+            tr!("overlay.keys.marquee"),
+        ),
+        (
+            tr!("overlay.keys.k.arrows").to_string(),
+            tr!("overlay.keys.move_shapes"),
+        ),
+        (DUPLICATE.label.to_string(), tr!("overlay.keys.duplicate")),
+        (COPY.label.to_string(), tr!("overlay.keys.copy_shapes")),
+        (PASTE.label.to_string(), tr!("overlay.keys.paste_shapes")),
+        (
+            format!("{FORWARD}  {BACKWARD}"),
+            tr!("overlay.keys.forward_backward"),
+        ),
+        (
+            format!("{TO_FRONT}  {TO_BACK}"),
+            tr!("overlay.keys.front_back"),
+        ),
     ];
     let view = vec![
-        ("Ctrl+Wheel".to_string(), "Zoom at the Cursor"),
-        ("Ctrl+=  Ctrl+-".to_string(), "Zoom In or Out"),
-        (ZOOM_FIT.label.to_string(), "Fit"),
-        (ZOOM_ACTUAL.label.to_string(), "Actual Size (100%)"),
-        ("Middle-Drag".to_string(), "Pan"),
+        (
+            tr!("overlay.keys.k.ctrl_wheel").to_string(),
+            tr!("overlay.keys.zoom_cursor"),
+        ),
+        (
+            "Ctrl+=  Ctrl+-".to_string(),
+            tr!("overlay.keys.zoom_in_out"),
+        ),
+        (ZOOM_FIT.label.to_string(), tr!("overlay.keys.fit")),
+        (
+            ZOOM_ACTUAL.label.to_string(),
+            tr!("overlay.keys.actual_size"),
+        ),
+        (
+            tr!("overlay.keys.k.middle_drag").to_string(),
+            tr!("overlay.keys.pan"),
+        ),
     ];
     let finish = vec![
-        ("Enter".to_string(), "Copy the Image"),
-        ("Ctrl+C".to_string(), "Copy the Image (No Shape Selected)"),
-        (SAVE.label.to_string(), "Save As"),
-        (PIN.label.to_string(), "Pin to Screen"),
-        (COPY_TEXT.label.to_string(), "Copy Text (OCR)"),
-        ("Esc".to_string(), "Cancel"),
+        ("Enter".to_string(), tr!("overlay.keys.copy_image")),
+        (
+            "Ctrl+C".to_string(),
+            tr!("overlay.keys.copy_image_no_shape"),
+        ),
+        (SAVE.label.to_string(), tr!("overlay.keys.save_as")),
+        (PIN.label.to_string(), tr!("overlay.keys.pin")),
+        (COPY_TEXT.label.to_string(), tr!("overlay.keys.copy_text")),
+        ("Esc".to_string(), tr!("overlay.keys.cancel")),
         help,
     ];
     vec![
-        ("Select", select),
-        ("Tools", tools),
-        ("Edit", edit),
-        ("Arrange", arrange),
-        ("View", view),
-        ("Finish", finish),
+        (tr!("overlay.keys.group.select"), select),
+        (tr!("overlay.keys.group.tools"), tools),
+        (tr!("overlay.keys.group.edit"), edit),
+        (tr!("overlay.keys.group.arrange"), arrange),
+        (tr!("overlay.keys.group.view"), view),
+        (tr!("overlay.keys.group.finish"), finish),
     ]
 }
 

@@ -24,6 +24,7 @@ use stinkshot_core::Rgba;
 use stinkshot_history::{History, ItemId, ItemKind, ItemMeta, Query, Stats};
 use stinkshot_platform::Hwnd;
 
+use crate::l10n::tr;
 use crate::state::{Command, Shared, Surface, SurfaceStatus};
 use crate::theme::{self, Icon, widgets};
 use crate::toast::ui_common::{self as uc, Debounce, Lru};
@@ -73,11 +74,11 @@ impl DateFilter {
 
     pub fn label(self) -> &'static str {
         match self {
-            DateFilter::Any => "Any Time",
-            DateFilter::Today => "Today",
-            DateFilter::Week => "Last 7 Days",
-            DateFilter::Month => "Last 30 Days",
-            DateFilter::Year => "Last Year",
+            DateFilter::Any => tr!("history.date.any"),
+            DateFilter::Today => tr!("history.date.today"),
+            DateFilter::Week => tr!("history.date.week"),
+            DateFilter::Month => tr!("history.date.month"),
+            DateFilter::Year => tr!("history.date.year"),
         }
     }
 
@@ -171,7 +172,7 @@ pub fn pretty_app(app: &str) -> String {
     let mut chars = t.chars();
     match chars.next() {
         Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-        None => "Unknown".into(),
+        None => tr!("history.app.unknown").into(),
     }
 }
 
@@ -187,17 +188,17 @@ pub fn item_title(m: &ItemMeta) -> String {
             .path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Capture".into()),
+            .unwrap_or_else(|| tr!("history.item.fallback").into()),
     }
 }
 
 /// Empty-library body. Never "Press Not Set" when the region hotkey is cleared.
 fn empty_hint(region_hotkey_display: &str) -> String {
-    let tail = "Everything you capture is saved here, with searchable text.";
-    if region_hotkey_display.is_empty() || region_hotkey_display == "Not Set" {
-        format!("Use the button below or the Stinkshot tray icon to capture a region. {tail}")
+    let unset = crate::settings_ui::ui_hotkey::display("");
+    if region_hotkey_display.is_empty() || region_hotkey_display == unset {
+        tr!("history.empty.hint_tray").to_string()
     } else {
-        format!("Press {region_hotkey_display} to capture a region. {tail}")
+        tr!("history.empty.hint_key", key = region_hotkey_display)
     }
 }
 
@@ -209,8 +210,8 @@ pub fn friendly_date(created: DateTime<Local>, now: DateTime<Local>) -> String {
         .num_days();
     let time = created.format("%-H:%M");
     match days {
-        0 => format!("Today {time}"),
-        1 => format!("Yesterday {time}"),
+        0 => tr!("history.date.today_at", time = time),
+        1 => tr!("history.date.yesterday_at", time = time),
         _ if created.year() == now.year() => created.format("%b %-d").to_string(),
         _ => created.format("%b %-d %Y").to_string(),
     }
@@ -220,12 +221,23 @@ pub fn friendly_date(created: DateTime<Local>, now: DateTime<Local>) -> String {
 pub fn item_meta_line(m: &ItemMeta, now: DateTime<Local>) -> String {
     let mut parts = vec![friendly_date(m.created, now)];
     if !m.mode.is_empty() && m.mode != "region" {
-        parts.push(m.mode.clone());
+        parts.push(mode_label(&m.mode));
     }
     if m.width > 0 && m.height > 0 {
         parts.push(uc::fmt_dims(m.width, m.height));
     }
     parts.join(" \u{b7} ")
+}
+
+/// Display name of a stored capture mode; unknown modes show as stored.
+fn mode_label(mode: &str) -> String {
+    match mode {
+        "window" => tr!("history.mode.window").into(),
+        "fullscreen" => tr!("history.mode.fullscreen").into(),
+        "scrolling" => tr!("history.mode.scrolling").into(),
+        "recording" => tr!("history.mode.recording").into(),
+        _ => mode.to_string(),
+    }
 }
 
 fn fmt_gb(gb: f32) -> String {
@@ -241,26 +253,29 @@ pub fn retention_summary(keep_days: u32, max_gb: f32, used_bytes: u64) -> String
     let used = uc::fmt_bytes(used_bytes);
     let days = |d: u32| {
         if d == 1 {
-            "1 day".to_string()
+            tr!("history.retention.day").to_string()
         } else {
-            format!("{d} days")
+            tr!("history.retention.days", n = d)
         }
     };
     match (keep_days > 0, max_gb > 0.0) {
-        (true, true) => format!(
-            "Keeping {} or {}, starred kept forever. {used} used.",
-            days(keep_days),
-            fmt_gb(max_gb)
+        (true, true) => tr!(
+            "history.retention.days_and_size",
+            days = days(keep_days),
+            size = fmt_gb(max_gb),
+            used = used
         ),
-        (true, false) => format!(
-            "Keeping {}, starred kept forever. {used} used.",
-            days(keep_days)
+        (true, false) => tr!(
+            "history.retention.days_only",
+            days = days(keep_days),
+            used = used
         ),
-        (false, true) => format!(
-            "Keeping up to {}, starred kept forever. {used} used.",
-            fmt_gb(max_gb)
+        (false, true) => tr!(
+            "history.retention.size_only",
+            size = fmt_gb(max_gb),
+            used = used
         ),
-        (false, false) => format!("Keeping everything. {used} used."),
+        (false, false) => tr!("history.retention.everything", used = used),
     }
 }
 
@@ -271,18 +286,13 @@ pub fn results_line(count: usize, more: bool, search: &str) -> String {
     } else {
         uc::fmt_thousands(count as u64)
     };
-    let noun = if count == 1 && !more {
-        "capture"
-    } else {
-        "captures"
-    };
+    let one = count == 1 && !more;
     let q = search.trim();
-    if q.is_empty() {
-        format!("{n} {noun}")
-    } else if count == 1 && !more {
-        format!("1 capture contains text matching \u{201c}{q}\u{201d}")
-    } else {
-        format!("{n} captures contain text matching \u{201c}{q}\u{201d}")
+    match (q.is_empty(), one) {
+        (true, true) => tr!("history.results.one").to_string(),
+        (true, false) => tr!("history.results.many", n = n),
+        (false, true) => tr!("history.results.match_one", q = q),
+        (false, false) => tr!("history.results.match_many", n = n, q = q),
     }
 }
 
@@ -313,20 +323,20 @@ impl Act {
 
     pub fn label(self, m: &ItemMeta) -> &'static str {
         match self {
-            Act::Edit => "Edit",
-            Act::Pin => "Pin to Screen",
-            Act::CopyImage => "Copy Image",
-            Act::CopyText => "Copy Text",
-            Act::Open => "Open",
-            Act::Reveal => "Show in Folder",
+            Act::Edit => tr!("history.act.edit"),
+            Act::Pin => tr!("history.act.pin"),
+            Act::CopyImage => tr!("history.act.copy_image"),
+            Act::CopyText => tr!("history.act.copy_text"),
+            Act::Open => tr!("history.act.open"),
+            Act::Reveal => tr!("history.act.reveal"),
             Act::ToggleStar => {
                 if m.starred {
-                    "Remove Star"
+                    tr!("history.act.unstar")
                 } else {
-                    "Star"
+                    tr!("history.act.star")
                 }
             }
-            Act::Delete => "Delete\u{2026}",
+            Act::Delete => tr!("history.act.delete"),
         }
     }
 
@@ -349,12 +359,12 @@ impl Act {
             return None;
         }
         Some(match self {
-            Act::CopyText if !ocr_available => "No OCR language is installed",
+            Act::CopyText if !ocr_available => tr!("history.act.no_ocr"),
             Act::CopyText if m.kind == ItemKind::Image && m.ocr_text.is_none() => {
-                "Text is still being indexed"
+                tr!("history.act.indexing")
             }
-            Act::CopyText if m.kind == ItemKind::Image => "No text found in this capture",
-            _ => "Only for images",
+            Act::CopyText if m.kind == ItemKind::Image => tr!("history.act.no_text"),
+            _ => tr!("history.act.images_only"),
         })
     }
 
@@ -532,12 +542,8 @@ pub struct HistoryWindow {
 
 /// Inline text when the history index can not be read (details go to the log).
 fn history_load_error(e: &anyhow::Error) -> String {
-    let why = crate::errors::report(
-        "history query",
-        e,
-        "Restart Stinkshot; if it keeps happening, choose another history folder in Settings.",
-    );
-    format!("Could not read the history index. {why}")
+    let why = crate::errors::report("history query", e, tr!("history.error.load_fix"));
+    tr!("history.error.load", why = why)
 }
 
 impl HistoryWindow {
@@ -767,7 +773,9 @@ impl HistoryWindow {
 
 impl Surface for HistoryWindow {
     fn title(&self) -> String {
-        "Stinkshot History".into()
+        // Not translated: the shell derives the viewport id from the title and focus_window
+        // finds the window by it (like Settings).
+        "Stinkshot History".into() // l10n-ok
     }
 
     fn viewport_builder(&self, _shared: &Shared) -> egui::ViewportBuilder {
@@ -992,6 +1000,7 @@ impl Surface for HistoryWindow {
                     Rect::from_min_size(pos2(sidebar.left() + 12.0, *y), vec2(SIDEBAR_W - 24.0, h));
                 *y += h + 2.0;
                 let resp = ui.interact(r, ui.scope_id().with(("hist_nav", id)), Sense::click());
+                crate::a11y::describe(&resp, egui::accesskit::Role::Tab, label, Some(active));
                 if active {
                     ui.painter().rect_filled(r, CornerRadius::same(6), sel_fill);
                     ui.painter().rect_filled(
@@ -1037,7 +1046,7 @@ impl Surface for HistoryWindow {
                 ui,
                 &mut y,
                 36.0,
-                "All Captures",
+                tr!("history.nav.all"),
                 Some(stats.count),
                 filter == Filter::All,
                 "all".into(),
@@ -1048,7 +1057,7 @@ impl Surface for HistoryWindow {
                 ui,
                 &mut y,
                 36.0,
-                "Starred",
+                tr!("history.nav.starred"),
                 Some(stats.starred),
                 filter == Filter::Starred,
                 "starred".into(),
@@ -1059,7 +1068,7 @@ impl Surface for HistoryWindow {
                 ui,
                 &mut y,
                 36.0,
-                "Recordings",
+                tr!("history.nav.recordings"),
                 Some(stats.recordings),
                 filter == Filter::Recordings,
                 "rec".into(),
@@ -1070,7 +1079,7 @@ impl Surface for HistoryWindow {
             ui.painter().text(
                 pos2(sidebar.left() + 22.0, y),
                 Align2::LEFT_TOP,
-                "Source App",
+                tr!("history.nav.source_app"),
                 uc::font(12.0),
                 p.text_tertiary,
             );
@@ -1089,9 +1098,9 @@ impl Surface for HistoryWindow {
                 ui,
                 sidebar,
                 Icon::Settings,
-                "Open Settings",
-                "Ctrl+,",
-                "Open Settings (Ctrl+,)",
+                tr!("history.nav.settings"),
+                "Ctrl+,",                                         // l10n-ok
+                &tr!("history.nav.settings_tip", key = "Ctrl+,"), // l10n-ok
                 shared.dark,
             )
             .clicked()
@@ -1110,7 +1119,8 @@ impl Surface for HistoryWindow {
                     ui.scope_id().with("hist_retention"),
                     Sense::click(),
                 )
-                .on_hover_text("Change History Retention");
+                .on_hover_text(tr!("history.retention.tip"));
+            crate::a11y::role(&footer_resp, egui::accesskit::Role::Link);
             if footer_resp.hovered() {
                 ui.painter().rect_filled(
                     footer_link,
@@ -1156,6 +1166,12 @@ impl Surface for HistoryWindow {
                                 ui.scope_id().with(("hist_app", name.as_str())),
                                 Sense::click(),
                             );
+                            crate::a11y::describe_with(
+                                &resp,
+                                egui::accesskit::Role::Tab,
+                                Some(active),
+                                || pretty_app(name),
+                            );
                             if active {
                                 ui.painter().rect_filled(r, CornerRadius::same(6), sel_fill);
                                 ui.painter().rect_filled(
@@ -1195,11 +1211,23 @@ impl Surface for HistoryWindow {
             // ---------------- Main: header ----------------
             let inner = main.shrink2(vec2(22.0, 18.0));
             let header = Rect::from_min_size(inner.min, vec2(inner.width(), 36.0));
-            let folder_w = 108.0;
-            let date_w = 130.0;
+            // Size the folder button and date picker to their text so longer languages fit.
+            let text_w = |s: &str, f: egui::FontId| {
+                ui.painter()
+                    .layout_no_wrap(s.to_string(), f, p.text)
+                    .size()
+                    .x
+            };
+            let folder_w = (text_w(tr!("history.open_folder"), uc::font(13.0)) + 28.0).max(108.0);
+            let combo_font = egui::TextStyle::Button.resolve(ui.style());
+            // The combo is as wide as its selected text plus padding and the chevron.
+            let date_w = (text_w(date.label(), combo_font) + 32.0).max(130.0);
             let search_rect = Rect::from_min_max(
                 header.min,
-                pos2(header.right() - folder_w - date_w - 20.0, header.bottom()),
+                pos2(
+                    (header.right() - folder_w - date_w - 20.0).max(header.left() + 80.0),
+                    header.bottom(),
+                ),
             );
             let search_id = ui.scope_id().with("hist_search");
             let search_focused = ui.memory(|m| m.has_focus(search_id));
@@ -1236,7 +1264,10 @@ impl Surface for HistoryWindow {
             // text share one alignment), so it sits on the box's centre line at any scale.
             let te_rect = Rect::from_min_max(
                 pos2(search_rect.left() + 38.0, search_rect.top()),
-                pos2(search_rect.right() - 34.0, search_rect.bottom()),
+                pos2(
+                    (search_rect.right() - 34.0).max(search_rect.left() + 39.0),
+                    search_rect.bottom(),
+                ),
             );
             let te = ui.scope_builder(UiBuilder::new().max_rect(te_rect), |ui| {
                 ui.add_sized(
@@ -1246,12 +1277,13 @@ impl Surface for HistoryWindow {
                         .frame(egui::Frame::NONE)
                         .margin(egui::Margin::ZERO)
                         .align(egui::Align2::LEFT_CENTER)
-                        .hint_text("Search Captures")
+                        .hint_text(tr!("history.search.hint"))
                         .font(uc::font(14.0))
                         .min_size(te_rect.size())
                         .desired_width(te_rect.width()),
                 )
             });
+            crate::a11y::name_from_placeholder(&te.inner);
             if focus_search {
                 te.inner.request_focus();
             }
@@ -1265,6 +1297,7 @@ impl Surface for HistoryWindow {
                 );
                 let cresp =
                     ui.interact(cr, ui.scope_id().with("hist_search_clear"), Sense::click());
+                crate::a11y::role(&cresp, egui::accesskit::Role::Button);
                 if cresp.hovered() {
                     ui.painter()
                         .rect_filled(cr, CornerRadius::same(5), hover_fill);
@@ -1275,7 +1308,7 @@ impl Surface for HistoryWindow {
                     Icon::Close,
                     p.text_secondary,
                 );
-                if cresp.on_hover_text("Clear Search").clicked() {
+                if cresp.on_hover_text(tr!("history.search.clear")).clicked() {
                     search.clear();
                     search_changed = true;
                 }
@@ -1291,7 +1324,7 @@ impl Surface for HistoryWindow {
                 |ui| {
                     ui.spacing_mut().interact_size.y = 36.0;
                     let mut d = date;
-                    egui::ComboBox::from_id_salt("hist_date")
+                    let combo = egui::ComboBox::from_id_salt("hist_date")
                         .icon(widgets::combo_chevron)
                         .selected_text(d.label())
                         .width(date_w - 28.0)
@@ -1300,6 +1333,7 @@ impl Surface for HistoryWindow {
                                 ui.selectable_value(&mut d, opt, opt.label());
                             }
                         });
+                    crate::a11y::name(&combo.response, tr!("history.date.filter"));
                     if d != date {
                         new_date = Some(d);
                     }
@@ -1313,7 +1347,7 @@ impl Surface for HistoryWindow {
                 ui,
                 "open_folder",
                 folder_rect,
-                "Open Folder",
+                tr!("history.open_folder"),
                 uc::BtnKind::Neutral,
                 true,
                 p,
@@ -1338,9 +1372,9 @@ impl Surface for HistoryWindow {
                 top += 24.0;
             }
             if !ocr_available {
-                let msg = format!(
-                    "Search only covers window titles and app names. {}",
-                    crate::workers::NO_OCR_HELP
+                let msg = tr!(
+                    "history.no_ocr",
+                    help = crate::l10n::tr!("shell.ocr.none.body")
                 );
                 let g = ui.painter().layout(
                     msg.to_string(),
@@ -1400,15 +1434,14 @@ impl Surface for HistoryWindow {
                 let (icon, title, body) = if total_empty {
                     (
                         Icon::History,
-                        "No Captures Yet".to_string(),
+                        tr!("history.empty.title").to_string(),
                         empty_hint(&hotkey_hint),
                     )
                 } else {
                     (
                         Icon::Search,
-                        "Nothing Matches".to_string(),
-                        "Try different words, another date range, or clear the filters."
-                            .to_string(),
+                        tr!("history.nomatch.title").to_string(),
+                        tr!("history.nomatch.body").to_string(),
                     )
                 };
                 // Icon on a soft disc so the empty state has a focal point.
@@ -1452,7 +1485,7 @@ impl Surface for HistoryWindow {
                         ui,
                         "empty_capture",
                         b,
-                        "Capture a Region",
+                        tr!("history.empty.capture"),
                         uc::BtnKind::Accent,
                         true,
                         p,
@@ -1466,7 +1499,7 @@ impl Surface for HistoryWindow {
                     ui,
                     "empty_clear",
                     b,
-                    "Clear Filters",
+                    tr!("history.clear_filters"),
                     uc::BtnKind::Neutral,
                     true,
                     p,
@@ -1537,6 +1570,12 @@ impl Surface for HistoryWindow {
                                         ui.scope_id().with(("hist_card", m.id)),
                                         Sense::click(),
                                     );
+                                    crate::a11y::describe_with(
+                                        &resp,
+                                        egui::accesskit::Role::ListBoxOption,
+                                        Some(selected == Some(m.id)),
+                                        || crate::a11y::item_name(m),
+                                    );
                                     let hovered = resp.hovered();
                                     paint_card(
                                         ui,
@@ -1593,9 +1632,9 @@ impl Surface for HistoryWindow {
                                         );
                                         if sresp
                                             .on_hover_text(if m.starred {
-                                                "Remove Star"
+                                                tr!("history.act.unstar")
                                             } else {
-                                                "Star"
+                                                tr!("history.act.star")
                                             })
                                             .clicked()
                                         {
@@ -1708,7 +1747,7 @@ impl Surface for HistoryWindow {
                         icon_act(ui, Act::CopyImage, Icon::Copy, false);
                         icon_act(ui, Act::Pin, Icon::Pin, false);
                         let primary = primary_act(m);
-                        let label = if primary == Act::Edit { "Edit" } else { "Open" };
+                        let label = primary.label(m);
                         if widgets::accent_button(ui, label).clicked() {
                             act_req = Some((primary, m.id));
                         }
@@ -1755,11 +1794,11 @@ impl Surface for HistoryWindow {
         }
         if open_folder && let Err(e) = stinkshot_platform::system::open_path(&folder) {
             shared.outbox.push(Command::Notify {
-                title: "Could Not Open Folder".into(),
+                title: tr!("history.folder_error.title").into(),
                 body: crate::errors::report(
                     "open history folder",
                     &e,
-                    "Windows could not open the history folder. Check it in Settings > History.",
+                    tr!("history.folder_error.fix"),
                 ),
                 error: true,
             });
@@ -1789,21 +1828,19 @@ impl Surface for HistoryWindow {
                         egui::Modal::new(egui::Id::unique("hist_delete_modal")).show(ctx, |ui| {
                             ui.set_width(360.0);
                             ui.label(
-                                RichText::new("Delete This Capture?")
+                                RichText::new(tr!("history.delete.title"))
                                     .font(theme::semibold(15.0))
                                     .color(p.text),
                             );
                             ui.add_space(4.0);
                             ui.label(RichText::new(name).size(12.0).color(p.text_secondary));
                             ui.add_space(2.0);
-                            let extra = if starred { "It is starred. " } else { "" };
-                            ui.label(
-                                RichText::new(format!(
-                                    "{extra}The file moves to the Recycle Bin. Enter deletes, Esc keeps it."
-                                ))
-                                .size(12.0)
-                                .color(p.text_tertiary),
-                            );
+                            let body = if starred {
+                                tr!("history.delete.body_starred")
+                            } else {
+                                tr!("history.delete.body")
+                            };
+                            ui.label(RichText::new(body).size(12.0).color(p.text_tertiary));
                             ui.add_space(14.0);
                             let (mut cancel, mut del) = (false, false);
                             ui.horizontal(|ui| {
@@ -1813,7 +1850,7 @@ impl Surface for HistoryWindow {
                                     ui,
                                     "del_cancel",
                                     r1,
-                                    "Cancel",
+                                    tr!("history.delete.cancel"),
                                     uc::BtnKind::Neutral,
                                     true,
                                     p,
@@ -1826,7 +1863,7 @@ impl Surface for HistoryWindow {
                                     ui,
                                     "del_ok",
                                     r2,
-                                    "Delete",
+                                    tr!("history.delete.confirm"),
                                     uc::BtnKind::Danger,
                                     true,
                                     p,
@@ -1903,7 +1940,7 @@ fn paint_card(
                 let label = match m.kind {
                     ItemKind::Video => "MP4",
                     ItemKind::Gif => "GIF",
-                    ItemKind::Image => "Preview Unavailable",
+                    ItemKind::Image => tr!("history.thumb.unavailable"),
                 };
                 painter.text(
                     thumb.center() + vec2(0.0, 22.0),

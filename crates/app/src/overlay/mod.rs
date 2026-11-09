@@ -38,12 +38,14 @@
 
 mod beautify_panel;
 mod hover;
-mod keys;
+pub(crate) mod keys;
 mod measure;
 mod multi;
 mod paint;
 mod panels;
 mod picker;
+#[cfg(test)]
+mod pseudo_shots;
 mod render;
 mod scan;
 mod selection;
@@ -79,6 +81,7 @@ use self::textedit::Caret;
 use self::ui::{ChipState, GripEvent, Popup, UiAction};
 use self::undo::UndoStack;
 use self::view::View;
+use crate::l10n::tr;
 use crate::state::{
     CaptureOutput, Command, FinishAction, OverlayMode, OverlayRequest, RegionPurpose, Shared,
     SourceInfo, Surface, SurfaceStatus,
@@ -470,12 +473,13 @@ fn snap_label_text(control: &str, name: &str, level: usize, count: usize) -> Str
     let what = if name.is_empty() {
         control.to_string()
     } else {
-        format!("{control} \u{201c}{name}\u{201d}")
+        tr!("overlay.element.named", control = control, name = name)
     };
-    format!(
-        "{what} \u{b7} Level {} of {}",
-        level + 1,
-        count.max(level + 1)
+    tr!(
+        "overlay.element.level",
+        what = what,
+        level = level + 1,
+        count = count.max(level + 1)
     )
 }
 
@@ -1452,9 +1456,10 @@ impl Overlay {
                 }
                 self.undo.push(&pre);
             } else if self.sel_editable() {
-                let s = step;
+                // The region: Arrows move it, Shift+Arrows resize it, Ctrl takes 10 px steps.
+                let s = if k.ctrl { 10 } else { 1 };
                 let nudge = |r: PxRect, b: PxRect| {
-                    if k.ctrl {
+                    if k.shift {
                         selection::grow_rect(r, dx * s, dy * s, b)
                     } else {
                         selection::move_rect(r, dx * s, dy * s, b)
@@ -1471,13 +1476,25 @@ impl Overlay {
                     self.set_sel(new);
                 }
             }
-        } else if k.arrows != (0, 0) && self.sel.is_none() {
-            // Arrows with nothing selected confirm the hover highlight, so keyboard-only
-            // users can nudge it next.
-            if let Some(h) = self.hover
-                && !matches!(self.kind, Kind::Select(_))
-            {
-                self.accept_region(h, shared);
+        } else if k.arrows != (0, 0) && self.sel.is_none() && matches!(self.drag, Drag::None) {
+            // Keyboard-only selection: arrows with nothing selected start from the hover
+            // highlight (else a centred box on the pointer's monitor); arrows then move it,
+            // Shift+Arrows resize it and Enter confirms.
+            let start = self.hover.unwrap_or_else(|| {
+                let mon = match self.last_screen {
+                    Some((x, y)) => self.monitor_for(PxRect::new(x as i32, y as i32, 1, 1)),
+                    None => self
+                        .monitors
+                        .first()
+                        .map(|(m, _)| *m)
+                        .unwrap_or(self.local_bounds()),
+                };
+                selection::keyboard_start(mon)
+            });
+            if matches!(self.kind, Kind::Select(_)) {
+                self.set_sel(selection::clamp_rect(start, self.local_bounds()));
+            } else {
+                self.accept_region(start, shared);
             }
         }
         let _ = inp;
@@ -1606,9 +1623,9 @@ impl Overlay {
             return None;
         }
         Some(if f.ok {
-            (format!("Copied {}", f.hex), true)
+            (tr!("overlay.notice.copied_hex", hex = f.hex), true)
         } else {
-            ("Clipboard Busy, Press C Again".to_string(), false)
+            (tr!("overlay.notice.clipboard_busy_c").to_string(), false)
         })
     }
 

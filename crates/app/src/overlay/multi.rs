@@ -16,6 +16,7 @@ use stinkshot_core::annotate::Doc;
 use stinkshot_core::{PxPoint, PxRect, Rgba};
 
 use super::{Drag, Kind, Overlay, hover};
+use crate::l10n::tr;
 
 /// Empty space kept between regions in the combined picture, physical px.
 pub const GAP_PX: i32 = 16;
@@ -194,7 +195,7 @@ impl Overlay {
             return false;
         }
         if !self.doc.shapes.is_empty() {
-            self.flash_notice("Add regions before annotating.");
+            self.flash_notice(tr!("overlay.notice.add_regions_first"));
             self.drag = Drag::Ignore;
             return true;
         }

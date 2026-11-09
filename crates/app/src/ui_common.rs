@@ -12,7 +12,7 @@ use std::hash::Hash;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use egui::{Align2, Color32, CornerRadius, FontId, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
+use egui::{Color32, CornerRadius, FontId, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 use stinkshot_core::{PxRect, Rgba};
 use stinkshot_platform::Hwnd;
 
@@ -430,6 +430,7 @@ pub fn rect_button(
         Sense::hover()
     };
     let resp = ui.interact(rect, ui.scope_id().with(id), sense);
+    crate::a11y::describe(&resp, egui::accesskit::Role::Button, text, None);
     let dark = p.text == theme::DARK.text;
     let hover_t = ui.ctx().animate_bool_with_time(
         resp.id.with("stinkshot.hover"),
@@ -465,18 +466,21 @@ pub fn rect_button(
         painter.rect_stroke(rect, CornerRadius::same(6), stroke, StrokeKind::Inside);
     }
     // Filled (accent / danger) buttons are semibold like the design's primary buttons.
-    let text_font = if kind == BtnKind::Neutral {
-        font(13.0)
-    } else {
-        theme::semibold(13.0)
+    let text_font = |size: f32| {
+        if kind == BtnKind::Neutral {
+            font(size)
+        } else {
+            theme::semibold(size)
+        }
     };
-    painter.text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        text,
-        text_font,
-        text_col,
-    );
+    // Longer (translated) labels shrink to fit instead of running past the edges.
+    let avail = (rect.width() - 12.0).max(1.0);
+    let mut galley = painter.layout_no_wrap(text.to_owned(), text_font(13.0), text_col);
+    if galley.size().x > avail {
+        let size = (13.0 * avail / galley.size().x).max(10.0);
+        galley = painter.layout_no_wrap(text.to_owned(), text_font(size), text_col);
+    }
+    painter.galley(rect.center() - galley.size() / 2.0, galley, text_col);
     if enabled {
         resp.on_hover_cursor(egui::CursorIcon::PointingHand)
     } else {
@@ -575,6 +579,7 @@ pub fn sidebar_link(
         ui.scope_id().with(("sidebar_link", label)),
         Sense::click(),
     );
+    crate::a11y::describe(&resp, egui::accesskit::Role::Link, label, None);
     let t = ui
         .ctx()
         .animate_bool_with_time(resp.id, resp.hovered(), 0.1);
@@ -603,20 +608,38 @@ pub fn sidebar_link(
         icon,
         p.text_secondary,
     );
-    painter.text(
-        egui::pos2(r.left() + 38.0, r.center().y),
-        Align2::LEFT_CENTER,
-        label,
-        font(13.0),
+    // Long (translated) labels drop the shortcut hint first, then cut off with an ellipsis.
+    let label_x = r.left() + 38.0;
+    let short = painter.layout_no_wrap(shortcut.to_owned(), font(12.0), p.text_tertiary);
+    let full_w = r.right() - 10.0 - label_x;
+    let label_w = painter
+        .layout_no_wrap(label.to_owned(), font(13.0), p.text)
+        .size()
+        .x;
+    let show_short = label_w + 8.0 + short.size().x <= full_w;
+    let max_w = if show_short {
+        full_w - 8.0 - short.size().x
+    } else {
+        full_w
+    };
+    let mut job = egui::text::LayoutJob::simple_singleline(label.to_owned(), font(13.0), p.text);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(max_w);
+    let galley = painter.layout_job(job);
+    painter.galley(
+        egui::pos2(label_x, r.center().y - galley.size().y / 2.0),
+        galley,
         p.text,
     );
-    painter.text(
-        egui::pos2(r.right() - 10.0, r.center().y),
-        Align2::RIGHT_CENTER,
-        shortcut,
-        font(12.0),
-        p.text_tertiary,
-    );
+    if show_short {
+        painter.galley(
+            egui::pos2(
+                r.right() - 10.0 - short.size().x,
+                r.center().y - short.size().y / 2.0,
+            ),
+            short,
+            p.text_tertiary,
+        );
+    }
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }

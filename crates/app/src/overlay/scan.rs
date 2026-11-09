@@ -121,7 +121,11 @@ pub fn copy_text(r: &ScanResult, target: CopyTarget) -> Option<String> {
 
 /// Button label for a code: links say so (they are copied, never opened).
 pub fn code_button_label(c: &Code) -> &'static str {
-    if c.is_url() { "Copy Link" } else { "Copy" }
+    if c.is_url() {
+        tr!("overlay.scan.copy_link")
+    } else {
+        tr!("overlay.scan.copy")
+    }
 }
 
 impl Overlay {
@@ -157,7 +161,7 @@ impl Overlay {
             }
             Err(e) => {
                 log::error!("scan thread: {e}");
-                self.flash_notice("Could Not Start Reading");
+                self.flash_notice(tr!("overlay.scan.start_failed"));
             }
         }
     }
@@ -173,7 +177,7 @@ impl Overlay {
                 Ok(r) => s.phase = ScanPhase::Ready(r),
                 Err(TryRecvError::Disconnected) => {
                     self.scan = None;
-                    self.flash_notice("Could Not Read This Image");
+                    self.flash_notice(tr!("overlay.scan.read_failed"));
                 }
                 Err(TryRecvError::Empty) => {}
             }
@@ -210,7 +214,7 @@ impl Overlay {
                     Ok(()) => s.copied = Some((target, Instant::now())),
                     Err(e) => {
                         log::warn!("scan copy: {e:#}");
-                        self.flash_notice("Clipboard Busy, Try Again");
+                        self.flash_notice(tr!("overlay.notice.clipboard_busy"));
                     }
                 }
             }
@@ -287,7 +291,7 @@ pub fn panel(
                     ui.horizontal(|ui| {
                         ui.add(egui::Spinner::new().size(16.0).color(accent));
                         ui.label(
-                            RichText::new("Reading Codes and Text\u{2026}")
+                            RichText::new(tr!("overlay.scan.reading"))
                                 .size(13.0)
                                 .color(pal.text),
                         );
@@ -310,7 +314,7 @@ fn copy_button(
     out: &mut Vec<ScanAction>,
 ) {
     let text = if copied == Some(target) {
-        "Copied"
+        tr!("overlay.scan.copied")
     } else {
         label
     };
@@ -329,11 +333,11 @@ fn ready(
 ) {
     ui.set_width(PANEL_W);
     ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
-    if panels::header(ui, "Codes and Text", pal) {
+    if panels::header(ui, tr!("overlay.scan.title"), pal) {
         out.push(ScanAction::Close);
     }
     if r.codes.is_empty() {
-        panels::caption(ui, "No codes found.", pal);
+        panels::caption(ui, tr!("overlay.scan.no_codes"), pal);
     } else {
         ScrollArea::vertical()
             .id_salt("scan-codes")
@@ -361,12 +365,12 @@ fn ready(
     }
     ui.separator();
     match &r.text {
-        None if !ocr => panels::caption(ui, "Text needs an OCR language in Windows Settings.", pal),
+        None if !ocr => panels::caption(ui, tr!("overlay.scan.no_ocr"), pal),
         None => {}
         Some(t) if t.is_empty() && r.ocr_failed => {
-            panels::caption(ui, "Could not read text. Try a larger selection.", pal)
+            panels::caption(ui, tr!("overlay.scan.ocr_failed"), pal)
         }
-        Some(t) if t.is_empty() => panels::caption(ui, "No text found.", pal),
+        Some(t) if t.is_empty() => panels::caption(ui, tr!("overlay.scan.no_text"), pal),
         Some(t) => {
             ui.add(
                 egui::Label::new(
@@ -377,21 +381,27 @@ fn ready(
                 .wrap(),
             );
             ui.horizontal(|ui| {
-                copy_button(ui, "Copy Text", CopyTarget::Text, copied, out);
+                copy_button(
+                    ui,
+                    tr!("overlay.scan.copy_text"),
+                    CopyTarget::Text,
+                    copied,
+                    out,
+                );
                 let table_tip = match &r.table {
-                    Some(tb) => format!(
-                        "{} rows \u{d7} {} columns, tab-separated",
-                        tb.rows.len(),
-                        tb.columns
+                    Some(tb) => tr!(
+                        "overlay.scan.table_tip",
+                        rows = tb.rows.len(),
+                        cols = tb.columns
                     ),
-                    None => "No columns found".to_string(),
+                    None => tr!("overlay.scan.no_columns").to_string(),
                 };
                 let resp = ui
                     .add_enabled_ui(r.table.is_some(), |ui| {
                         let label = if copied == Some(CopyTarget::Table) {
-                            "Copied"
+                            tr!("overlay.scan.copied")
                         } else {
-                            "Copy as Table"
+                            tr!("overlay.scan.copy_table")
                         };
                         theme::widgets::button(ui, label)
                     })

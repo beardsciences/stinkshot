@@ -17,6 +17,7 @@ use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, 
 use crate::actions::Action;
 use crate::hotkeys::display;
 use crate::icon_gen;
+use crate::l10n::tr;
 use crate::state::Command;
 use crate::update::Release;
 
@@ -53,14 +54,15 @@ pub struct Tray {
 
 const ID_HISTORY: &str = "history";
 const ID_SETTINGS: &str = "settings";
+const ID_HELP: &str = "help";
 const ID_QUIT: &str = "quit";
 const ID_UPDATE: &str = "update";
 
 fn header_text(config: &Config) -> String {
     let state = if config.privacy.check_for_updates {
-        "Update Check On"
+        tr!("shell.tray.update_check_on")
     } else {
-        "Offline"
+        tr!("shell.tray.offline")
     };
     format!("Stinkshot {} \u{b7} {}", env!("CARGO_PKG_VERSION"), state)
 }
@@ -114,12 +116,15 @@ impl Tray {
         }
         menu.append(&PredefinedMenuItem::separator())
             .context("tray menu")?;
-        menu.append(&MenuItem::with_id(ID_HISTORY, "History", true, None))
-            .context("tray menu")?;
-        menu.append(&MenuItem::with_id(ID_SETTINGS, "Settings", true, None))
-            .context("tray menu")?;
-        menu.append(&MenuItem::with_id(ID_QUIT, "Quit", true, None))
-            .context("tray menu")?;
+        for (id, key) in [
+            (ID_HISTORY, "shell.tray.history"),
+            (ID_SETTINGS, "shell.tray.settings"),
+            (ID_HELP, "shell.tray.help"),
+            (ID_QUIT, "shell.tray.quit"),
+        ] {
+            menu.append(&MenuItem::with_id(id, crate::l10n::lookup(key), true, None))
+                .context("tray menu")?;
+        }
 
         let accent = accent_of(config);
         let dpi_size = icon_gen::tray_size_for_dpi(crate::sysutil::system_dpi());
@@ -276,7 +281,7 @@ impl Tray {
         if let Some(r) = release {
             let item = MenuItem::with_id(
                 ID_UPDATE,
-                format!("Update Available: {}", r.tag),
+                tr!("shell.tray.update_available", tag = r.tag),
                 !r.url.is_empty(),
                 None,
             );
@@ -323,6 +328,7 @@ impl Tray {
         Some(match id {
             ID_HISTORY => Command::OpenHistory,
             ID_SETTINGS => Command::OpenSettings,
+            ID_HELP => Command::OpenSettingsAt(crate::settings_ui::Section::Help),
             ID_QUIT => Command::Quit,
             ID_UPDATE => return self.update_url.clone().map(Command::OpenUrl),
             _ => return None,

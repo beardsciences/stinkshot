@@ -830,105 +830,142 @@ impl Overlay {
 
     // ---------------------------------------------------------------- chrome
 
+    /// What the overlay's live region says (`a11y::live_status`): the mode, the tool and the
+    /// region size; the key hints too until a region exists.
+    fn announcement(&self, leading: Option<&str>, items: &[(&str, &str)]) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(l) = leading {
+            parts.push(l.to_string());
+        }
+        match self.sel {
+            Some(s) => {
+                if self.annotating() {
+                    parts.push(keys::tool_name(self.tool).to_string());
+                }
+                parts.push(tr!("overlay.a11y.size", w = s.w, h = s.h));
+            }
+            None => parts.extend(items.iter().map(|(k, a)| format!("{k}: {a}"))),
+        }
+        parts.join(". ")
+    }
+
     fn hint_items(&self) -> Vec<(&'static str, &'static str)> {
+        let drag = tr!("overlay.keys.k.drag");
+        let click = tr!("overlay.keys.k.click");
         if self.edit.is_some() {
             return vec![
-                ("Esc", "Done"),
-                ("Ctrl+Enter", "Done"),
-                ("Enter", "New Line"),
-                (keys::BOLD.label, "Bold"),
+                ("Esc", tr!("overlay.hint.done")),
+                ("Ctrl+Enter", tr!("overlay.hint.done")),
+                ("Enter", tr!("overlay.hint.new_line")),
+                (keys::BOLD.label, tr!("overlay.hint.bold")),
             ];
         }
         // Esc steps back one level before it cancels; say which.
-        let help = ("?", "Shortcuts");
+        let help = ("?", tr!("overlay.hint.shortcuts"));
+        let close_panel = ("Esc", tr!("overlay.hint.close_panel"));
         if self.help_open {
-            return vec![("F1", "Close Shortcuts"), ("Esc", "Close Shortcuts")];
+            let close = tr!("overlay.hint.close_shortcuts");
+            return vec![("F1", close), ("Esc", close)];
         }
         if self.picking {
-            return vec![("Click", "Pick Color"), ("Esc", "Cancel"), help];
+            return vec![
+                (click, tr!("overlay.hint.pick_color")),
+                ("Esc", tr!("overlay.hint.cancel")),
+                help,
+            ];
         }
         if self.picker_mode() {
             return vec![
-                ("Click", "Copy Color"),
-                ("Tab", "Change Format"),
-                ("Esc", "Cancel"),
+                (click, tr!("overlay.hint.copy_color")),
+                ("Tab", tr!("overlay.hint.change_format")),
+                ("Esc", tr!("overlay.hint.cancel")),
             ];
         }
         if self.scan.is_some() || self.beautify_open {
-            return vec![("Esc", "Close Panel"), help];
+            return vec![close_panel, help];
         }
         if self.annotating() && self.sel.is_some() && self.tool == Tool::Measure {
             return vec![
-                ("Drag", "Measure"),
-                ("Shift", "Straight"),
+                (drag, tr!("overlay.hint.measure")),
+                ("Shift", tr!("overlay.hint.straight")),
                 if self.snap_edges {
-                    ("Alt", "No Edge Snapping")
+                    ("Alt", tr!("overlay.hint.no_edge_snap"))
                 } else {
-                    ("Alt", "Snap to Edges")
+                    ("Alt", tr!("overlay.hint.snap_edges"))
                 },
-                ("Esc", "Deselect"),
+                ("Esc", tr!("overlay.hint.deselect")),
                 help,
             ];
         }
         match self.smart_view() {
             Some(smart_redact::PanelView::Review(_)) => {
-                return vec![("Enter", "Redact Selected"), ("Esc", "Close Panel"), help];
+                return vec![
+                    ("Enter", tr!("overlay.hint.redact_selected")),
+                    close_panel,
+                    help,
+                ];
             }
-            Some(smart_redact::PanelView::Scanning) => return vec![("Esc", "Close Panel"), help],
+            Some(smart_redact::PanelView::Scanning) => return vec![close_panel, help],
             _ => {}
         }
         let esc = if self.smart_active() {
-            ("Esc", "Close Panel")
+            close_panel
         } else if self.annotating()
             && self.sel.is_some()
             && (!self.selected.is_empty() || self.tool != Tool::Select)
         {
-            ("Esc", "Deselect")
+            ("Esc", tr!("overlay.hint.deselect"))
         } else if self.discard_prompt_active() {
-            ("Esc", "Discard")
+            ("Esc", tr!("overlay.hint.discard"))
         } else {
-            ("Esc", "Cancel")
+            ("Esc", tr!("overlay.hint.cancel"))
         };
         if self.annotating() && self.sel.is_some() && !self.selected.is_empty() {
             // Ctrl+C copies the shapes now; say so, and that Enter still copies the image.
             return vec![
-                ("Enter", "Copy Image"),
-                (keys::COPY.label, "Copy Shapes"),
-                (keys::DUPLICATE.label, "Duplicate"),
-                ("Del", "Delete"),
+                ("Enter", tr!("overlay.hint.copy_image")),
+                (keys::COPY.label, tr!("overlay.hint.copy_shapes")),
+                (keys::DUPLICATE.label, tr!("overlay.hint.duplicate")),
+                ("Del", tr!("overlay.hint.delete")),
                 esc,
                 help,
             ];
         }
         match (self.sel.is_some(), self.kind) {
             (false, _) => vec![
-                ("Drag", "Region"),
-                ("Click", "Window or Element"),
-                ("Wheel", "Parent or Child"),
-                ("Enter", "Select Highlight"),
+                (drag, tr!("overlay.hint.region")),
+                (click, tr!("overlay.keys.window_or_element")),
+                (
+                    tr!("overlay.keys.k.wheel"),
+                    tr!("overlay.hint.parent_child"),
+                ),
+                ("Enter", tr!("overlay.hint.select_highlight")),
                 esc,
                 help,
             ],
             (true, Kind::Annotate) => vec![
-                ("Enter", "Copy"),
-                (keys::SAVE.label, "Save"),
-                (keys::UNDO.label, "Undo"),
-                ("Ctrl+Wheel", "Zoom"),
+                ("Enter", tr!("overlay.hint.copy")),
+                (keys::SAVE.label, tr!("overlay.hint.save")),
+                (keys::UNDO.label, tr!("overlay.hint.undo")),
+                (tr!("overlay.keys.k.ctrl_wheel"), tr!("overlay.hint.zoom")),
                 esc,
                 help,
             ],
             (true, Kind::Capture) if !self.extra_regions.is_empty() => vec![
-                ("Enter", "Copy All"),
-                ("Shift+Drag", "Add Region"),
-                ("Click", "Pick Region"),
-                ("Esc", "Remove Region"),
+                ("Enter", tr!("overlay.hint.copy_all")),
+                (
+                    tr!("overlay.keys.k.shift_drag"),
+                    tr!("overlay.hint.add_region"),
+                ),
+                (click, tr!("overlay.hint.pick_region")),
+                ("Esc", tr!("overlay.hint.remove_region")),
                 help,
             ],
             (true, _) => vec![
-                ("Enter", "Copy"),
-                (keys::SAVE.label, "Save"),
-                (keys::UNDO.label, "Undo"),
-                ("Arrows", "Nudge"),
+                ("Enter", tr!("overlay.hint.copy")),
+                (keys::SAVE.label, tr!("overlay.hint.save")),
+                (keys::UNDO.label, tr!("overlay.hint.undo")),
+                (tr!("overlay.keys.k.arrows"), tr!("overlay.hint.nudge")),
                 esc,
                 help,
             ],
@@ -1018,17 +1055,17 @@ impl Overlay {
             if let Some(t) = self.discard_armed {
                 ctx.request_repaint_after(DISCARD_WINDOW.saturating_sub(t.elapsed()));
             }
-            Some("Press Esc Again to Discard Your Annotations".into())
+            Some(tr!("overlay.notice.discard_prompt").into())
         } else if let (Some((text, _)), false) = (&hex_flash, loupe_active) {
             Some(text.clone())
         } else if let Some(n) = self.notice_text() {
             Some(n.to_string())
         } else if self.picking {
-            Some("Pick a Color from the Image".into())
+            Some(tr!("overlay.notice.pick_from_image").into())
         } else if self.picker_mode() {
-            Some(format!(
-                "Pick a Color \u{b7} {}",
-                Self::picker_format(shared).label()
+            Some(tr!(
+                "overlay.notice.pick_color_format",
+                format = Self::picker_format(shared).label()
             ))
         } else if let Kind::Select(p) = self.kind {
             Some(hover::purpose_label(p).into())
@@ -1047,6 +1084,8 @@ impl Overlay {
             pal,
             accent,
         );
+        // Screen readers: speak the mode, tool and region size whenever they change.
+        crate::a11y::live_status(ctx, || self.announcement(leading.as_deref(), &items));
 
         if self.picker_mode() && !self.help_open {
             let mut picks = Vec::new();
@@ -1129,7 +1168,7 @@ impl Overlay {
                 .then(|| view::percent(self.view, self.scale));
             let mut text = std::mem::take(&mut self.exact_text);
             let regions = (!self.extra_regions.is_empty())
-                .then(|| format!("{} Regions", self.extra_regions.len() + 1));
+                .then(|| tr!("overlay.chip.regions", n = self.extra_regions.len() + 1));
             let mut st = ChipState {
                 size,
                 ratio: self.aspect,

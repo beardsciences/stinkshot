@@ -174,9 +174,13 @@ impl Overlay {
         self.pastes = 0;
         let n = self.clipboard.len();
         self.flash_notice(&if n == 1 {
-            "Copied 1 Shape: Ctrl+V to Paste".to_string()
+            tr!("overlay.notice.copied_shape", key = keys::PASTE.label)
         } else {
-            format!("Copied {n} Shapes: Ctrl+V to Paste")
+            tr!(
+                "overlay.notice.copied_shapes",
+                n = n,
+                key = keys::PASTE.label
+            )
         });
     }
 
@@ -557,9 +561,8 @@ impl Overlay {
             Err(e) => {
                 log::error!("overlay finish thread: {e}");
                 shared.outbox.push(Command::Notify {
-                    title: "Could Not Finish Capture".into(),
-                    body: "Stinkshot could not start the final render. Press Enter to try again."
-                        .into(),
+                    title: tr!("overlay.error.finish_title").into(),
+                    body: tr!("overlay.error.finish_body").into(),
                     error: true,
                 })
             }
@@ -577,9 +580,8 @@ impl Overlay {
             Ok(None) | Err(TryRecvError::Disconnected) => {
                 self.finishing = None;
                 shared.outbox.push(Command::Notify {
-                    title: "Could Not Render Annotations".into(),
-                    body: "The capture was not saved. Try again, or remove the last annotation."
-                        .into(),
+                    title: tr!("overlay.error.render_title").into(),
+                    body: tr!("overlay.error.render_body").into(),
                     error: true,
                 });
             }
@@ -691,7 +693,7 @@ impl Overlay {
                 UiAction::ToggleAddRegions => {
                     self.add_regions = !self.add_regions;
                     if self.add_regions {
-                        self.flash_notice("Drag to add regions. Enter copies them all.");
+                        self.flash_notice(tr!("overlay.notice.add_regions_hint"));
                     }
                 }
                 UiAction::Ratio(r) => {

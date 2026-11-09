@@ -15,6 +15,9 @@
 //! and the UI-thread CPU time of `logo_anim::show` while frames were still arriving and
 //! afterwards. Saves a screenshot of the window at the end when a path is given.
 
+#[allow(dead_code)] // the app uses the rest of the strings table
+#[path = "../src/l10n/mod.rs"]
+mod l10n;
 #[allow(dead_code)] // the app also uses prewarm_cache
 #[path = "../src/logo_anim.rs"]
 mod logo_anim;

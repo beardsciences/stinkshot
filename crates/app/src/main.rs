@@ -10,6 +10,7 @@
 //!    a `Surface` shown as an immediate viewport by `shell::Shell`.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod a11y;
 mod actions;
 mod app_icon;
 mod capture_ops;
@@ -17,9 +18,11 @@ mod cli;
 mod errors;
 mod filedialog;
 mod gpu;
+mod help;
 mod history_ui;
 mod hotkeys;
 mod icon_gen;
+mod l10n;
 mod logger;
 mod logo_anim;
 mod overlay;
@@ -33,6 +36,7 @@ mod sysutil;
 mod theme;
 mod timing;
 mod toast;
+mod tour;
 mod tray;
 mod update;
 mod wake;

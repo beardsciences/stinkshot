@@ -27,12 +27,16 @@ pub struct General {
     pub start_with_windows: bool,
     /// "system" | "dark" | "light"
     pub theme: String,
+    /// UI language: "system" (Windows locale), a code like "en", or "pseudo".
+    pub language: String,
     /// Hex like "#7fd36a".
     pub accent: String,
     pub copy_to_clipboard: bool,
     pub show_toast: bool,
     pub toast_seconds: u32,
     pub play_sound: bool,
+    /// The first-run tour was shown (or skipped). Settings > About > Show Tour reopens it.
+    pub tour_seen: bool,
 }
 
 /// Hotkey strings use the `global-hotkey` crate's format, e.g. "PrintScreen",
@@ -170,11 +174,13 @@ impl Default for General {
         Self {
             start_with_windows: false,
             theme: "system".into(),
+            language: "system".into(),
             accent: "#7fd36a".into(),
             copy_to_clipboard: true,
             show_toast: true,
             toast_seconds: 6,
             play_sound: false,
+            tour_seen: false,
         }
     }
 }

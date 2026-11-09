@@ -52,6 +52,7 @@ use crate::cli::{self, CliAction};
 use crate::errors::{self, report, report_str, report_str_with, report_with};
 use crate::history_ui::HistoryWindow;
 use crate::hotkeys::Hotkeys;
+use crate::l10n::tr;
 use crate::overlay::Overlay;
 use crate::pin::Pin;
 use crate::record_ui::{Countdown, HudToggles, RecordFrame, RecordHud, ScrollHud, TrimWindow};
@@ -93,9 +94,6 @@ fn system_scale() -> f32 {
 /// After a double click is handled, tray single clicks are ignored this long: the button-up of
 /// the second click can still reach the tray icon once the overlay under it is gone.
 const TRAY_CLICK_QUIET: Duration = Duration::from_millis(700);
-/// Overlay hint-bar notices (instead of toasts over the frozen screen).
-const WINDOW_CAPTURE_FALLBACK: &str =
-    "Windows could not capture that window. Try again, or use Region capture.";
 /// How long the capture session keeps its shadow textures after the last capture.
 const SHADOW_IDLE: Duration = Duration::from_secs(30);
 /// Hand the working set back after this long with nothing open (`trim_when_idle`).
@@ -120,8 +118,6 @@ fn wait_for_jobs(max: Duration) {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
-const NOTICE_NO_LAST_REGION: &str = "No Region Remembered Yet: Select One";
-const NOTICE_LAST_REGION_OFF_SCREEN: &str = "Last Region Is Off Screen: Select a New One";
 
 // ---------------------------------------------------------------------------- entry
 
@@ -200,8 +196,8 @@ pub fn run() -> anyhow::Result<()> {
         Ok(()) => Ok(()),
         Err(e) => {
             log::error!("fatal: {e:#}");
-            let why = errors::explain(&e, "Try starting it again.");
-            sysutil::fatal_box("Stinkshot", &format!("Stinkshot could not start. {why}"));
+            let why = errors::explain(&e, tr!("shell.start.retry"));
+            sysutil::fatal_box("Stinkshot", &tr!("shell.start.failed", why = why));
             Err(e)
         }
     }
@@ -422,15 +418,13 @@ struct Boot {
     hotkey_errors: Vec<String>,
 }
 
-/// Body of the "Stinkshot Is Running" toast shown when the user starts the app by hand.
+/// Body of the tr!("shell.welcome.title") toast shown when the user starts the app by hand.
 fn welcome_body(region_hotkey: &str) -> String {
     let key = crate::hotkeys::display(region_hotkey);
     if key.is_empty() {
-        "Capture from the Stinkshot tray icon. Start Stinkshot again to open History.".into()
+        tr!("shell.welcome.no_key").into()
     } else {
-        format!(
-            "Press {key} to capture a region, or use the tray icon. Start Stinkshot again to open History."
-        )
+        tr!("shell.welcome.key", key = key)
     }
 }
 
@@ -442,6 +436,7 @@ fn run_app(
     gpu: Option<std::thread::JoinHandle<Option<eframe::egui_wgpu::WgpuSetupExisting>>>,
 ) -> anyhow::Result<()> {
     let config = Config::load();
+    crate::l10n::apply(&config.general.language);
     timing::point(format_args!("config loaded"));
 
     // OCR engine creation touches COM; do it on a scratch thread so the UI thread's apartment
@@ -568,6 +563,8 @@ struct HwndState {
     tries: u32,
     /// The window and the DPI its native icon was picked for (re-applied on DPI change).
     icon: Option<(stinkshot_platform::Hwnd, u32)>,
+    /// UI Automation provider for screen readers (`a11y.rs`).
+    a11y: Option<crate::a11y::Attached>,
 }
 
 struct Slot<T> {
@@ -620,6 +617,7 @@ fn drive(
                 ));
                 st.created = true;
                 st.icon = Some((hwnd, crate::app_icon::apply_native(hwnd)));
+                st.a11y = crate::a11y::attach(ctx, id, hwnd);
                 surf.on_created(hwnd, shared);
                 if focus {
                     window_util::force_foreground(hwnd);
@@ -705,6 +703,7 @@ struct Shell {
     overlay: Option<Slot<Overlay>>,
     history_win: Option<Slot<HistoryWindow>>,
     settings: Option<Slot<SettingsWindow>>,
+    tour: Option<Slot<crate::tour::TourWindow>>,
     countdown: Option<Slot<Countdown>>,
     record_frame: Option<Slot<RecordFrame>>,
     record_hud: Option<Slot<RecordHud>>,
@@ -732,6 +731,8 @@ struct Shell {
     scroll: Option<ScrollFlow>,
 
     resolved_theme: (bool, [u8; 4]),
+    /// Windows contrast theme and Text size the theme was last installed with.
+    a11y_prefs: crate::a11y::Prefs,
     last_theme_check: Instant,
     update_release: Option<Release>,
     update_inflight: bool,
@@ -798,19 +799,19 @@ fn fmt_duration(d: Duration) -> String {
 /// claim H.264, the MP4 frame rate or audio sources.
 fn record_summary(rc: &stinkshot_core::config::Recording, gif: bool, fps: u32) -> String {
     if gif {
-        return format!(
-            "GIF \u{b7} {} FPS \u{b7} Up to {} px Wide \u{b7} No Audio",
-            rc.gif_fps.max(1),
-            rc.gif_max_width
+        return tr!(
+            "shell.hud.gif",
+            fps = rc.gif_fps.max(1),
+            w = rc.gif_max_width
         );
     }
     let audio = match (rc.microphone, rc.system_audio) {
-        (true, true) => "Mic + System",
-        (true, false) => "Mic",
-        (false, true) => "System Audio",
-        (false, false) => "No Audio",
+        (true, true) => tr!("shell.hud.mic_system"),
+        (true, false) => tr!("shell.hud.mic"),
+        (false, true) => tr!("shell.hud.system_audio"),
+        (false, false) => tr!("shell.hud.no_audio"),
     };
-    format!("MP4 \u{b7} H.264 \u{b7} {fps} FPS \u{b7} {}", audio)
+    tr!("shell.hud.mp4", fps = fps, audio = audio)
 }
 
 fn fmt_bytes(b: u64) -> String {
@@ -827,6 +828,7 @@ impl Shell {
         timing::point(format_args!("eframe up (wgpu initialized), Shell::new"));
         let ctx = cc.egui_ctx.clone();
         wake::set_context(ctx.clone());
+        crate::a11y::install(&ctx);
 
         let Boot {
             ipc_rx,
@@ -886,6 +888,7 @@ impl Shell {
             overlay: None,
             history_win: None,
             settings: None,
+            tour: None,
             countdown: None,
             record_frame: None,
             record_hud: None,
@@ -905,6 +908,7 @@ impl Shell {
             trim_closed_by_user: false,
             scroll: None,
             resolved_theme,
+            a11y_prefs: crate::a11y::prefs(),
             last_theme_check: Instant::now(),
             update_release: None,
             update_inflight: false,
@@ -949,15 +953,15 @@ impl Shell {
         if !shell.hotkey_errors.is_empty() {
             let body = shell.hotkey_errors.join("\n");
             shell.pending.push_back(Command::Notify {
-                title: "Some Hotkeys Are Not Active".into(),
+                title: tr!("shell.hotkeys.inactive").into(),
                 body,
                 error: true,
             });
         }
         if shell.tray.is_none() {
             shell.pending.push_back(Command::Notify {
-                title: "Tray Icon Unavailable".into(),
-                body: "Stinkshot is running but could not create its tray icon. Use the hotkeys or the command line.".into(),
+                title: tr!("shell.tray.unavailable").into(),
+                body: tr!("shell.tray.unavailable.body").into(),
                 error: true,
             });
         }
@@ -966,7 +970,13 @@ impl Shell {
         }
         if !launched_with_command && welcome {
             let body = welcome_body(&shell.shared.config.hotkeys.region);
-            shell.notify("Stinkshot Is Running", body, false);
+            shell.notify(tr!("shell.welcome.title"), body, false);
+        }
+        // First run: the short tour, once (it sets `general.tour_seen` when closed). Only on a
+        // plain launch: not over a capture the launch asked for, and not from `--tray`
+        // (autostart, silent upgrades, scripts), which stays silent.
+        if welcome && !shell.shared.config.general.tour_seen {
+            shell.pending.push_back(Command::OpenTour);
         }
         shell.maybe_check_updates(false);
         shell.ctx.request_repaint();
@@ -1081,7 +1091,7 @@ impl Shell {
             }
             Command::OcrRegion => {
                 if self.shared.ocr.is_none() {
-                    self.notify(workers::NO_OCR_TITLE, workers::NO_OCR_HELP, true);
+                    self.notify(tr!("shell.ocr.none"), tr!("shell.ocr.none.body"), true);
                 } else {
                     self.begin_overlay(OverlayMode::SelectRegion(RegionPurpose::Ocr));
                 }
@@ -1095,6 +1105,7 @@ impl Shell {
             Command::OpenHistory => self.open_history(),
             Command::OpenSettings => self.open_settings(None),
             Command::OpenSettingsAt(section) => self.open_settings(Some(section)),
+            Command::OpenTour => self.open_tour(),
             Command::EditItem(id) => workers::edit_item(&self.env(), id),
             Command::PinItem(id) => workers::pin_item(&self.env(), id),
             Command::CaptureDone(out) => self.capture_done(*out),
@@ -1141,12 +1152,8 @@ impl Shell {
             Command::DeleteItem(id) => workers::delete_item(&self.env(), id),
             Command::StarItem(id, starred) => {
                 if let Err(e) = self.shared.history.set_starred(id, starred) {
-                    let body = report(
-                        "set starred",
-                        &e,
-                        "The history index could not be updated. Try again in a moment.",
-                    );
-                    self.notify("Could Not Update Star", body, true);
+                    let body = report("set starred", &e, tr!("shell.star.failed.body"));
+                    self.notify(tr!("shell.star.failed"), body, true);
                 }
                 self.invalidate_history();
             }
@@ -1200,8 +1207,8 @@ impl Shell {
         }
         if self.busy_with_recording() {
             self.notify(
-                "Recording in Progress",
-                "Stop or finish the recording before taking a capture.",
+                tr!("shell.busy.recording"),
+                tr!("shell.busy.recording.capture"),
                 false,
             );
             return true;
@@ -1212,11 +1219,11 @@ impl Shell {
     /// Why the editor cannot open right now, if it cannot.
     fn annotate_block_reason(&self) -> Option<&'static str> {
         if self.overlay.is_some() {
-            Some("Finish or cancel the capture that is already open first.")
+            Some(tr!("shell.busy.capture_open"))
         } else if self.scroll.is_some() || self.window_capture_pending {
-            Some("Finish the current capture first.")
+            Some(tr!("shell.busy.capture"))
         } else if self.busy_with_recording() {
-            Some("Stop the recording before editing a capture.")
+            Some(tr!("shell.busy.recording.edit"))
         } else {
             None
         }
@@ -1255,12 +1262,8 @@ impl Shell {
         match res {
             Ok(f) => Some((f, windows)),
             Err(e) => {
-                let body = report(
-                    "freeze_all",
-                    &e,
-                    "Windows did not hand over the screen image. Try again; if it keeps failing, restart Stinkshot.",
-                );
-                self.notify("Could Not Capture the Screen", body, true);
+                let body = report("freeze_all", &e, tr!("shell.capture.no_image.body"));
+                self.notify(tr!("shell.capture.screen_failed"), body, true);
                 None
             }
         }
@@ -1319,8 +1322,8 @@ impl Shell {
         }
         let Some(win) = capture_ops::target_window() else {
             self.notify(
-                "No Window to Capture",
-                "Click the window you want to capture first, then try again.",
+                tr!("shell.capture.no_window"),
+                tr!("shell.capture.no_window.body"),
                 true,
             );
             return;
@@ -1351,8 +1354,8 @@ impl Shell {
         let base = capture_ops::crop_frozen(&frozen, mon);
         if base.width == 0 || base.height == 0 {
             self.notify(
-                "Could Not Capture the Screen",
-                "The monitor under the cursor was not in the screen image. Move the cursor to the monitor you want and try again.",
+                tr!("shell.capture.screen_failed"),
+                tr!("shell.capture.no_monitor.body"),
                 true,
             );
             return;
@@ -1389,12 +1392,8 @@ impl Shell {
         let base = match res {
             Ok(img) => img,
             Err(e) => {
-                let body = report(
-                    "freeze_rect",
-                    &e,
-                    "Windows did not hand over the screen image. Try again; if it keeps failing, restart Stinkshot.",
-                );
-                self.notify("Could Not Capture the Screen", body, true);
+                let body = report("freeze_rect", &e, tr!("shell.capture.no_image.body"));
+                self.notify(tr!("shell.capture.screen_failed"), body, true);
                 return;
             }
         };
@@ -1410,7 +1409,7 @@ impl Shell {
         }
         let Some(rect) = self.shared.config.capture.last_region else {
             // No toast over the frozen screen: the overlay says it inline.
-            self.next_overlay_notice = Some(NOTICE_NO_LAST_REGION);
+            self.next_overlay_notice = Some(tr!("shell.notice.no_last_region"));
             self.begin_overlay(OverlayMode::Capture);
             self.next_overlay_notice = None;
             return;
@@ -1420,7 +1419,7 @@ impl Shell {
         };
         let img = capture_ops::crop_frozen(&frozen, rect);
         if img.width == 0 || img.height == 0 {
-            self.next_overlay_notice = Some(NOTICE_LAST_REGION_OFF_SCREEN);
+            self.next_overlay_notice = Some(tr!("shell.notice.last_region_off_screen"));
             self.open_overlay(OverlayMode::Capture, frozen, windows);
             return;
         }
@@ -1492,6 +1491,15 @@ impl Shell {
             return;
         }
         self.history_win = Some(Slot::new(HistoryWindow::new(&self.shared)));
+        self.touch();
+    }
+
+    fn open_tour(&mut self) {
+        if self.tour.is_some() {
+            Self::focus_window(crate::tour::TourWindow::TITLE);
+            return;
+        }
+        self.tour = Some(Slot::new(crate::tour::TourWindow::new()));
         self.touch();
     }
 
@@ -1597,14 +1605,14 @@ impl Shell {
                     Some(f) => {
                         let img = capture_ops::crop_frozen(&f, rect);
                         if img.width == 0 || img.height == 0 {
-                            self.notify("No Text Found", "The selection was empty.", false);
+                            self.notify(tr!("shell.ocr.no_text"), tr!("shell.ocr.empty"), false);
                         } else {
                             workers::ocr_image(&self.env(), img);
                         }
                     }
                     None => self.notify(
-                        "Could Not Read the Selection",
-                        "The screen snapshot was lost; try again.",
+                        tr!("shell.selection.lost"),
+                        tr!("shell.selection.lost.body"),
                         true,
                     ),
                 }
@@ -1612,8 +1620,8 @@ impl Shell {
             RegionPurpose::Scrolling => {
                 if rect.w < 16 || rect.h < 16 {
                     self.notify(
-                        "Selection Too Small",
-                        "Select a larger area to scroll-capture.",
+                        tr!("shell.selection.too_small"),
+                        tr!("shell.selection.too_small.scroll"),
                         false,
                     );
                     return;
@@ -1629,8 +1637,8 @@ impl Shell {
             RegionPurpose::RecordMp4 | RegionPurpose::RecordGif => {
                 if rect.w < 16 || rect.h < 16 {
                     self.notify(
-                        "Selection Too Small",
-                        "Select a larger area to record.",
+                        tr!("shell.selection.too_small"),
+                        tr!("shell.selection.too_small.record"),
                         false,
                     );
                     return;
@@ -1670,8 +1678,8 @@ impl Shell {
             Rec::Countdown(_) => self.record_cancel(),
             Rec::Active { .. } => self.record_stop(),
             _ => self.notify(
-                "Recording in Progress",
-                "Finish the current recording first.",
+                tr!("shell.busy.recording"),
+                tr!("shell.busy.recording.record"),
                 false,
             ),
         }
@@ -1685,9 +1693,9 @@ impl Shell {
                 let body = report(
                     "temp recording path",
                     &e,
-                    "The history folder could not be prepared for the recording. Check the folder in Settings > History.",
+                    tr!("shell.record.temp_failed.body"),
                 );
-                self.notify("Could Not Start Recording", body, true);
+                self.notify(tr!("shell.record.start_failed"), body, true);
                 self.rec = Rec::Idle;
                 return;
             }
@@ -1862,10 +1870,10 @@ impl Shell {
             let body = report_str_with(
                 "recorder reported an error",
                 &err,
-                "The recorder hit a problem.",
-                "Stopping and keeping what was recorded.",
+                tr!("shell.record.problem.body"),
+                tr!("shell.record.problem.tail"),
             );
-            self.notify("Recording Problem", body, true);
+            self.notify(tr!("shell.record.problem"), body, true);
             self.record_stop();
         }
         // Trim window closed without a choice: keep the untrimmed recording.
@@ -1926,15 +1934,16 @@ impl Shell {
                         }
                     }
                     Err(e) => {
-                        let body = report_str("window capture", &e, WINDOW_CAPTURE_FALLBACK);
-                        self.notify("Could Not Capture the Window", body, true)
+                        let body =
+                            report_str("window capture", &e, tr!("shell.error.window_capture"));
+                        self.notify(tr!("shell.capture.window_failed"), body, true)
                     }
                 }
             }
             WorkerMsg::WindowCaptureFailed(e) => {
                 self.window_capture_pending = false;
-                let body = report_str("window capture", &e, WINDOW_CAPTURE_FALLBACK);
-                self.notify("Could Not Capture the Window", body, true);
+                let body = report_str("window capture", &e, tr!("shell.error.window_capture"));
+                self.notify(tr!("shell.capture.window_failed"), body, true);
             }
             WorkerMsg::OpenAnnotate {
                 base,
@@ -1946,7 +1955,7 @@ impl Shell {
                 // An Edit click must not freeze the screen under a scroll capture or a
                 // recording, nor replace an open overlay. Say so instead of dropping it.
                 if let Some(reason) = self.annotate_block_reason() {
-                    self.notify("Cannot Edit Yet", reason, false);
+                    self.notify(tr!("shell.edit.not_yet"), reason, false);
                     return;
                 }
                 if let Some((frozen, windows)) = self.freeze() {
@@ -2000,8 +2009,8 @@ impl Shell {
                     Ok(img) => {
                         if partial {
                             self.notify(
-                                "Scrolling Capture Stopped Early",
-                                "The page could not be matched any further; kept what was captured.",
+                                tr!("shell.scroll.stopped"),
+                                tr!("shell.scroll.stopped.body"),
                                 false,
                             );
                         }
@@ -2020,12 +2029,9 @@ impl Shell {
                         }
                     }
                     Err(e) => {
-                        let body = report_str(
-                            "scrolling capture",
-                            &e,
-                            "Nothing could be captured from that area. Try again with the page scrolled to the top.",
-                        );
-                        self.notify("Could Not Finish Scrolling Capture", body, true)
+                        let body =
+                            report_str("scrolling capture", &e, tr!("shell.scroll.failed.body"));
+                        self.notify(tr!("shell.scroll.failed"), body, true)
                     }
                 }
             }
@@ -2052,12 +2058,9 @@ impl Shell {
                         self.touch();
                     }
                     (_, Err(e)) => {
-                        let body = report_str(
-                            "recorder stop",
-                            &e,
-                            "The recording file could not be finished. Try recording again.",
-                        );
-                        self.notify("Could Not Finish the Recording", body, true)
+                        let body =
+                            report_str("recorder stop", &e, tr!("shell.record.finish_failed.body"));
+                        self.notify(tr!("shell.record.finish_failed"), body, true)
                     }
                     (other, Ok(_)) => self.rec = other,
                 }
@@ -2094,8 +2097,8 @@ impl Shell {
                 let wanted_fps = rc.fps;
                 if !pending.gif && rec.fps() < wanted_fps {
                     self.notify(
-                        "Recording at 60 FPS",
-                        format!("{wanted_fps} FPS needs hardware encoding."),
+                        tr!("shell.record.at_60"),
+                        tr!("shell.record.needs_hw", fps = wanted_fps),
                         false,
                     );
                 }
@@ -2120,13 +2123,9 @@ impl Shell {
                 self.touch();
             }
             Err(e) => {
-                let body = report_str(
-                    "recorder start",
-                    &e,
-                    "Windows could not start the screen recorder. Try a smaller area or restart Stinkshot.",
-                );
+                let body = report_str("recorder start", &e, tr!("shell.record.start_failed.body"));
                 if !cancel {
-                    self.notify("Could Not Start Recording", body, true);
+                    self.notify(tr!("shell.record.start_failed"), body, true);
                 }
             }
         }
@@ -2144,26 +2143,26 @@ impl Shell {
             let body = report_str_with(
                 "export",
                 err,
-                "The recording could not be exported.",
-                "The trim window is still open, so you can try Save again.",
+                tr!("shell.export.failed.body"),
+                tr!("shell.export.failed.tail"),
             );
-            self.notify("Could Not Export the Recording", body, true);
+            self.notify(tr!("shell.export.failed"), body, true);
             return;
         }
         self.trim = None;
         self.rec = Rec::Idle;
         if let Some(err) = &x.error {
             let body = if x.items.is_empty() {
-                report_str("export", err, "The recording could not be exported.")
+                report_str("export", err, tr!("shell.export.failed.body"))
             } else {
                 report_str_with(
                     "export",
                     err,
-                    "Part of the export failed.",
-                    "What was saved is in History.",
+                    tr!("shell.export.partial.body"),
+                    tr!("shell.export.partial.tail"),
                 )
             };
-            self.notify("Could Not Export the Recording", body, true);
+            self.notify(tr!("shell.export.failed"), body, true);
         }
         if !x.items.is_empty()
             && let Some(t) = &mut self.tray
@@ -2178,11 +2177,11 @@ impl Shell {
         }
         let gif_only = x.items.iter().all(|(_, _, k)| *k == ItemKind::Gif);
         let title = if x.items.len() > 1 {
-            "MP4 and GIF Saved".to_string()
+            tr!("shell.saved.mp4_gif").to_string()
         } else if gif_only {
-            "GIF Saved".to_string()
+            tr!("shell.saved.gif").to_string()
         } else {
-            "Recording Saved".to_string()
+            tr!("shell.saved.recording").to_string()
         };
         let body = format!(
             "{} \u{b7} {} \u{d7} {} \u{b7} {}",
@@ -2212,7 +2211,7 @@ impl Shell {
                 .as_ref()
                 .and_then(|p| p.file_stem())
                 .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "Pinned Capture".into());
+                .unwrap_or_else(|| tr!("shell.pin.default_title").into());
             self.add_pin(img, title, s.item, Some(s.rect));
         }
         if !self.shared.config.general.show_toast {
@@ -2224,25 +2223,29 @@ impl Shell {
             s.mode.to_string()
         };
         let (title, body) = if let Some(text) = &s.copied_text {
-            ("Text Copied".to_string(), workers::preview(text, 120))
+            (
+                tr!("shell.saved.text").to_string(),
+                workers::preview(text, 120),
+            )
         } else if s.action == FinishAction::CopyText {
             return; // the worker already explained why nothing was copied
         } else {
             let title = if let Some(p) = &s.saved_as {
-                format!(
-                    "Saved {}",
-                    p.file_name()
+                tr!(
+                    "shell.saved.as",
+                    name = p
+                        .file_name()
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default()
                 )
             } else if s.editing {
-                "Capture Updated".to_string()
+                tr!("shell.saved.updated").to_string()
             } else if s.action == FinishAction::Pin {
-                "Pinned to Screen".to_string()
+                tr!("shell.saved.pinned").to_string()
             } else if s.copied_image {
-                "Copied to Clipboard".to_string()
+                tr!("shell.saved.copied").to_string()
             } else {
-                "Saved to History".to_string()
+                tr!("shell.saved.history").to_string()
             };
             (
                 title,
@@ -2263,11 +2266,7 @@ impl Shell {
     fn maybe_check_updates(&mut self, force: bool) {
         if !self.shared.config.privacy.check_for_updates {
             if force {
-                self.notify(
-                    "Update Checks Are Off",
-                    "Turn them on in Settings > Privacy. They are the only network feature.",
-                    false,
-                );
+                self.notify(tr!("shell.update.off"), tr!("shell.update.off.body"), false);
             }
             return;
         }
@@ -2301,8 +2300,8 @@ impl Shell {
                         .unwrap_or(true);
                     if first || forced {
                         self.notify(
-                            &format!("Stinkshot {} Is Available", r.tag),
-                            "Open the tray menu to see the release page.",
+                            &tr!("shell.update.available", tag = r.tag),
+                            tr!("shell.update.available.body"),
                             false,
                         );
                     }
@@ -2312,11 +2311,8 @@ impl Shell {
                     self.update_release = Some(r);
                 } else if forced {
                     self.notify(
-                        "Stinkshot Is Up to Date",
-                        format!(
-                            "Version {} is the latest release.",
-                            env!("CARGO_PKG_VERSION")
-                        ),
+                        tr!("shell.update.current"),
+                        tr!("shell.update.current.body", v = env!("CARGO_PKG_VERSION")),
                         false,
                     );
                 }
@@ -2324,20 +2320,15 @@ impl Shell {
             Err(e) => {
                 let body = if e.starts_with(crate::update::UNTRUSTED) {
                     log::warn!("update check: {e}");
-                    "The release info failed its signature check, so it was ignored.".to_string()
+                    tr!("shell.update.untrusted").to_string()
                 } else if e.starts_with(crate::update::UNSIGNED) {
                     log::info!("update check: {e}");
-                    "The latest release has no signed release info yet. Try again later."
-                        .to_string()
+                    tr!("shell.update.unsigned").to_string()
                 } else {
-                    errors::report_network_str(
-                        "update check",
-                        &e,
-                        "The update server did not answer. Try again later.",
-                    )
+                    errors::report_network_str("update check", &e, tr!("shell.update.no_answer"))
                 };
                 if forced {
-                    self.notify("Could Not Check for Updates", body, true);
+                    self.notify(tr!("shell.update.failed"), body, true);
                 }
                 self.update_retry_at = Instant::now() + Duration::from_secs(3600);
             }
@@ -2356,10 +2347,10 @@ impl Shell {
             let body = report_with(
                 "saving config",
                 &e,
-                "The settings file could not be written.",
-                "Your changes apply until Stinkshot restarts.",
+                tr!("shell.config.save_failed.body"),
+                tr!("shell.config.save_failed.tail"),
             );
-            self.notify("Could Not Save Settings", body, true);
+            self.notify(tr!("shell.config.save_failed"), body, true);
         }
         let old = std::mem::replace(&mut self.applied, new.clone());
 
@@ -2396,10 +2387,10 @@ impl Shell {
                     let body = report_with(
                         &format!("open history folder {}", dir.display()),
                         &e,
-                        "Stinkshot could not use that folder.",
-                        "History stays in the previous folder.",
+                        tr!("shell.history_dir.failed.body"),
+                        tr!("shell.history_dir.failed.tail"),
                     );
-                    self.notify("Could Not Open That History Folder", body, true);
+                    self.notify(tr!("shell.history_dir.failed"), body, true);
                     self.shared.config.history.folder = old.history.folder.clone();
                     self.applied.history.folder = old.history.folder.clone();
                     self.shared.config_dirty = true;
@@ -2428,8 +2419,11 @@ impl Shell {
 
     fn refresh_theme(&mut self, force: bool) {
         let resolved = resolve_theme(&self.shared.config);
-        if force || resolved != self.resolved_theme {
+        // Contrast theme or Text size changed in Windows settings (`theme::install` reads them).
+        let a11y = crate::a11y::prefs();
+        if force || resolved != self.resolved_theme || a11y != self.a11y_prefs {
             self.resolved_theme = resolved;
+            self.a11y_prefs = a11y;
             theme::install(
                 &self.ctx,
                 &self.shared.fonts,
@@ -2537,6 +2531,7 @@ impl Shell {
         let busy = self.overlay.is_some()
             || self.history_win.is_some()
             || self.settings.is_some()
+            || self.tour.is_some()
             || self.countdown.is_some()
             || self.record_frame.is_some()
             || self.record_hud.is_some()
@@ -2579,6 +2574,7 @@ impl Shell {
         closed |= drive_opt(ctx, shared, &mut self.overlay, true);
         closed |= drive_opt(ctx, shared, &mut self.history_win, true);
         closed |= drive_opt(ctx, shared, &mut self.settings, true);
+        closed |= drive_opt(ctx, shared, &mut self.tour, true);
         closed |= drive_opt(ctx, shared, &mut self.countdown, false);
         closed |= drive_opt(ctx, shared, &mut self.record_frame, false);
         closed |= drive_opt(ctx, shared, &mut self.record_hud, false);

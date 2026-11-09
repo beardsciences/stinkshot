@@ -122,20 +122,20 @@ fn fmt_len(v: f32) -> String {
 
 /// Label lines: physical px, then logical px when the scale is known and not 100 %.
 pub fn label(m: &Measurement, scale: Option<f32>) -> (String, Option<String>) {
-    let main = format!(
-        "{} \u{d7} {} px \u{b7} {} px \u{b7} {}\u{b0}",
-        fmt_len(m.dx),
-        fmt_len(m.dy),
-        fmt_len(m.len),
-        fmt_len((m.angle * 10.0).round() / 10.0)
+    let main = tr!(
+        "overlay.measure.main",
+        dx = fmt_len(m.dx),
+        dy = fmt_len(m.dy),
+        len = fmt_len(m.len),
+        deg = fmt_len((m.angle * 10.0).round() / 10.0)
     );
     let logical = scale.filter(|s| (s - 1.0).abs() > 0.01).map(|scale| {
-        format!(
-            "{} \u{d7} {} \u{b7} {} at {}%",
-            fmt_len(m.dx / scale),
-            fmt_len(m.dy / scale),
-            fmt_len(m.len / scale),
-            (scale * 100.0).round() as i32
+        tr!(
+            "overlay.measure.logical",
+            dx = fmt_len(m.dx / scale),
+            dy = fmt_len(m.dy / scale),
+            len = fmt_len(m.len / scale),
+            pct = (scale * 100.0).round() as i32
         )
     });
     (main, logical)
