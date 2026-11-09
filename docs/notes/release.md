@@ -220,4 +220,90 @@ restored to DWORD 0 right away and the test script fixed; the real instance kept
 - The review fixes of Nov 8 (test installer, silent-upgrade relaunch, profile-safe PrintScreen
   restore, `Invoke-Native` stderr handling under Windows PowerShell 5.1 with redirected
   output) compiled or passed unit tests only; the installers were not run and release.ps1 was
-  not re-run.
+  not re-run. (Later the same evening: both installers, the silent install/uninstall and
+  release.ps1 under 5.1 did run; see below.)
+
+## Release prep for 0.1.0 (Nov 8 2026, evening)
+
+Publish steps for tonight: `docs/RELEASE.md` (PowerShell 5.1, copy-paste).
+
+### Repository owner does not exist
+
+Every URL in the app, script, installer and winget draft is `code.mccullough.dev/beard/stinkshot`.
+On Nov 8 `GET /api/v1/users/beard` is 404; the account there is `christian` (all other repos
+live under it). RELEASE.md step 0: create an organization `beard` (no code change), or move
+everything to `christian/stinkshot` before building (also needs the update fixture re-signed
+with a new throwaway key, because its `page` must start with the project URL).
+
+Anubis: the API and download paths answered Forgejo's own 404 (JSON / text) to the
+`Stinkshot/0.1.0` and winget User-Agents, not a challenge page.
+
+### release.ps1 changes
+
+- Step timings: a table at the end, also printed when a step fails.
+- `-Jobs N` sets `CARGO_BUILD_JOBS`. The first dry run failed in `cargo test` with
+  "only metadata stub found for `rlib` dependency `core`" while the box had 1.7 GB RAM and
+  3.8 GB commit free (14 to 18 rustc processes from parallel agents plus soak tests); the rerun
+  with `-Jobs 4` passed. Not a code problem.
+- Without `-AllowDirty` it refuses a `CHANGELOG.md` section whose heading still says
+  Unreleased or whose body has `TODO` (both are true right now on purpose: the placeholders
+  for accessibility/tour/help/localization and the leak fixes).
+
+### Dry run (`-AllowDirty -Jobs 4`, cold target dir, busy box)
+
+`C:\dev\stinkshot-bench\target-dist-dryrun`, output `C:\dev\stinkshot-bench\dist-dryrun`,
+commit 45d67e7, Windows PowerShell 5.1. Exit 0 in 1776 s:
+
+| Step | s |
+|---|---|
+| fmt --check | 16.3 |
+| clippy | 34.1 |
+| test | 825.5 |
+| build --release | 811.5 |
+| portable zip | 5.8 |
+| installer | 35.8 |
+| test installer | 32.5 |
+| SBOM | 5.0 |
+| SHA256SUMS + manifest + minisign + winget | 2.1 |
+
+Setup 10.22 MB, zip 10.94 MB, SBOM 358 KB. The ignored
+`release_dir_verifies_with_embedded_key` passes on the output (the app's verifier accepts the
+signed manifest and every listed hash matches).
+
+### scripts/smoke-test.ps1
+
+Profile `smoke`, config with takeover, hotkeys, clipboard, toasts and editor off, history in a
+temp folder; installs the test installer (`dist\<v>\test\`, own AppId) with
+`/DIR=<temp> /TASKS=""`, or unzips the portable build. Checks: install, version (resource and
+`--version`), start (`--tray`, then the `StinkShot.IPC-smoke` message-only window owned by that
+pid), ipc capture (a second `stinkshot full` is forwarded and the instance saves a PNG to the
+history folder), headless (`full --out --monitor 1`), ocr (on a PNG the script draws with
+System.Drawing), record, quit, and uninstall with the app running again (uninstaller closes it,
+exe and Apps entry gone, no Run value, every capture and the config kept). Cleans up its temp
+folder, profile config and cache unless `-Keep`. Never sends input.
+
+Windows PowerShell 5.1 gotchas found while writing it: `$null` passed to a P/Invoke `string`
+becomes "" (use `[NullString]::Value`, or FindWindowEx finds nothing);
+`Get-ChildItem -LiteralPath -Include` ignores `-Include`; `Start-Process -PassThru` has no
+ExitCode unless `.Handle` was read while the process ran.
+
+The shipped exe has no headless recording, so `record` uses a new example,
+`crates/record/examples/smoke_record.rs`, built in the same target dir: a 600x200 three-color
+swatch window (child process, topmost, no activation) at 64,64, 3 s recorded with `Recorder`,
+then duration, size and the middle frame's colors checked; on a color mismatch it saves that
+frame next to the MP4.
+
+Results against the dry run: installer mode 8/8 and portable mode 7/7 with `-SkipRecord`
+(14 s and 6 s). `record` failed every time on this box: on the HDR primary, WGC session
+creation timed out (3 s) and `DuplicateOutput1(FP16)` returned 0x887A0022 "too many
+applications are duplicating"; when a session did start (and on the SDR monitor at 3904,64),
+the MP4 showed what is under the swatch, not the swatch, although a GDI screenshot taken during
+the recording showed it, the display power state read 1 (on), and the older `swatch_window` +
+`hdr_record_probe` pair gives the same result. So it is not the harness. Probably the busy box
+(the user's instance, the ux-tour debug instance and soak runs all hold duplication sessions);
+a recorder regression is not ruled out. Needs a clean rerun or a manual recording before
+publishing.
+
+Side observation: `frame_at` (trim preview) output for a 600x200 MP4 had green bars about
+15 px wide on the right and bottom that ffmpeg's decode of the same file does not have
+(decoder padding not cropped?). Not investigated; record crate.

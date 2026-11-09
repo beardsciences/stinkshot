@@ -42,7 +42,7 @@ git commit -m "Release 0.1.0"
 ## 2. Build (one command)
 
 ```
-powershell -ExecutionPolicy Bypass -File scripts\release.ps1 -TargetDir C:\dev\stinkshot-bench\target-dist -OutDir C:\dev\stinkshot-bench\dist\0.1.0
+powershell -ExecutionPolicy Bypass -File scripts\release.ps1 -TargetDir C:\dev\stinkshot-bench\target-dist-dryrun -OutDir C:\dev\stinkshot-bench\dist\0.1.0
 ```
 
 Add `-Jobs 4` if memory is tight. It checks fmt, clippy and tests, builds, and writes to
@@ -62,13 +62,13 @@ Add `-Jobs 4` if memory is tight. It checks fmt, clippy and tests, builds, and w
 It prints a timing table at the end. The Nov 8 dry run (cold target dir, `-Jobs 4`, other
 builds and soak tests running) took 30 minutes: fmt 16 s, clippy 34 s, tests 13.8 min, release
 build 13.5 min, zip 6 s, installer 36 s, test installer 33 s, SBOM, sums, manifest and signing
-under 10 s together. Reusing that target dir (`-TargetDir C:\dev\stinkshot-bench	arget-dist-dryrun`)
-skips most of the compile time.
+under 10 s together. The commands here reuse that dry run's target dir, which skips most of
+the compile time.
 
 ## 3. Smoke test
 
 ```
-powershell -ExecutionPolicy Bypass -File scripts\smoke-test.ps1 -DistDir C:\dev\stinkshot-bench\dist\0.1.0 -TargetDir C:\dev\stinkshot-bench\target-dist
+powershell -ExecutionPolicy Bypass -File scripts\smoke-test.ps1 -DistDir C:\dev\stinkshot-bench\dist\0.1.0 -TargetDir C:\dev\stinkshot-bench\target-dist-dryrun
 ```
 
 Runs under the `smoke` profile with the test installer (own AppId, folder and shortcut), so
