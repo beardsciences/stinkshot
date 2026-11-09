@@ -16,6 +16,21 @@ write entries for people who use Stinkshot, not for people who read the diff.
 - The mouse pointer is kept as an object in the editor. It starts selected, so Del removes it.
   Turn it off with Settings > Capture > Cursor as Object.
 - Settings > Hotkeys shows hotkeys another program holds, with a Check Again button.
+- Editor Window: editing from History, a toast or a pin opens a normal window instead of
+  freezing the screen, and several can be open at once. Edit in Window on the action bar moves
+  a fresh capture into one; Settings > Capture > After Selecting a Region can make that the
+  Enter action.
+- Save and Save as Copy when re-editing a History item (Ctrl+S saves back to the item).
+- Pins show in Alt+Tab, Task View and the taskbar, and have a toolbar above the image. Both can
+  be turned off in Settings > General > Pins.
+- Text tool: drag to draw a fixed-width box; text wraps inside it. Click still makes self-sizing
+  text.
+- Select Text tool (W): select words in a capture and copy them.
+- A region snapped to a window or element stays inside it when moved or resized. Hold Alt to
+  resize freely.
+- Settings search (Ctrl+F).
+- Capture Selected Text and Capture Selected Paragraph: capture the text highlighted in the
+  active app. No hotkey by default; set one in Settings > Hotkeys.
 
 ### Fixed
 
