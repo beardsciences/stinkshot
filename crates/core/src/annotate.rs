@@ -19,7 +19,10 @@ use crate::fonts::Fonts;
 use crate::geom::{PtF, PxRect, RectF};
 use crate::image::Rgba;
 
+mod cursor;
 mod render;
+
+pub use cursor::{CursorImage, MAX_CURSOR_SIDE, cursor_from_renders};
 
 pub type ShapeId = u64;
 
@@ -152,6 +155,12 @@ pub enum ShapeKind {
     Spotlight {
         rect: RectF,
         dim: f32,
+    },
+    /// The mouse pointer captured with the screenshot, drawn into `rect` (its bitmap size
+    /// unless resized). Not destructive: deleting it shows the screen under it.
+    Cursor {
+        rect: RectF,
+        image: CursorImage,
     },
 }
 
@@ -631,6 +640,19 @@ impl RectPad for RectF {
     }
 }
 
+/// A pointer shape for `image` with its top-left at `pos` (image px), drawn 1:1.
+pub fn cursor_shape(pos: PtF, image: CursorImage) -> (ShapeKind, Style) {
+    let rect = RectF::new(pos.x, pos.y, image.width() as f32, image.height() as f32);
+    (
+        ShapeKind::Cursor { rect, image },
+        Style {
+            width: 0.0,
+            shadow: false,
+            ..Style::default()
+        },
+    )
+}
+
 impl Doc {
     pub const VERSION: u32 = 1;
 
@@ -790,6 +812,7 @@ fn shape_hit(shape: &Shape, p: PtF, tol: f32) -> bool {
             dist_to_segment(p, root, *tail) <= 8.0 + tol
         }
         ShapeKind::Spotlight { rect, .. } => dist_to_rect_border(p, norm(*rect)) <= tol.max(6.0),
+        ShapeKind::Cursor { rect, .. } => norm(*rect).expand(tol).contains(p),
     }
 }
 
@@ -843,7 +866,7 @@ pub fn shape_bounds(shape: &Shape, fonts: &Fonts) -> RectF {
             let r = norm(*rect).expand(half);
             union(r, RectF::new(tail.x, tail.y, 0.0, 0.0))
         }
-        ShapeKind::Spotlight { rect, .. } => norm(*rect),
+        ShapeKind::Spotlight { rect, .. } | ShapeKind::Cursor { rect, .. } => norm(*rect),
     }
 }
 
@@ -878,7 +901,8 @@ pub fn translate_shape(kind: &mut ShapeKind, dx: f32, dy: f32) {
         ShapeKind::Blur { rect, .. }
         | ShapeKind::Pixelate { rect, .. }
         | ShapeKind::Redact { rect }
-        | ShapeKind::Spotlight { rect, .. } => mvr(rect),
+        | ShapeKind::Spotlight { rect, .. }
+        | ShapeKind::Cursor { rect, .. } => mvr(rect),
         // The magnifier's source stays put: moving the inset must not change what it magnifies.
         ShapeKind::Magnifier { dest, .. } => mvr(dest),
         ShapeKind::Callout { rect, tail, .. } => {

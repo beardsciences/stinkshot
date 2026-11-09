@@ -1167,6 +1167,12 @@ impl SettingsWindow {
         );
         toggle_row(
             ui,
+            tr!("settings.capture.cursor_object"),
+            tr!("settings.capture.cursor_object.desc"),
+            &mut c.cursor_object,
+        );
+        toggle_row(
+            ui,
             tr!("settings.capture.snap"),
             tr!("settings.capture.snap.desc"),
             &mut c.snap_to_elements,

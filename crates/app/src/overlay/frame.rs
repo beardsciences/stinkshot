@@ -51,7 +51,11 @@ impl Overlay {
         if self.finishing.is_some() {
             self.poll_finish(ctx, shared);
         } else {
+            self.place_pending_cursor();
             let inp = self.read_input(ctx, ppp);
+            if inp.pressed {
+                self.forget_cursor_auto();
+            }
             let keys = Self::read_keys(ctx);
             // Typing owns the keyboard; Esc that ends typing must not also deselect.
             let was_editing = self.edit.is_some();
@@ -1209,7 +1213,11 @@ impl Overlay {
                 }
             };
             self.bar_drawn_at = Some((tx, ty));
-            let (color, width) = match self.sel_one().and_then(|id| self.doc.get(id)) {
+            let (color, width) = match self
+                .sel_one()
+                .and_then(|id| self.doc.get(id))
+                .filter(|s| !matches!(s.kind, ShapeKind::Cursor { .. }))
+            {
                 Some(s) => (shapes::display_color(s), shapes::display_width(s)),
                 None => (self.color, self.width),
             };

@@ -163,6 +163,7 @@ fn doc_json_round_trip_all_kinds() {
             size: 16.0,
         },
         ShapeKind::Spotlight { rect: r, dim: 0.6 },
+        cursor_shape(pt(4.0, 6.0), arrow_cursor()).0,
     ];
     for k in kinds {
         d.add(
@@ -2390,4 +2391,115 @@ fn editor_showcase() {
             .save(&dir.join(name), png, 90)
             .unwrap();
     }
+}
+
+// ----- cursor object ---------------------------------------------------------------------------
+
+/// A 4x6 test pointer: opaque black left column, translucent red elsewhere in the top half,
+/// transparent bottom half.
+fn arrow_cursor() -> CursorImage {
+    let mut img = Rgba::new(4, 6);
+    for y in 0..3 {
+        img.set_pixel(0, y, [0, 0, 0, 255]);
+        for x in 1..4 {
+            img.set_pixel(x, y, [255, 0, 0, 128]);
+        }
+    }
+    CursorImage::new(img)
+}
+
+#[test]
+fn cursor_shape_is_drawn_1_to_1_and_ignores_style() {
+    let (kind, st) = cursor_shape(pt(10.0, 20.0), arrow_cursor());
+    assert!(
+        matches!(kind, ShapeKind::Cursor { rect, .. } if rect == RectF::new(10.0, 20.0, 4.0, 6.0))
+    );
+    assert!(!st.shadow);
+    let mut d = Doc::new(40, 40);
+    let id = d.add(kind, st);
+    let fonts = test_fonts();
+    let s = d.get(id).unwrap();
+    assert_eq!(shape_bounds(s, &fonts), RectF::new(10.0, 20.0, 4.0, 6.0));
+    assert_eq!(d.hit_test(pt(11.0, 21.0), 0.0), Some(id));
+    assert_eq!(d.hit_test(pt(30.0, 30.0), 0.0), None);
+}
+
+#[test]
+fn cursor_translates_and_round_trips_compactly() {
+    let mut d = Doc::new(40, 40);
+    let (k, st) = cursor_shape(pt(1.0, 2.0), arrow_cursor());
+    let id = d.add(k, st);
+    translate_shape(&mut d.get_mut(id).unwrap().kind, 5.0, -1.0);
+    assert!(
+        matches!(&d.get(id).unwrap().kind, ShapeKind::Cursor { rect, .. } if rect.x == 6.0 && rect.y == 1.0)
+    );
+    let json = d.to_json().unwrap();
+    assert!(json.contains("\"type\": \"cursor\""), "{json}");
+    // The bitmap is a base64 PNG string, not a byte array.
+    assert!(json.contains("\"image\": \"iVBOR"), "{json}");
+    let back = Doc::from_json(&json).unwrap();
+    assert_eq!(back, d);
+}
+
+#[test]
+fn cursor_with_bad_image_fails_to_parse() {
+    let json = r#"{"version":1,"base_width":10,"base_height":10,"next_id":2,"shapes":[{"id":1,
+        "kind":{"type":"cursor","rect":{"x":0,"y":0,"w":4,"h":4},"image":"not base64!"},
+        "style":{"color":[0,0,0,255],"width":0,"fill":null,"shadow":false}}]}"#;
+    assert!(Doc::from_json(json).is_err());
+}
+
+#[test]
+fn cursor_composites_over_the_base() {
+    let base = white(20, 20);
+    let mut d = Doc::new(20, 20);
+    let (k, st) = cursor_shape(pt(5.0, 5.0), arrow_cursor());
+    d.add(k, st);
+    let fonts = test_fonts();
+    let out = render(&base, &d, &fonts);
+    // Opaque pixel copied exactly; translucent red blended over white; transparent untouched.
+    assert_eq!(out.pixel(5, 5), [0, 0, 0, 255]);
+    let p = out.pixel(6, 5);
+    assert!(
+        p[0] == 255 && (120..=135).contains(&p[1]) && p[1] == p[2] && p[3] == 255,
+        "{p:?}"
+    );
+    assert_eq!(out.pixel(6, 9), WHITE);
+    assert_eq!(out.pixel(4, 5), WHITE);
+    // Only the pointer's top half changed.
+    assert_eq!(count_changed(&base, &out, base.bounds()), 12);
+    // The editor's partial render agrees with the full one.
+    let work = bake_destructive(&base, &d);
+    let part = render_region(&work, &d, &fonts, PxRect::new(4, 4, 6, 6));
+    assert_eq!(part.pixel(1, 1), out.pixel(5, 5));
+    assert_eq!(part.pixel(2, 1), out.pixel(6, 5));
+}
+
+#[test]
+fn resized_cursor_scales_into_its_rect() {
+    let base = white(30, 30);
+    let mut d = Doc::new(30, 30);
+    let (mut k, st) = cursor_shape(pt(0.0, 0.0), arrow_cursor());
+    if let ShapeKind::Cursor { rect, .. } = &mut k {
+        *rect = RectF::new(2.0, 2.0, 8.0, 12.0);
+    }
+    d.add(k, st);
+    let out = render(&base, &d, &test_fonts());
+    // The black column now spans x 2..4, the transparent half y 8..14.
+    assert!(out.pixel(2, 3)[0] < 40);
+    assert_eq!(out.pixel(5, 12), WHITE);
+    assert_eq!(out.pixel(12, 3), WHITE);
+}
+
+#[test]
+fn cursor_patch_renders_alone() {
+    let (k, st) = cursor_shape(pt(3.0, 3.0), arrow_cursor());
+    let s = Shape {
+        id: 1,
+        kind: k,
+        style: st,
+    };
+    let (r, img) = render_shape_patch(&s, &test_fonts()).unwrap();
+    let p = img.pixel((3 - r.x) as u32, (3 - r.y) as u32);
+    assert_eq!(p, [0, 0, 0, 255]);
 }

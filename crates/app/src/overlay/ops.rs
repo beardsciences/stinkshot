@@ -87,6 +87,7 @@ impl Overlay {
         for id in self.selected.clone() {
             if let Some(s) = self.doc.get_mut(id) {
                 match &mut s.kind {
+                    ShapeKind::Cursor { .. } => {}
                     ShapeKind::Step { radius, .. } => *radius = shapes::step_radius(self.width),
                     ShapeKind::Highlighter { .. } => s.style.width = (self.width * 4.0).max(14.0),
                     _ => s.style.width = self.width,
@@ -100,13 +101,21 @@ impl Overlay {
 
     /// `[` / `]`: grow or shrink the selected shapes, or the default stroke width.
     pub(super) fn bump_size(&mut self, delta: f32) {
-        if self.selected.is_empty() {
+        // The pointer has no stroke: with only pointers selected, the keys size the pen.
+        let only_cursors = self.selected.iter().all(|id| {
+            self.doc
+                .get(*id)
+                .is_none_or(|s| matches!(s.kind, ShapeKind::Cursor { .. }))
+        });
+        if only_cursors {
             self.width = (self.width + delta).clamp(1.0, 64.0);
             self.remember_tool_style();
         } else {
             let pre = self.doc.clone();
             for id in self.selected.clone() {
-                if let Some(s) = self.doc.get_mut(id) {
+                if let Some(s) = self.doc.get_mut(id)
+                    && !matches!(s.kind, ShapeKind::Cursor { .. })
+                {
                     shapes::adjust_size(s, delta);
                     self.width = s.style.width.clamp(1.0, 64.0);
                 }
@@ -500,12 +509,14 @@ impl Overlay {
             return;
         }
         self.commit_text();
+        self.place_pending_cursor();
         self.combine_regions();
         let Some(sel) = self.sel else { return };
         let base = self.ensure_base();
         let mut doc = self.doc.clone();
         doc.base_width = base.width;
         doc.base_height = base.height;
+        Self::drop_offscreen_cursors(&mut doc);
         let rect = hover::local_to_virtual(sel, self.bounds);
 
         // Beautify frames image exports (never Copy Text), on the worker below.
