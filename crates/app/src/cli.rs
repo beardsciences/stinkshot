@@ -4,6 +4,7 @@
 //!   stinkshot region|window|full|scroll|ocr|repeat|record|gif
 //!                                           trigger in the running instance (starts it if needed)
 //!   stinkshot history|settings              open windows
+//!   stinkshot settings --page help          open Settings on a page (help, about, ...)
 //!   stinkshot full --out <file> [--monitor N] [--cursor]
 //!   stinkshot window --out <file>           (foreground window)  headless: no UI, exits
 //!   stinkshot ocr --file <image>            print recognized text to stdout, exits
@@ -105,7 +106,11 @@ enum Sub {
     /// Open the history window.
     History,
     /// Open the settings window.
-    Settings,
+    Settings {
+        /// Page to open, e.g. help or about.
+        #[arg(long)]
+        page: Option<String>,
+    },
     /// Ask the running instance to exit and wait for it (used by the installer).
     Quit,
     /// Soak test driver commands (`soak` feature builds only).
@@ -129,7 +134,13 @@ fn command_of(sub: &Sub) -> Command {
         Sub::Record => Command::RecordMp4,
         Sub::Gif => Command::RecordGif,
         Sub::History => Command::OpenHistory,
-        Sub::Settings => Command::OpenSettings,
+        Sub::Settings { page } => match page
+            .as_deref()
+            .and_then(crate::settings_ui::Section::from_name)
+        {
+            Some(s) => Command::OpenSettingsAt(s),
+            None => Command::OpenSettings,
+        },
         Sub::Quit => Command::Quit,
         #[cfg(feature = "soak")]
         Sub::Soak { args } => Command::Soak(args.clone()),
@@ -325,6 +336,10 @@ mod tests {
         assert!(matches!(
             command_from_args(&args(&["settings"])),
             Some(Command::OpenSettings)
+        ));
+        assert!(matches!(
+            command_from_args(&args(&["settings", "--page", "help"])),
+            Some(Command::OpenSettingsAt(crate::settings_ui::Section::Help))
         ));
         assert!(matches!(
             command_from_args(&args(&["ocr"])),

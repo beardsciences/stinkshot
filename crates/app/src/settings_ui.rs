@@ -51,6 +51,16 @@ pub enum Section {
     About,
 }
 
+impl Section {
+    /// Page by its name, any case ("help", "About"), for `stinkshot settings --page`.
+    pub fn from_name(name: &str) -> Option<Section> {
+        SECTIONS
+            .iter()
+            .find(|(_, n)| n.eq_ignore_ascii_case(name.trim()))
+            .map(|(s, _)| *s)
+    }
+}
+
 const SECTIONS: [(Section, &str); 9] = [
     (Section::General, "General"),
     (Section::Hotkeys, "Hotkeys"),
