@@ -30,13 +30,14 @@ mod text {
     pub const NOT_SET: &str = "Not Set";
 
     pub const TRAY_TITLE: &str = "It Lives in the Tray";
-    pub const TRAY_BODY: &str = "Click the tray icon to capture. Double-click for History. Right-click for everything else.";
+    pub const TRAY_BODY: &str = "Click the tray icon to capture, double-click for History.";
 
     pub const PRIVACY_TITLE: &str = "Nothing Ever Leaves Your PC";
-    pub const PRIVACY_BODY: &str = "No accounts, no uploads, no telemetry. OCR runs offline. Update checks are off unless you turn them on.";
+    pub const PRIVACY_BODY: &str = "No accounts, uploads or telemetry. Update checks are opt-in.";
 
     pub const FILES_TITLE: &str = "Where Captures Go";
-    pub const FILES_BODY: &str = "Every capture is saved here and listed in History. Change the folder in Settings > History.";
+    pub const FILES_BODY: &str =
+        "Saved here and listed in History. Change it in Settings > History.";
 }
 
 /// Which global hotkeys the first step lists (the rest are in Help).
@@ -211,13 +212,11 @@ impl Surface for TourWindow {
                             ui.spacing_mut().item_spacing.y = 4.0;
                             for (k, v) in &rows {
                                 ui.horizontal(|ui| {
-                                    let (r, _) = ui.allocate_exact_size(
-                                        vec2(if v.is_empty() { 0.0 } else { 150.0 }, 20.0),
-                                        Sense::hover(),
-                                    );
                                     if v.is_empty() {
                                         ui.label(RichText::new(k).size(13.0).color(p.text));
                                     } else {
+                                        let (r, _) = ui
+                                            .allocate_exact_size(vec2(150.0, 20.0), Sense::hover());
                                         ui.painter().text(
                                             r.left_center(),
                                             Align2::LEFT_CENTER,
@@ -330,7 +329,7 @@ mod tests {
     fn bodies_are_short() {
         let cfg = Config::default();
         for s in STEPS {
-            assert!(body(s, &cfg).len() <= 110, "{s:?}");
+            assert!(body(s, &cfg).len() <= 70, "{s:?}");
         }
     }
 

@@ -111,10 +111,11 @@ fn rows_card(ui: &mut Ui, shared: &Shared, rows: &[(String, String)]) {
         .inner_margin(egui::Margin::symmetric(18, 12))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.spacing_mut().item_spacing.y = 4.0;
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.spacing_mut().interact_size.y = 18.0;
             for (key, what) in rows {
                 ui.horizontal(|ui| {
-                    let (r, _) = ui.allocate_exact_size(vec2(key_w, 20.0), Sense::hover());
+                    let (r, _) = ui.allocate_exact_size(vec2(key_w, 18.0), Sense::hover());
                     ui.painter().text(
                         r.left_center(),
                         Align2::LEFT_CENTER,
