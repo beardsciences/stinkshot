@@ -1183,6 +1183,23 @@ impl Surface for TrimWindow {
                     ui.scope_id().with(("trim_handle", handle as u8)),
                     Sense::drag(),
                 );
+                // Keyboard: Tab focuses a handle and the arrows then move it (the arrow keys
+                // act on `self.active`), instead of moving focus on.
+                if resp.has_focus() {
+                    active = handle;
+                    ui.memory_mut(|m| {
+                        m.set_focus_lock_filter(
+                            resp.id,
+                            egui::EventFilter {
+                                horizontal_arrows: true,
+                                ..Default::default()
+                            },
+                        )
+                    });
+                }
+                let at = if handle == Handle::In { start } else { end };
+                resp.widget_info(|| egui::WidgetInfo::slider(true, at, ""));
+                crate::a11y::focus_ring(&resp);
                 let lit = resp.hovered() || resp.dragged();
                 painter.rect_filled(
                     hr,

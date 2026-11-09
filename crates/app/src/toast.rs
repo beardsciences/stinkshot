@@ -418,6 +418,7 @@ impl Surface for Toast {
                 vec2(DISMISS, DISMISS),
             );
             let dr = ui.interact(dismiss_rect, ui.scope_id().with("dismiss"), Sense::click());
+            crate::a11y::role(&dr, egui::accesskit::Role::Button);
             if dr.hovered() {
                 ui.painter().rect_filled(
                     dismiss_rect,
@@ -444,6 +445,7 @@ impl Surface for Toast {
                 );
                 header_left = r.left();
                 let resp = ui.interact(r, ui.scope_id().with(a.label()), Sense::click());
+                crate::a11y::describe(&resp, egui::accesskit::Role::Button, a.label(), None);
                 if resp.hovered() {
                     ui.painter().rect_filled(
                         r,

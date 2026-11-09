@@ -469,6 +469,7 @@ impl Surface for SettingsWindow {
                 y += 38.0;
                 let resp = ui.interact(r, ui.scope_id().with(("nav", name)), Sense::click());
                 let selected = sec == section;
+                crate::a11y::describe(&resp, egui::accesskit::Role::Tab, name, Some(selected));
                 if selected {
                     ui.painter().rect_filled(
                         r,
@@ -701,6 +702,7 @@ fn swatch_row(ui: &mut Ui, colors: &[String], selected: &str, ring: Color32) -> 
         };
         let (r, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
         let is_sel = hex.eq_ignore_ascii_case(selected);
+        crate::a11y::describe(&resp, egui::accesskit::Role::RadioButton, hex, Some(is_sel));
         ui.painter()
             .rect_filled(r.shrink(3.0), CornerRadius::same(13), c);
         if is_sel {

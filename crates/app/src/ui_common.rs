@@ -430,6 +430,7 @@ pub fn rect_button(
         Sense::hover()
     };
     let resp = ui.interact(rect, ui.scope_id().with(id), sense);
+    crate::a11y::describe(&resp, egui::accesskit::Role::Button, text, None);
     let dark = p.text == theme::DARK.text;
     let hover_t = ui.ctx().animate_bool_with_time(
         resp.id.with("stinkshot.hover"),
@@ -575,6 +576,7 @@ pub fn sidebar_link(
         ui.scope_id().with(("sidebar_link", label)),
         Sense::click(),
     );
+    crate::a11y::describe(&resp, egui::accesskit::Role::Link, label, None);
     let t = ui
         .ctx()
         .animate_bool_with_time(resp.id, resp.hovered(), 0.1);
