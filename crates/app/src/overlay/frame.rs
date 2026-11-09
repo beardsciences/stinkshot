@@ -842,7 +842,7 @@ impl Overlay {
                 if self.annotating() {
                     parts.push(keys::tool_name(self.tool).to_string());
                 }
-                parts.push(format!("{} by {}", s.w, s.h));
+                parts.push(tr!("overlay.a11y.size", w = s.w, h = s.h));
             }
             None => parts.extend(items.iter().map(|(k, a)| format!("{k}: {a}"))),
         }

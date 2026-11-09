@@ -263,6 +263,7 @@ pub fn get(key: &str) -> Option<&'static str> {
         "overlay.redact.kind.ip" => "IP Address",
         "overlay.redact.kind.secret" => "Key or Token",
         "overlay.redact.kind.password" => "Password",
+        "overlay.a11y.size" => "{w} by {h}",
         _ => return None,
     })
 }
@@ -510,4 +511,5 @@ pub const KEYS: &[&str] = &[
     "overlay.redact.kind.ip",
     "overlay.redact.kind.secret",
     "overlay.redact.kind.password",
+    "overlay.a11y.size",
 ];

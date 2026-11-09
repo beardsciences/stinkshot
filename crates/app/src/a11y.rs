@@ -155,11 +155,12 @@ pub fn item_name(m: &stinkshot_history::ItemMeta) -> String {
         .map(str::to_owned)
         .or_else(|| m.path.file_name().map(|f| f.to_string_lossy().into_owned()))
         .unwrap_or_default();
-    format!(
-        "{source}, {} by {}, {}",
-        m.width,
-        m.height,
-        m.created.format("%b %-d %H:%M")
+    crate::l10n::tr!(
+        "shell.a11y.item",
+        source = source,
+        w = m.width,
+        h = m.height,
+        date = m.created.format("%b %-d %H:%M")
     )
 }
 
