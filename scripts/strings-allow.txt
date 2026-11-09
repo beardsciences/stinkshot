@@ -1,0 +1,13 @@
+# Literals the hard-coded string checker (crates/app/tests/check_strings.rs) ignores
+# everywhere: product names, file formats and other text that is never translated.
+# One exact literal per line. For a one-off, put `// l10n-ok` on the line instead.
+Stinkshot
+PNG
+JPEG
+JPG
+GIF
+MP4
+WebP
+BMP
+OCR
+HDR
