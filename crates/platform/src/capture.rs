@@ -1646,34 +1646,24 @@ pub fn capture_window(hwnd: Hwnd, opts: &WindowCaptureOpts) -> anyhow::Result<Rg
 }
 
 /// When a WGC attempt hangs (observed: `CreateCaptureSession` never returning on some
-/// systems), skip WGC for a while instead of making every capture wait for the timeout.
-static WGC_HUNG_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
-const WGC_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(300);
+/// systems), skip WGC while that helper thread is still blocked and for a while after, instead
+/// of making every capture wait for the timeout and leave one more blocked thread behind.
+static WGC_GATE: crate::hang::HangGate =
+    crate::hang::HangGate::new(std::time::Duration::from_secs(300));
 
 /// Run WGC on a private MTA thread: the caller's apartment (UI thread = STA) is irrelevant
 /// and a window that never delivers a frame costs this call at most `WGC_TIMEOUT`.
 fn wgc_with_timeout(hwnd: Hwnd, include_cursor: bool) -> anyhow::Result<Rgba> {
-    {
-        let hung = WGC_HUNG_AT.lock().unwrap_or_else(|p| p.into_inner());
-        if hung.is_some_and(|t| t.elapsed() < WGC_COOLDOWN) {
-            anyhow::bail!("Windows.Graphics.Capture disabled after an earlier hang");
-        }
-    }
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::Builder::new()
-        .name("stinkshot-wgc".into())
-        .spawn(move || {
-            crate::util::ensure_com();
-            let _ = tx.send(wgc_capture(HWND(hwnd as *mut _), include_cursor));
-        })
-        .map_err(|e| anyhow::anyhow!("spawn capture thread: {e}"))?;
-    match rx.recv_timeout(WGC_TIMEOUT) {
+    match WGC_GATE.run("stinkshot-wgc", WGC_TIMEOUT, move || {
+        crate::util::ensure_com();
+        wgc_capture(HWND(hwnd as *mut _), include_cursor)
+    }) {
         Ok(r) => r,
-        Err(_) => {
-            *WGC_HUNG_AT.lock().unwrap_or_else(|p| p.into_inner()) =
-                Some(std::time::Instant::now());
-            anyhow::bail!("Windows.Graphics.Capture timed out")
+        Err(crate::hang::Hang::Skipped(why)) => {
+            anyhow::bail!("Windows.Graphics.Capture skipped ({why})")
         }
+        Err(crate::hang::Hang::TimedOut) => anyhow::bail!("Windows.Graphics.Capture timed out"),
+        Err(e) => anyhow::bail!("Windows.Graphics.Capture: {e}"),
     }
 }
 

@@ -95,6 +95,9 @@ pub enum Command {
     /// Tray icon double click: History. Drops the overlay the first click just opened. Also
     /// sent by that overlay when the second click lands on it instead of the icon.
     TrayDoubleClick,
+    /// Soak test driver command (`stinkshot soak ...`, `soak` feature only).
+    #[cfg(feature = "soak")]
+    Soak(Vec<String>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

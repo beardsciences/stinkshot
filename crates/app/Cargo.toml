@@ -12,6 +12,11 @@ build = "build.rs"
 name = "stinkshot"
 path = "src/main.rs"
 
+[features]
+# Hidden `stinkshot soak ...` IPC commands for the soak and leak test
+# (C:\dev\stinkshot-bench\soak). Never enabled in release builds.
+soak = []
+
 [dependencies]
 stinkshot-core.workspace = true
 stinkshot-stitch.workspace = true

@@ -69,6 +69,9 @@ use crate::workers::{
 };
 use crate::{logger, sysutil, timing, wake};
 
+#[cfg(feature = "soak")]
+pub(crate) mod soak;
+
 const ROOT_TITLE: &str = "StinkShot.Root";
 const MAX_TOASTS: usize = 6;
 /// How long Quit waits for recordings, exports and saves in flight before closing anyway.
@@ -758,6 +761,8 @@ struct Shell {
     /// The start-up freeze's GDI window, shown until the region overlay is up
     /// (`settle_quick_overlay`).
     quick_overlay: Option<(QuickOverlay, Instant)>,
+    #[cfg(feature = "soak")]
+    soak: soak::SoakState,
     _guard: InstanceGuard,
 }
 
@@ -918,6 +923,8 @@ impl Shell {
             overlays_opened: 0,
             early_freeze,
             quick_overlay: None,
+            #[cfg(feature = "soak")]
+            soak: Default::default(),
             _guard: guard,
         };
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
@@ -1165,6 +1172,8 @@ impl Shell {
                 }
             }
             Command::TrayDoubleClick => self.tray_double_click(),
+            #[cfg(feature = "soak")]
+            Command::Soak(args) => self.soak(args),
             Command::OpenUrl(url) => {
                 if !(url.starts_with("https://") || url.starts_with("http://")) {
                     log::warn!("refusing to open non-web URL");
@@ -1572,6 +1581,12 @@ impl Shell {
 
     // ------------------------------------------------------- region follow-ups
 
+    /// Wheel sink for a scrolling capture starting now (`soak` builds can redirect it).
+    #[cfg(not(feature = "soak"))]
+    fn next_wheel(&mut self) -> workers::Wheel {
+        workers::Wheel::Input
+    }
+
     fn region_chosen(&mut self, purpose: RegionPurpose, rect: PxRect, source: SourceInfo) {
         match purpose {
             // The picker copies inside the overlay and never chooses a region.
@@ -1608,7 +1623,7 @@ impl Shell {
                     control: control.clone(),
                 });
                 self.scroll_hud = Some(Slot::new(ScrollHud::new(rect)));
-                workers::scroll_capture(&self.env(), rect, source, control);
+                workers::scroll_capture(&self.env(), rect, source, control, self.next_wheel());
                 self.touch();
             }
             RegionPurpose::RecordMp4 | RegionPurpose::RecordGif => {
@@ -1970,10 +1985,18 @@ impl Shell {
                 self.scroll = None;
                 self.scroll_hud = None;
                 self.touch();
+                #[cfg(feature = "soak")]
+                let quick = std::mem::take(&mut self.soak.quick_scroll);
+                #[cfg(not(feature = "soak"))]
+                let quick = false;
                 if cancelled {
                     return;
                 }
                 match result {
+                    Ok(img) if quick => {
+                        let rect = PxRect::new(0, 0, img.width as i32, img.height as i32);
+                        self.finish_quick(img, rect, source, "scrolling");
+                    }
                     Ok(img) => {
                         if partial {
                             self.notify(
@@ -2672,6 +2695,8 @@ impl eframe::App for Shell {
         self.apply_config();
         self.housekeeping();
         self.settle_quick_overlay();
+        #[cfg(feature = "soak")]
+        self.soak_write_state();
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

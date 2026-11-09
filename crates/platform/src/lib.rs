@@ -12,6 +12,7 @@ pub mod clipboard;
 pub mod display_power;
 pub mod dpi;
 pub mod files;
+pub mod hang;
 pub mod hdr;
 pub mod input;
 pub mod monitors;

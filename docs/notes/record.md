@@ -249,7 +249,10 @@ noisy (A/V offset -8..+64 ms).
   WARP devices, STA and MTA). Because of that the WGC path is written against the API docs/sources but
   was **not exercised end to end**. `Capturer::new` creates WGC sessions on a helper thread with a 3 s
   timeout and then falls back to DXGI Desktop Duplication, which is what all desktop tests used here.
-  After one failure the process skips WGC for later recordings (so only the first start pays 3 s).
+  After a hang the process skips WGC for later recordings while that helper is still blocked and
+  for 5 minutes after (`stinkshot_platform::hang::HangGate`), so only the first start pays 3 s and
+  a hung WGC costs one blocked thread per process (it cost one per recording every 5 minutes
+  before the Nov 8 soak test; docs/notes/platform.md, "Soak test").
   The Desktop Duplication fallback cannot include the mouse cursor (`include_cursor` is ignored there),
   duplicates only monitors on a single GPU, and ignores rotated outputs.
 - No device-change handling for audio (the default render device is bound at start).

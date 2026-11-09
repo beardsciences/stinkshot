@@ -602,7 +602,33 @@ pub const SCROLL_RUN: u8 = 0;
 pub const SCROLL_STOP: u8 = 1;
 pub const SCROLL_CANCEL: u8 = 2;
 
-pub fn scroll_capture(env: &Env, rect: PxRect, source: SourceInfo, control: Arc<AtomicU8>) {
+/// Where a scrolling capture sends its wheel notches.
+#[derive(Clone, Copy, Debug)]
+pub enum Wheel {
+    /// System input at the region's center (`input::scroll_at`): the real path.
+    Input,
+    /// `WM_MOUSEWHEEL` posted to this window only (soak test window, no system input).
+    #[cfg(feature = "soak")]
+    Post(stinkshot_platform::Hwnd),
+}
+
+impl Wheel {
+    fn send(self, center: stinkshot_core::PxPoint, notches: i32) {
+        match self {
+            Wheel::Input => input::scroll_at(center, notches),
+            #[cfg(feature = "soak")]
+            Wheel::Post(hwnd) => crate::shell::soak::post_wheel(hwnd, center, notches),
+        }
+    }
+}
+
+pub fn scroll_capture(
+    env: &Env,
+    rect: PxRect,
+    source: SourceInfo,
+    control: Arc<AtomicU8>,
+    wheel: Wheel,
+) {
     job_recovering(
         env,
         "scroll-capture",
@@ -624,7 +650,7 @@ pub fn scroll_capture(env: &Env, rect: PxRect, source: SourceInfo, control: Arc<
                 &mut stitcher,
                 &DriveParams::new(rect.h as f32 / scale, delay),
                 || capture::capture_rect(rect, false).map_err(|e| format!("{e:#}")),
-                |notches| input::scroll_at(center, notches),
+                |notches| wheel.send(center, notches),
                 || match control.load(Ordering::Relaxed) {
                     SCROLL_CANCEL => DriveControl::Cancel,
                     SCROLL_STOP => DriveControl::Stop,

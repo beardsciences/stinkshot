@@ -573,6 +573,15 @@ impl HistoryWindow {
         w
     }
 
+    /// Soak test: search for `text` as if it had been typed and the debounce had passed.
+    #[cfg(feature = "soak")]
+    pub fn soak_search(&mut self, text: &str) {
+        self.search = text.to_string();
+        self.applied_search = text.to_string();
+        self.limit = PAGE;
+        self.dirty = true;
+    }
+
     /// Shell calls this after history changes (new capture, OCR finished) to refresh.
     pub fn invalidate(&mut self) {
         self.dirty = true;

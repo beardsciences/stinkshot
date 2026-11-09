@@ -108,6 +108,13 @@ enum Sub {
     Settings,
     /// Ask the running instance to exit and wait for it (used by the installer).
     Quit,
+    /// Soak test driver commands (`soak` feature builds only).
+    #[cfg(feature = "soak")]
+    #[command(hide = true)]
+    Soak {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 fn command_of(sub: &Sub) -> Command {
@@ -124,6 +131,8 @@ fn command_of(sub: &Sub) -> Command {
         Sub::History => Command::OpenHistory,
         Sub::Settings => Command::OpenSettings,
         Sub::Quit => Command::Quit,
+        #[cfg(feature = "soak")]
+        Sub::Soak { args } => Command::Soak(args.clone()),
     }
 }
 
@@ -270,6 +279,17 @@ mod tests {
 
     fn cli(a: &[&str]) -> Cli {
         Cli::try_parse_from(std::iter::once("stinkshot").chain(a.iter().copied())).unwrap()
+    }
+
+    /// The soak test driver's commands exist only in `--features soak` builds.
+    #[test]
+    #[cfg(not(feature = "soak"))]
+    fn soak_commands_are_not_in_normal_builds() {
+        assert!(command_from_args(&args(&["soak", "window", "1"])).is_none());
+        assert!(
+            Cli::try_parse_from(["stinkshot", "soak", "search", "x"]).is_err(),
+            "soak must not parse"
+        );
     }
 
     #[test]

@@ -256,8 +256,11 @@ What is left: the D3D11 device itself (about 52 MB, driver) and, while warm, the
   found. The WGC code path (`wgc_capture`) is complete (frame pool, cursor/border flags, staging
   copy, premultiplied alpha fix) but **could not be verified end to end here**.
 - Because of that, `capture_window` falls back to `PrintWindow(PW_RENDERFULLCONTENT)` on any WGC
-  failure or timeout, and remembers a hang for 5 minutes so later calls skip WGC immediately
-  (`Windows.Graphics.Capture disabled after an earlier hang` in the log). The fallback captures
+  failure or timeout. The call runs through `hang::HangGate`: while a timed-out helper thread
+  is still blocked, and for 5 minutes after a hang, later calls skip WGC immediately
+  (`Windows.Graphics.Capture skipped (...)` in the log). Before the soak test (Nov 8) only the
+  5-minute cooldown existed, so every capture after it started one more thread that never
+  returned (see "Soak test" below). The fallback captures
   occluded windows, crops to the DWM frame, and applies Win11 rounded-corner alpha (8 px at
   100% scale, anti-aliased) for non-maximized windows. This was verified visually (the Podman
   Desktop window came out correct and complete while partially covered).

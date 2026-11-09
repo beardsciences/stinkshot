@@ -6,13 +6,13 @@
 //! cannot create a session (it errors, or on some systems simply never answers; session
 //! creation therefore runs on a helper thread with a timeout).
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use stinkshot_core::PxRect;
+use stinkshot_platform::hang::{Hang, HangGate};
 use stinkshot_platform::{capture, dpi, hdr};
 use windows::Foundation::TimeSpan;
 use windows::Graphics::Capture::{
@@ -43,11 +43,11 @@ use crate::mf::{ComGuard, SendCom};
 /// How long WGC gets to create its sessions before we fall back to Desktop Duplication.
 const WGC_INIT_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// When WGC session creation last hung. A hang (not an ordinary error, which may be
-/// transient such as a display reconfiguration) makes later recordings skip the wait for a
-/// while.
-static WGC_HUNG_AT: Mutex<Option<Instant>> = Mutex::new(None);
-const WGC_COOLDOWN: Duration = Duration::from_secs(300);
+/// WGC session creation hangs (not ordinary errors, which may be transient such as a display
+/// reconfiguration): while a hung helper is still blocked, and for a while after, recordings
+/// skip WGC instead of waiting for the timeout and leaving one more blocked thread (with its
+/// D3D11 device) behind each time.
+static WGC_GATE: HangGate = HangGate::new(Duration::from_secs(300));
 
 /// Consecutive duplicated frames in an unsupported pixel format before giving up.
 const MAX_BAD_FORMAT_FRAMES: u32 = 30;
@@ -345,15 +345,7 @@ impl Capturer {
         if plan.is_empty() {
             bail!("region {region:?} does not intersect any monitor");
         }
-        let recently_hung = WGC_HUNG_AT
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .is_some_and(|t| t.elapsed() < WGC_COOLDOWN);
-        let wgc = if recently_hung {
-            Err(anyhow!("WGC hung earlier in this process"))
-        } else {
-            Self::new_wgc_with_timeout(region, &plan, include_cursor, fps)
-        };
+        let wgc = Self::new_wgc_with_timeout(region, &plan, include_cursor, fps);
         match wgc {
             Ok(c) => Ok(c),
             Err(wgc_err) => {
@@ -372,28 +364,22 @@ impl Capturer {
         include_cursor: bool,
         fps: u32,
     ) -> Result<Capturer> {
-        let (tx, rx) = mpsc::channel::<Result<SendCom<Capturer>, String>>();
         let plan = plan.clone();
-        std::thread::Builder::new()
-            .name("record-wgc-init".into())
-            .spawn(move || {
-                let _com = ComGuard::new();
-                let r = Self::new_wgc(region, &plan, include_cursor, fps)
-                    .map(SendCom)
-                    .map_err(|e| format!("{e:#}"));
-                let _ = tx.send(r);
-            })
-            .context("spawn WGC init thread")?;
-        match rx.recv_timeout(WGC_INIT_TIMEOUT) {
+        let r = WGC_GATE.run("record-wgc-init", WGC_INIT_TIMEOUT, move || {
+            let _com = ComGuard::new();
+            Self::new_wgc(region, &plan, include_cursor, fps)
+                .map(SendCom)
+                .map_err(|e| format!("{e:#}"))
+        });
+        match r {
             Ok(Ok(c)) => Ok(c.0),
             Ok(Err(e)) => Err(anyhow!(e)),
-            // The helper thread stays blocked inside the OS call; it holds nothing we need.
-            Err(_) => {
-                *WGC_HUNG_AT.lock().unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
-                Err(anyhow!(
-                    "WGC session creation did not complete within {WGC_INIT_TIMEOUT:?}"
-                ))
-            }
+            // A timed-out helper stays blocked inside the OS call; it holds nothing we need.
+            Err(Hang::TimedOut) => Err(anyhow!(
+                "WGC session creation did not complete within {WGC_INIT_TIMEOUT:?}"
+            )),
+            Err(Hang::Skipped(why)) => Err(anyhow!("WGC skipped ({why})")),
+            Err(e) => Err(anyhow!("WGC init: {e}")),
         }
     }
 
