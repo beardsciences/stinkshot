@@ -129,8 +129,11 @@ pub fn sheet(select_only: bool) -> Sheet {
             "Space+Drag".to_string(),
             "Pan (Editor or Zoomed), Otherwise Move the Selection",
         ),
-        ("Arrows".to_string(), "Nudge 1 px, Shift 10 px"),
-        ("Ctrl+Arrows".to_string(), "Resize the Selection"),
+        // Keyboard-only selection (`Overlay::handle_keys`): arrows start a region when none
+        // exists, then move it; Enter confirms, Esc cancels.
+        ("Arrows".to_string(), "Start or Move the Selection"),
+        ("Shift+Arrows".to_string(), "Resize the Selection"),
+        ("Ctrl+Arrows".to_string(), "10 px Steps"),
         (
             COPY_COLOR.label.to_string(),
             "Copy the Color Under the Cursor",

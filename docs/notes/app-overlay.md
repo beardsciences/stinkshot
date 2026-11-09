@@ -10,8 +10,9 @@ All three modes of `OverlayMode`:
   -> window, falls back to `windows_enum::window_at` over `req.windows`, then the monitor rect),
   click snaps, drag draws a free region (Space moves the region while dragging, Shift forces
   1:1, a chosen aspect preset constrains it). Selected state has 8 handles, Space+drag or
-  Select-tool drag on empty space moves, arrows nudge 1 px (Shift 10 px, Ctrl resizes the
-  right/bottom edge), size label + presets chip (Free, 16:9, 4:3, 1:1, Exact W x H input),
+  Select-tool drag on empty space moves, arrows move the region 1 px (Shift+arrows resize
+  the right/bottom edge, Ctrl makes either 10 px; shapes keep Shift = 10 px). Arrows with
+  no region start one (keyboard-only path, see accessibility.md), size label + presets chip (Free, 16:9, 4:3, 1:1, Exact W x H input),
   tool bar and action bar placed per `selection::layout_bars` (below, else above, else inside;
   stacked when too wide for the monitor).
 - **SelectRegion(purpose)**: no annotation bars. The purpose label ("Select area to record",
@@ -179,7 +180,7 @@ stubs).
 2. Hover a window, a button inside it, then wheel up/down: highlight cycles element -> parent
    -> window. Click captures the highlighted rect.
 3. Drag a region spanning two monitors; size label shows physical px; handles resize; Space
-   moves; arrows nudge; Shift+arrows 10 px; Ctrl+arrows resize.
+   moves; arrows move; Shift+arrows resize; Ctrl+arrows 10 px steps.
 4. Presets: 16:9, 4:3, 1:1 snap the rect and constrain further resizes; Exact accepts
    "1280x720", Enter applies, Esc closes.
 5. Loupe: 11x11 grid, coordinates are virtual-desktop px, hex matches the pixel (check against
