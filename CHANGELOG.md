@@ -37,8 +37,12 @@ First public release.
   and `stinkshot quit` for installers and scripts.
 - Per-user installer (no admin) and a portable zip.
 - Opt-in update check that only trusts release info signed with the project's minisign key.
-- TODO: accessibility (screen reader names, keyboard navigation, high contrast), first-run
-  tour, in-app help and localization. Replace with what the merged tracks actually ship.
+- Accessibility: Narrator and other screen readers can read and use every window, the capture
+  overlay can be driven by keyboard alone (arrows start, move and resize a selection),
+  Windows contrast themes are followed, and most text follows the Windows text size.
+- A short first-run tour (Settings > About > Show Tour reopens it) and an offline Help page
+  listing every hotkey and editor shortcut.
+- All UI text is ready for translation. English is the only language so far.
 
 ### Fixed
 
