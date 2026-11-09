@@ -48,6 +48,7 @@ impl Overlay {
         self.poll_render(ctx);
         self.poll_smart_redact(shared);
         self.poll_scan();
+        self.poll_select_text(ctx, shared);
         if self.finishing.is_some() {
             self.poll_finish(ctx, shared);
         } else {
@@ -710,6 +711,7 @@ impl Overlay {
             self.paint_smart_findings(&clip, m, accent);
             self.paint_scan_codes(&clip, m, accent);
             self.paint_ruler(&painter.with_clip_rect(screen), m, accent);
+            self.paint_text_select(&clip, m, accent);
 
             let measure = self.measurer();
             if self.edit.is_none() {
@@ -797,6 +799,13 @@ impl Overlay {
                         }
                     };
                     paint_shape(painter, m, &Shape { id: 0, kind, style }, false);
+                }
+                Tool::Text => {
+                    // The box being drawn: its width, at least one line tall.
+                    let line = self.font_size * stinkshot_core::fonts::LINE_HEIGHT;
+                    let r = RectF::from_points(*a, *cur);
+                    let r = RectF::new(r.x, r.y, r.w, r.h.max(line));
+                    dashed_rect(painter, m.r(r), Color32::WHITE);
                 }
                 Tool::Magnifier => {
                     dashed_rect(painter, m.r(RectF::from_points(*a, *cur)), Color32::WHITE);
@@ -895,6 +904,18 @@ impl Overlay {
         if self.scan.is_some() || self.beautify_open {
             return vec![close_panel, help];
         }
+        if self.select_text_active() {
+            if self.select_text_reading() {
+                return vec![("", tr!("overlay.select_text.reading")), help];
+            }
+            return vec![
+                (drag, tr!("overlay.hint.select_words")),
+                (keys::SELECT_ALL.label, tr!("overlay.hint.select_all")),
+                (keys::COPY.label, tr!("overlay.hint.copy_text")),
+                ("Esc", tr!("overlay.hint.deselect")),
+                help,
+            ];
+        }
         if self.annotating() && self.sel.is_some() && self.tool == Tool::Measure {
             return vec![
                 (drag, tr!("overlay.hint.measure")),
@@ -942,7 +963,7 @@ impl Overlay {
                 help,
             ];
         }
-        match (self.sel.is_some(), self.kind) {
+        let mut items = match (self.sel.is_some(), self.kind) {
             (false, _) => vec![
                 (drag, tr!("overlay.hint.region")),
                 (click, tr!("overlay.keys.window_or_element")),
@@ -980,7 +1001,12 @@ impl Overlay {
                 esc,
                 help,
             ],
+        };
+        // A region snapped to an element stays on its window; Alt frees it.
+        if self.tool == Tool::Select && self.active_tie().is_some() {
+            items.insert(items.len() - 2, ("Alt", tr!("overlay.hint.free_resize")));
         }
+        items
     }
 
     /// The context bar for the text being typed or the one selected arrow / text.
@@ -1381,6 +1407,7 @@ impl Overlay {
                 );
                 ui::context_bar(ctx, anchor, mon_pt, bar, pal, actions);
             }
+            self.select_text_bar(ctx, ppp, pal);
         }
 
         // Loupe (and the eyedropper's).

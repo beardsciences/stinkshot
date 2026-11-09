@@ -875,6 +875,8 @@ pub enum Icon {
     Qr,
     /// Beautify panel.
     Frame,
+    /// Select Text tool: an I-beam over highlighted text lines.
+    SelectText,
 }
 
 /// Icon vector data (24x24 design grid, stroke 1.8) and the painter that draws it.
@@ -985,6 +987,11 @@ mod icons {
                 FillRect(17.5, 17.5, 2.5, 2.5, 0.0),
                 FillRect(17.5, 14.0, 2.5, 2.5, 0.0),
                 FillRect(14.0, 17.5, 2.5, 2.5, 0.0),
+            ],
+            Icon::SelectText => &[
+                Path("M4 7h9M4 12h6M4 17h9"),
+                SoftRect(11.5, 9.5, 9.0, 5.0, 1.0),
+                Path("M16 4v16M14 4h4M14 20h4"),
             ],
             Icon::Frame => &[
                 SoftRect(3.0, 3.0, 18.0, 18.0, 3.0),

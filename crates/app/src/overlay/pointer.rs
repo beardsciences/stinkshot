@@ -6,6 +6,9 @@ use super::selection::{hit_handle, px_to_f, resize_px_rect};
 use super::shapes::ShapeHandle;
 use super::*;
 
+/// A Text tool drag at least this wide (screen points) draws a fixed box.
+const TEXT_BOX_MIN_PT: f32 = 12.0;
+
 fn dist2(a: (f32, f32), b: (f32, f32)) -> f32 {
     ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt()
 }
@@ -64,6 +67,18 @@ impl Overlay {
             Drag::Marquee { start, cur, .. } => Some(RectF::from_points(*start, *cur)),
             _ => None,
         }
+    }
+
+    /// The tie of the region a drag started from (`selection::SnapTie`); None with Alt.
+    fn tie_for(&self, start_sel: PxRect, alt: bool) -> Option<selection::SnapTie> {
+        if alt || !matches!(self.kind, Kind::Capture) {
+            return None;
+        }
+        self.snap_ties
+            .iter()
+            .rev()
+            .find(|t| t.region == start_sel)
+            .cloned()
     }
 
     /// Edges and centres the dragged shapes snap to: the other shapes and the image.
@@ -262,6 +277,13 @@ impl Overlay {
             self.magnifier_cursor = Some(self.to_image(p));
         }
         self.hover_handle = self.handle_under(p, ppp);
+        if self.select_text_active() {
+            let on_word = self.select_text_hover(p);
+            if !on_word {
+                ctx.set_cursor_icon(CursorIcon::Default);
+                return;
+            }
+        }
         ctx.set_cursor_icon(self.cursor_for(p, ppp));
     }
 
@@ -384,6 +406,11 @@ impl Overlay {
             self.snap_level = lvl;
             hover::virtual_to_local(r, self.bounds)
         });
+        // The chain the highlight belongs to, for tying a clicked region to it.
+        self.hover_chain = hover::valid_snap_indices(&rects, abs)
+            .into_iter()
+            .filter_map(|i| hover::virtual_to_local(rects[i], self.bounds))
+            .collect();
         // Name the highlighted element once the user starts wheel-cycling, so it is clear
         // which parent is selected.
         let valid = hover::valid_snap_indices(&rects, abs);
@@ -426,6 +453,7 @@ impl Overlay {
                 }
             }
             Tool::Text if inside => CursorIcon::Text,
+            Tool::SelectText if inside => CursorIcon::Text,
             _ if inside => CursorIcon::Crosshair,
             _ if self.can_start_region() => CursorIcon::Crosshair,
             _ => CursorIcon::Default,
@@ -592,6 +620,10 @@ impl Overlay {
         };
 
         match self.tool {
+            Tool::SelectText if inside || matches!(self.kind, Kind::Annotate) => {
+                self.selected.clear();
+                self.select_text_press(p, inp.shift);
+            }
             Tool::Measure if inside || matches!(self.kind, Kind::Annotate) => {
                 self.selected.clear();
                 let a = self.ruler_point(p, inp.alt);
@@ -669,11 +701,18 @@ impl Overlay {
                     {
                         e.caret = Caret::at(i);
                     }
+                    self.drag = Drag::Ignore;
                 } else {
-                    let (kind, style) = shapes::new_text(self.clamp_image(img), &self.params());
-                    self.create_textual(kind, style);
+                    // Created on release: a click sizes itself, a drag draws a fixed box.
+                    let a = self.clamp_image(img);
+                    self.selected.clear();
+                    self.drag = Drag::Draw {
+                        tool: Tool::Text,
+                        a,
+                        cur: a,
+                        points: vec![a],
+                    };
                 }
-                self.drag = Drag::Ignore;
             }
             Tool::Step => {
                 let style = shapes::style_for_tool(Tool::Step, &self.params().style);
@@ -739,6 +778,13 @@ impl Overlay {
         let drag = std::mem::replace(&mut self.drag, Drag::None);
         match drag {
             Drag::None | Drag::Ignore | Drag::Pan { .. } => {}
+            Drag::SelectWords => {
+                self.select_text_drag(p);
+                ctx.set_cursor_icon(CursorIcon::Text);
+                if !inp.released && inp.down {
+                    self.drag = Drag::SelectWords;
+                }
+            }
             Drag::Measure { a } => {
                 let mut b = self.ruler_point(p, inp.alt);
                 if inp.shift {
@@ -802,6 +848,7 @@ impl Overlay {
                         }
                     } else if let Some(h) = self.hover {
                         self.accept_region(h, shared);
+                        self.tie_to_hover();
                     }
                     self.cancel_add();
                 } else {
@@ -815,24 +862,44 @@ impl Overlay {
             }
             Drag::MoveSel { start_sel, start } => {
                 let (dx, dy) = round_pt((p.0 - start.0, p.1 - start.1));
-                self.set_sel(selection::move_rect(start_sel, dx, dy, self.sel_bounds()));
+                // A region snapped to an element stays on its window (Alt: anywhere).
+                let tie = self.tie_for(start_sel, inp.alt);
+                let new = match &tie {
+                    Some(t) => t.move_by(start_sel, dx, dy, self.sel_bounds()),
+                    None => selection::move_rect(start_sel, dx, dy, self.sel_bounds()),
+                };
+                self.set_sel(new);
                 ctx.set_cursor_icon(CursorIcon::Grabbing);
                 if !inp.released {
                     self.drag = Drag::MoveSel { start_sel, start };
+                } else {
+                    self.retie(start_sel, new);
                 }
             }
             Drag::ResizeSel { handle, start_sel } => {
-                let new = resize_px_rect(
-                    start_sel,
-                    handle,
-                    round_pt(p),
-                    self.sel_bounds(),
-                    self.effective_aspect(inp.shift),
-                );
+                let aspect = self.effective_aspect(inp.shift);
+                // A region snapped to an element grows at most to its root (the window or
+                // the taskbar) and its edges snap to the element chain (Alt: free).
+                let tol = self.pt_to_canvas(snap::SNAP_PT, ppp).round() as i32;
+                let new = match self.tie_for(start_sel, inp.alt) {
+                    Some(t) => t.resize(
+                        start_sel,
+                        handle,
+                        round_pt(p),
+                        self.sel_bounds(),
+                        aspect,
+                        tol,
+                    ),
+                    None => {
+                        resize_px_rect(start_sel, handle, round_pt(p), self.sel_bounds(), aspect)
+                    }
+                };
                 self.set_sel(new);
                 ctx.set_cursor_icon(handle_cursor(handle));
                 if !inp.released {
                     self.drag = Drag::ResizeSel { handle, start_sel };
+                } else {
+                    self.retie(start_sel, new);
                 }
             }
             Drag::Draw {
@@ -842,6 +909,7 @@ impl Overlay {
                 mut points,
             } => {
                 let mut ip = self.clamp_image(self.to_image(p));
+                let raw = ip;
                 self.guides.clear();
                 let freehand = matches!(tool, Tool::Pen | Tool::Highlighter);
                 if freehand {
@@ -857,7 +925,15 @@ impl Overlay {
                 ctx.set_cursor_icon(CursorIcon::Crosshair);
                 if inp.released {
                     self.guides.clear();
-                    self.finish_draw(tool, a, ip, points, inp.shift);
+                    if tool == Tool::Text {
+                        // A click (by the raw pointer, not the snapped end) sizes itself.
+                        let min_w = self.pt_to_img(TEXT_BOX_MIN_PT, ppp);
+                        let boxed = shapes::text_box_from_drag(a, raw, min_w)
+                            .and_then(|_| shapes::text_box_from_drag(a, ip, min_w));
+                        self.finish_text_draw(a, boxed);
+                    } else {
+                        self.finish_draw(tool, a, ip, points, inp.shift);
+                    }
                 } else {
                     self.drag = Drag::Draw {
                         tool,
@@ -1042,6 +1118,20 @@ impl Overlay {
                 }
             }
         }
+    }
+
+    /// Text tool release: a new text at the click (auto width), or in the dragged box
+    /// (fixed width, wraps).
+    fn finish_text_draw(&mut self, a: PtF, boxed: Option<(PtF, f32)>) {
+        let (pos, w) = match boxed {
+            Some((pos, w)) => (pos, Some(w)),
+            None => (a, None),
+        };
+        let (mut kind, style) = shapes::new_text(pos, &self.params());
+        if let ShapeKind::Text { width, .. } = &mut kind {
+            *width = w;
+        }
+        self.create_textual(kind, style);
     }
 
     fn finish_draw(&mut self, tool: Tool, a: PtF, cur: PtF, points: Vec<PtF>, shift: bool) {

@@ -314,6 +314,7 @@ mod tests {
             keys::ZOOM_FIT,
             keys::ZOOM_ACTUAL,
             keys::HELP,
+            keys::SELECT_ALL,
         ] {
             assert!(has(c.label), "{} missing", c.label);
         }

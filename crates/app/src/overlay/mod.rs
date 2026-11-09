@@ -49,6 +49,7 @@ mod picker;
 mod pseudo_shots;
 mod render;
 mod scan;
+mod select_text;
 mod selection;
 mod shapes;
 mod smart_redact;
@@ -202,6 +203,8 @@ enum Drag {
     Measure {
         a: PtF,
     },
+    /// Selecting OCR words with the Select Text tool (`select_text.rs`).
+    SelectWords,
 }
 
 struct Finishing {
@@ -320,6 +323,11 @@ pub struct Overlay {
     exact_just_opened: bool,
     exact_text: String,
     hover: Option<PxRect>,
+    /// The element chain `hover` was picked from (canvas px, innermost first), so a click
+    /// can tie the region to it (`selection::SnapTie`).
+    hover_chain: Vec<PxRect>,
+    /// Regions made by clicking a snapped element, tied to its chain (`selection::SnapTie`).
+    snap_ties: Vec<selection::SnapTie>,
     /// Settings > Capture > Snap to Elements, read each frame: the measure tool snaps its
     /// ends to edges when on (Alt flips it either way).
     snap_edges: bool,
@@ -419,6 +427,8 @@ pub struct Overlay {
     beautify_preview: Option<beautify_panel::Preview>,
     /// The Measure tool's ruler ends (image px), shown while the tool is active.
     ruler: Option<(PtF, PtF)>,
+    /// Select Text tool: OCR words of the capture and the selected ones (`select_text.rs`).
+    text_select: Option<select_text::TextSelect>,
     /// Last C (copy color) result, shown in the loupe plate for a moment.
     hex_flash: Option<HexFlash>,
     /// Opened by a tray icon click (see `OverlayRequest::from_tray_click`).
@@ -599,6 +609,8 @@ impl Overlay {
             exact_just_opened: false,
             exact_text: String::new(),
             hover: None,
+            hover_chain: Vec::new(),
+            snap_ties: Vec::new(),
             snap_edges: shared.config.capture.snap_to_elements,
             snap_level: 0,
             snap_sig: None,
@@ -669,6 +681,7 @@ impl Overlay {
             beautify: cfg.beautify.clone(),
             beautify_preview: None,
             ruler: None,
+            text_select: None,
             hex_flash: None,
             from_tray_click,
             tray_double_pending: false,
@@ -1334,6 +1347,9 @@ impl Overlay {
             self.copy_hex(shared);
         }
 
+        if self.select_text_keys(ctx, k) {
+            return;
+        }
         if k.esc {
             self.on_escape(shared);
             return;

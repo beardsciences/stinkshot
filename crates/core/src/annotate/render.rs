@@ -579,11 +579,14 @@ fn draw_shape(pm: &mut Pixmap, shape: &Shape, fonts: &Fonts, magnifier_src: Opti
             size,
             background,
             bold,
+            width,
         } => {
             let size = size.max(1.0);
+            // Same line breaks as `text_layout` (the editor's caret) and `text_rect`.
+            let shown = super::shown_text(text, *width, |s| fonts.line_width(s, size, *bold));
             match background {
                 Some(bg) => {
-                    let pill = text_rect(fonts, *pos, text, size, true, *bold);
+                    let pill = text_rect(fonts, *pos, text, size, true, *bold, *width);
                     if let Some(path) = rounded_rect_path(pill, (pill.h / 2.0).min(size * 0.7)) {
                         if st.shadow {
                             let off = Transform::from_translate(0.0, shadow_offset(size / 4.0));
@@ -591,9 +594,9 @@ fn draw_shape(pm: &mut Pixmap, shape: &Shape, fonts: &Fonts, magnifier_src: Opti
                         }
                         fill_path(pm, &path, *bg, Transform::identity());
                     }
-                    draw_text_block(pm, fonts, text, *pos, size, *bold, st.color, false);
+                    draw_text_block(pm, fonts, &shown, *pos, size, *bold, st.color, false);
                 }
-                None => draw_text_block(pm, fonts, text, *pos, size, *bold, st.color, st.shadow),
+                None => draw_text_block(pm, fonts, &shown, *pos, size, *bold, st.color, st.shadow),
             }
         }
         ShapeKind::Step { center, radius, n } => draw_step(pm, fonts, st, *center, *radius, *n),
