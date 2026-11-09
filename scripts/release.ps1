@@ -57,7 +57,7 @@ Set-StrictMode -Version 3
 $ErrorActionPreference = 'Stop'
 
 $Repo = Split-Path -Parent $PSScriptRoot
-$ProjectUrl = 'https://code.mccullough.dev/beard/stinkshot'
+$ProjectUrl = 'https://code.mccullough.dev/christian/stinkshot'
 $PublicKeyFile = Join-Path $Repo 'crates\app\assets\release-key.pub'
 $BenchTools = 'C:\dev\stinkshot-bench\tools'
 $Utf8 = New-Object System.Text.UTF8Encoding($false)

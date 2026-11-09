@@ -97,21 +97,19 @@ Before: one GET of the Forgejo latest-release API, tag compared, trusted as is.
 
 Now (`update.rs`):
 
-1. GET `.../api/v1/repos/beard/stinkshot/releases/latest` (unchanged; 404 = up to date). Its
-   `tag_name` is untrusted and only decides whether to continue; it must match
-   `[A-Za-z0-9._+-]{1,64}` (no leading dot) because it is put into a URL path.
-2. If that tag is newer: GET `.../releases/download/<tag>/stinkshot-release.json` and
-   `.../stinkshot-release.json.minisig`. URLs are built from a fixed base, never taken from the
-   API answer. Size caps 1 MB / 64 KB / 4 KB.
-3. `minisign_verify` (0.3.0, pure Rust, no dependencies) checks the signature against
+1. GET `https://stinkshot.com/release/stinkshot-release.json` (404 = nothing published, up to
+   date) and `https://stinkshot.com/release/stinkshot-release.json.minisig`. Fixed URLs on the
+   project's own domain, so the code host can move without breaking installed copies (changed
+   Nov 8 from the Forgejo releases API). Size caps 64 KB / 4 KB.
+2. `minisign_verify` (0.3.0, pure Rust, no dependencies) checks the signature against
    `assets/release-key.pub` (compiled in with `include_str!`). Only prehashed Ed25519 (`ED`,
    minisign 0.10+ default) is accepted; legacy `Ed` is rejected. The trusted comment is covered
    by the global signature as minisign defines it.
-4. The verified manifest must have `schema` 1, `product` "stinkshot", a version equal to its tag,
-   and a tag equal to the API's tag. Its `page` is used for the tray link only if it starts with
-   `https://code.mccullough.dev/beard/stinkshot/`.
+3. The verified manifest must have `schema` 1, `product` "stinkshot" and a version equal to its
+   tag. Its `page` is used for the tray link only if it starts with `https://stinkshot.com/`,
+   otherwise `https://stinkshot.com/download`.
 
-Nothing else is sent: three plain GETs at most, same User-Agent as before, no cookies, no query
+Nothing else is sent: two plain GETs at most, same User-Agent as before, no cookies, no query
 strings. No binary is downloaded. A signature failure is an error that starts with
 `update::UNTRUSTED`; a forced check shows "The release info failed its signature check, so it
 was ignored." instead of the offline message. A newer release with no manifest or signature
@@ -122,7 +120,7 @@ Manifest (`stinkshot-release.json`, written by the release script, LF, UTF-8 wit
 
 ```json
 { "schema": 1, "product": "stinkshot", "version": "0.1.0", "tag": "v0.1.0",
-  "released": "2026-11-08", "page": "https://code.mccullough.dev/beard/stinkshot/releases/tag/v0.1.0",
+  "released": "2026-11-08", "page": "https://code.mccullough.dev/christian/stinkshot/releases/tag/v0.1.0",
   "commit": "<sha>", "files": [ { "name": "...", "size": 0, "sha256": "..." } ] }
 ```
 
@@ -229,7 +227,7 @@ Publish steps for tonight: `docs/RELEASE.md` (PowerShell 5.1, copy-paste).
 
 ### Repository owner does not exist
 
-Every URL in the app, script, installer and winget draft is `code.mccullough.dev/beard/stinkshot`.
+Every URL in the app, script, installer and winget draft is `code.mccullough.dev/christian/stinkshot`.
 On Nov 8 `GET /api/v1/users/beard` is 404; the account there is `christian` (all other repos
 live under it). RELEASE.md step 0: create an organization `beard` (no code change), or move
 everything to `christian/stinkshot` before building (also needs the update fixture re-signed

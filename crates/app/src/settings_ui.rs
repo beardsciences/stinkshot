@@ -35,7 +35,7 @@ use crate::toast::ui_common as uc;
 
 const NAV_W: f32 = 220.0;
 const CONTENT_MAX_W: f32 = 760.0;
-const REPO_URL: &str = "https://code.mccullough.dev/beard/stinkshot";
+const REPO_URL: &str = "https://code.mccullough.dev/christian/stinkshot";
 const DEFAULT_ACCENTS: [&str; 4] = ["#7fd36a", "#4cc2ff", "#ffb454", "#c49cff"];
 
 /// A page of the Settings window (`Command::OpenSettingsAt` opens one directly).

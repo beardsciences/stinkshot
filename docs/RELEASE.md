@@ -8,18 +8,8 @@ Nothing here runs by itself: every push and upload is a command you type.
 
 ## 0. Before you start
 
-- **Repository owner.** The app is built to check
-  `https://code.mccullough.dev/beard/stinkshot` (update check, Settings links, installer
-  URLs, winget manifest). On Nov 8 there is no `beard` account or organization on
-  code.mccullough.dev; your account is `christian`. Pick one before building:
-  - **Keep the code (recommended tonight):** create an organization named `beard`
-    (code.mccullough.dev, + > New Organization, name `beard`, visibility Public). Nothing
-    else changes.
-  - Or move everything to `christian/stinkshot`: replace `beard/stinkshot` in `Cargo.toml`,
-    `crates/app/src/update.rs`, `crates/app/src/settings_ui.rs`, `packaging/`,
-    `scripts/release.ps1`, `CHANGELOG.md`, `SECURITY.md`, the docs, and re-sign the test
-    fixture in `crates/app/testdata/update` with a new throwaway key (the fixture's `page`
-    must start with the project URL). Do this before step 2, not after the release.
+- **Repository owner.** The app, installer, winget manifest and website point at
+  `https://code.mccullough.dev/christian/stinkshot` (your existing account).
 - **Merge** every track you want in 0.1.0 into `main` and make sure the workspace is clean.
 - **Memory.** Other builds and soak tests on the box can starve rustc (the Nov 8 dry run
   failed with "only metadata stub found for `rlib` dependency `core`" at 1.7 GB free). Close
@@ -84,12 +74,12 @@ record something with the installed app by hand before publishing. `-SkipRecord`
 
 ## 4. Create the repository and push (first release only)
 
-On code.mccullough.dev: + > New Repository, owner `beard` (see step 0), name `stinkshot`,
+On code.mccullough.dev: + > New Repository, owner `christian`, name `stinkshot`,
 visibility **Public** (the update check and winget download anonymously), no README, license
 or .gitignore (the repo has them). Then:
 
 ```
-git remote add origin https://code.mccullough.dev/beard/stinkshot.git
+git remote add origin https://code.mccullough.dev/christian/stinkshot.git
 git push -u origin main
 ```
 
@@ -116,7 +106,7 @@ Or from PowerShell (token: Settings > Applications > Generate Token, scope
 ```
 $tok = Read-Host "Forgejo token"
 $dist = "C:\dev\stinkshot-bench\dist\0.1.0"
-$api = "https://code.mccullough.dev/api/v1/repos/beard/stinkshot"
+$api = "https://code.mccullough.dev/api/v1/repos/christian/stinkshot"
 $body = @{ tag_name = "v0.1.0"; name = "Stinkshot 0.1.0"; body = (Get-Content -Raw "$dist\RELEASE_NOTES.md"); draft = $false; prerelease = $false } | ConvertTo-Json
 $rel = Invoke-RestMethod -Method Post -Uri "$api/releases" -Headers @{ Authorization = "token $tok" } -ContentType "application/json; charset=utf-8" -Body ([Text.Encoding]::UTF8.GetBytes($body))
 Get-ChildItem $dist -File | Where-Object { $_.Name -ne "RELEASE_NOTES.md" } | ForEach-Object { curl.exe -sSf -H "Authorization: token $tok" -F "attachment=@$($_.FullName)" "$api/releases/$($rel.id)/assets?name=$($_.Name)" ; "" }
@@ -127,16 +117,16 @@ Get-ChildItem $dist -File | Where-Object { $_.Name -ne "RELEASE_NOTES.md" } | Fo
 There is no separate hosting: the manifest is a release asset. An installed copy with update
 checks on makes these GETs, in this order (User-Agent `Stinkshot/<version>`):
 
-1. `https://code.mccullough.dev/api/v1/repos/beard/stinkshot/releases/latest` (reads `tag_name`)
-2. `https://code.mccullough.dev/beard/stinkshot/releases/download/<tag>/stinkshot-release.json`
-3. `https://code.mccullough.dev/beard/stinkshot/releases/download/<tag>/stinkshot-release.json.minisig`
+1. `https://code.mccullough.dev/api/v1/repos/christian/stinkshot/releases/latest` (reads `tag_name`)
+2. `https://code.mccullough.dev/christian/stinkshot/releases/download/<tag>/stinkshot-release.json`
+3. `https://code.mccullough.dev/christian/stinkshot/releases/download/<tag>/stinkshot-release.json.minisig`
 
 Check them right after publishing:
 
 ```
-curl.exe -sS -A "Stinkshot/0.1.0" https://code.mccullough.dev/api/v1/repos/beard/stinkshot/releases/latest | Select-String '"tag_name":"v0.1.0"'
-curl.exe -sSfLO -A "Stinkshot/0.1.0" https://code.mccullough.dev/beard/stinkshot/releases/download/v0.1.0/stinkshot-release.json
-curl.exe -sSfLO -A "Stinkshot/0.1.0" https://code.mccullough.dev/beard/stinkshot/releases/download/v0.1.0/stinkshot-release.json.minisig
+curl.exe -sS -A "Stinkshot/0.1.0" https://code.mccullough.dev/api/v1/repos/christian/stinkshot/releases/latest | Select-String '"tag_name":"v0.1.0"'
+curl.exe -sSfLO -A "Stinkshot/0.1.0" https://code.mccullough.dev/christian/stinkshot/releases/download/v0.1.0/stinkshot-release.json
+curl.exe -sSfLO -A "Stinkshot/0.1.0" https://code.mccullough.dev/christian/stinkshot/releases/download/v0.1.0/stinkshot-release.json.minisig
 C:\dev\stinkshot-bench\tools\minisign\minisign-win64\x86_64\minisign.exe -Vm stinkshot-release.json -p crates\app\assets\release-key.pub
 Remove-Item stinkshot-release.json, stinkshot-release.json.minisig
 ```

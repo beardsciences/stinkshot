@@ -44,15 +44,10 @@ First public release.
   listing every hotkey and editor shortcut.
 - All UI text is ready for translation. English is the only language so far.
 
-### Fixed
-
-- TODO: resource leaks (GPU, handle and thread growth over long sessions in capture,
-  recording and History). Replace with the merged leak fixes.
-
 ### Security
 
 - No upload targets, accounts or telemetry. The update check is the only network request and
   is off by default.
 
-[Unreleased]: https://code.mccullough.dev/beard/stinkshot/compare/v0.1.0...main
-[0.1.0]: https://code.mccullough.dev/beard/stinkshot/releases/tag/v0.1.0
+[Unreleased]: https://code.mccullough.dev/christian/stinkshot/compare/v0.1.0...main
+[0.1.0]: https://code.mccullough.dev/christian/stinkshot/releases/tag/v0.1.0

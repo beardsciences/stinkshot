@@ -139,11 +139,11 @@ Remove-Item Env:STINKSHOT_PROFILE
 ## Publishing (manual, in this order)
 
 First release only: create the repository. On https://code.mccullough.dev, New Repository,
-owner `beard`, name `stinkshot`, no template files (the repo already has README, LICENSE and
+owner `christian`, name `stinkshot`, no template files (the repo already has README, LICENSE and
 .gitignore). Then:
 
 ```
-git remote add origin https://code.mccullough.dev/beard/stinkshot.git
+git remote add origin https://code.mccullough.dev/christian/stinkshot.git
 git push -u origin main
 ```
 
@@ -167,8 +167,8 @@ git push origin vX.Y.Z
 
 ```
 $h = @{ Authorization = "token <forgejo token>" }
-$r = Invoke-RestMethod -Method Post -Headers $h -ContentType "application/json" -Uri https://code.mccullough.dev/api/v1/repos/beard/stinkshot/releases -Body (@{ tag_name = "vX.Y.Z"; name = "Stinkshot X.Y.Z"; body = (Get-Content -Raw dist\X.Y.Z\RELEASE_NOTES.md) } | ConvertTo-Json)
-Get-ChildItem dist\X.Y.Z -File | Where-Object Name -ne RELEASE_NOTES.md | ForEach-Object { Invoke-RestMethod -Method Post -Headers $h -Uri "https://code.mccullough.dev/api/v1/repos/beard/stinkshot/releases/$($r.id)/assets?name=$($_.Name)" -Form @{ attachment = $_ } }
+$r = Invoke-RestMethod -Method Post -Headers $h -ContentType "application/json" -Uri https://code.mccullough.dev/api/v1/repos/christian/stinkshot/releases -Body (@{ tag_name = "vX.Y.Z"; name = "Stinkshot X.Y.Z"; body = (Get-Content -Raw dist\X.Y.Z\RELEASE_NOTES.md) } | ConvertTo-Json)
+Get-ChildItem dist\X.Y.Z -File | Where-Object Name -ne RELEASE_NOTES.md | ForEach-Object { Invoke-RestMethod -Method Post -Headers $h -Uri "https://code.mccullough.dev/api/v1/repos/christian/stinkshot/releases/$($r.id)/assets?name=$($_.Name)" -Form @{ attachment = $_ } }
 ```
 
    (`-Form` needs PowerShell 7.)
@@ -177,8 +177,8 @@ Get-ChildItem dist\X.Y.Z -File | Where-Object Name -ne RELEASE_NOTES.md | ForEac
    Check Now on an older build), or:
 
 ```
-curl.exe -sSfLO https://code.mccullough.dev/beard/stinkshot/releases/download/vX.Y.Z/stinkshot-release.json
-curl.exe -sSfLO https://code.mccullough.dev/beard/stinkshot/releases/download/vX.Y.Z/stinkshot-release.json.minisig
+curl.exe -sSfLO https://code.mccullough.dev/christian/stinkshot/releases/download/vX.Y.Z/stinkshot-release.json
+curl.exe -sSfLO https://code.mccullough.dev/christian/stinkshot/releases/download/vX.Y.Z/stinkshot-release.json.minisig
 minisign -Vm stinkshot-release.json -p crates\app\assets\release-key.pub
 ```
 
