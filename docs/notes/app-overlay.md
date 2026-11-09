@@ -627,3 +627,31 @@ binding a hotkey, Tab, recent picks after a restart; U across a button (edges sn
 Shift straight) on a 150 % monitor; F with each background and aspect, then Copy / Save /
 Pin, and a cancelled capture keeps the settings; type Chinese / Japanese / Korean / emoji with
 the IME in a text annotation and in the History search box.
+
+## Localization (Nov 8 2026)
+
+See docs/notes/l10n.md for the framework.
+
+
+- Every overlay string is in `l10n/en/overlay.rs`; the checker reports 0 for `overlay/`.
+- Keyboard key names (Ctrl, Shift, Enter, Esc, Tab, F1, letters) stay as typed in code and are
+  not translated. Mouse gestures in the hint bar and cheat sheet are keys
+  (`overlay.keys.k.drag`, `overlay.keys.k.wheel`, ...), so "Drag" can be translated.
+- Shortcut labels are placeholders: `"Pin to Screen ({key})"` with `key = keys::PIN.label`.
+- `Tool::name()` is the translated tool name; `Tool::label()` appends the key from
+  `keys::TOOL_KEYS` ("Arrow (A)") and returns a `String`.
+- Core enums keep their English `label()` for other callers; the overlay maps the words it
+  shows to its own keys (`beautify_panel::aspect_label` for Free, `smart_redact::kind_label`
+  for the sensitive-info kinds). Format names stay English: barcode symbologies from
+  `stinkshot_core::codes` ("QR Code"), color formats (Hex, RGB, HSL), aspect ratios.
+- UIA control types in the element chip ("Pane", "Button") come from Windows in English and
+  are not translated; only the "Level {level} of {count}" frame is.
+- Pseudo renders without opening an overlay: `overlay/pseudo_shots.rs` (ignored test) draws the
+  bars, hint bar, loupe, cheat sheet and the Beautify, Codes and Text, Find Sensitive Info and
+  picker panels offscreen with wgpu and saves PNGs:
+  `$env:STINKSHOT_SHOTS_DIR='C:\dev\stinkshot-bench\ux-shots\pseudo-overlay'; cargo test -p stinkshot pseudo_shots -- --ignored`.
+  It switches the global language, so run it alone.
+- Found with it: long sensitive-kind names ran into the masked preview in Find Sensitive Info;
+  the name now truncates with an ellipsis before the preview. Still to watch: the hint bar is
+  one line (~1300 px in pseudo with the discard prompt), and the cheat sheet wraps to two rows
+  of three at 1920 px in pseudo (same height as English on 1080p).

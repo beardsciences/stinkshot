@@ -39,11 +39,19 @@ pub struct Preview {
 pub fn fit_note(fit: beautify::Fit, aspect: Aspect) -> Option<String> {
     match fit {
         beautify::Fit::Full => None,
-        beautify::Fit::PaddingOnly => Some(format!(
-            "Too large for {}, so padding only.",
-            aspect.label()
+        beautify::Fit::PaddingOnly => Some(tr!(
+            "overlay.beautify.padding_only",
+            aspect = aspect_label(aspect)
         )),
-        beautify::Fit::Unframed => Some("Too large to frame. Exported as is.".to_string()),
+        beautify::Fit::Unframed => Some(tr!("overlay.beautify.unframed").to_string()),
+    }
+}
+
+/// Aspect chip text; only "Free" is a word.
+fn aspect_label(a: Aspect) -> &'static str {
+    match a {
+        Aspect::Free => tr!("overlay.beautify.aspect_free"),
+        _ => a.label(),
     }
 }
 
@@ -233,11 +241,15 @@ pub fn panel(
             panels::panel_frame(pal).show(ui, |ui| {
                 ui.set_width(PANEL_W);
                 ui.spacing_mut().item_spacing = Vec2::new(6.0, 7.0);
-                if panels::header(ui, "Beautify", pal) {
+                if panels::header(ui, tr!("overlay.beautify.title"), pal) {
                     out.push(BeautifyAction::Close);
                 }
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Apply on Export").size(13.0).color(pal.text));
+                    ui.label(
+                        RichText::new(tr!("overlay.beautify.apply"))
+                            .size(13.0)
+                            .color(pal.text),
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         theme::widgets::toggle(ui, &mut v.enabled);
                     });
@@ -265,12 +277,12 @@ pub fn panel(
                         );
                     }
 
-                    panels::caption(ui, "Background", pal);
+                    panels::caption(ui, tr!("overlay.beautify.background"), pal);
                     ui.horizontal(|ui| {
                         for (kind, label) in [
-                            (BackgroundKind::Gradient, "Gradient"),
-                            (BackgroundKind::Solid, "Solid"),
-                            (BackgroundKind::Blurred, "Blurred"),
+                            (BackgroundKind::Gradient, tr!("overlay.beautify.gradient")),
+                            (BackgroundKind::Solid, tr!("overlay.beautify.solid")),
+                            (BackgroundKind::Blurred, tr!("overlay.beautify.blurred")),
                         ] {
                             if panels::chip(ui, label, v.background == kind).clicked() {
                                 v.background = kind;
@@ -283,7 +295,8 @@ pub fn panel(
                                 for (a, bb) in beautify::GRADIENTS {
                                     let sel = v.gradient_from.eq_ignore_ascii_case(a)
                                         && v.gradient_to.eq_ignore_ascii_case(bb);
-                                    let tip = format!("{a} to {bb}");
+                                    let tip =
+                                        tr!("overlay.beautify.gradient_tip", from = a, to = bb);
                                     if swatch(ui, hex4(a), hex4(bb), sel, &tip) {
                                         v.gradient_from = a.into();
                                         v.gradient_to = bb.into();
@@ -302,28 +315,46 @@ pub fn panel(
                             });
                         }
                         BackgroundKind::Blurred => {
-                            panels::caption(ui, "Made from the capture itself.", pal);
+                            panels::caption(ui, tr!("overlay.beautify.blurred_desc"), pal);
                         }
                     }
 
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Padding").size(13.0).color(pal.text));
-                        ui.add(egui::Slider::new(&mut v.padding, 0..=256).suffix(" px"));
+                        ui.label(
+                            RichText::new(tr!("overlay.beautify.padding"))
+                                .size(13.0)
+                                .color(pal.text),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut v.padding, 0..=256)
+                                .suffix(tr!("overlay.px_suffix")),
+                        );
                     });
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Corners").size(13.0).color(pal.text));
-                        ui.add(egui::Slider::new(&mut v.corner_radius, 0.0..=48.0).suffix(" px"));
+                        ui.label(
+                            RichText::new(tr!("overlay.beautify.corners"))
+                                .size(13.0)
+                                .color(pal.text),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut v.corner_radius, 0.0..=48.0)
+                                .suffix(tr!("overlay.px_suffix")),
+                        );
                     });
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Shadow").size(13.0).color(pal.text));
+                        ui.label(
+                            RichText::new(tr!("overlay.beautify.shadow"))
+                                .size(13.0)
+                                .color(pal.text),
+                        );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             theme::widgets::toggle(ui, &mut v.shadow);
                         });
                     });
-                    panels::caption(ui, "Aspect", pal);
+                    panels::caption(ui, tr!("overlay.beautify.aspect"), pal);
                     ui.horizontal(|ui| {
                         for a in Aspect::ALL {
-                            if panels::chip(ui, a.label(), v.aspect == a).clicked() {
+                            if panels::chip(ui, aspect_label(a), v.aspect == a).clicked() {
                                 v.aspect = a;
                             }
                         }

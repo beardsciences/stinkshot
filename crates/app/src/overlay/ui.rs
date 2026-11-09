@@ -132,7 +132,9 @@ fn bar_frame(pal: &Palette, lifted: bool) -> Frame {
         .shadow(shadow)
 }
 
-pub const GRIP_TIP: &str = "Drag to Move \u{b7} Double-Click to Dock";
+fn grip_tip() -> &'static str {
+    tr!("overlay.tip.grip")
+}
 
 /// Dotted grip at the tool bar's leading edge: drag moves the whole toolbar, double click
 /// docks it under the selection again. Move cursor on hover and while dragging.
@@ -169,7 +171,7 @@ fn grip(ui: &mut egui::Ui, pal: &Palette, lifted: bool, out: &mut Vec<UiAction>)
         out.push(UiAction::Grip(GripEvent::End));
     }
     if !resp.dragged() {
-        resp.on_hover_text(GRIP_TIP);
+        resp.on_hover_text(grip_tip());
     }
 }
 
@@ -214,7 +216,7 @@ pub fn tool_bar(
                             if theme::widgets::icon_button(
                                 ui,
                                 *icon,
-                                tool.label(),
+                                &tool.label(),
                                 info.tool == *tool,
                             )
                             .clicked()
@@ -248,7 +250,10 @@ pub fn tool_bar(
                     if resp.clicked() {
                         out.push(UiAction::TogglePopup(Popup::Color));
                     }
-                    let tip = format!("Pick Color from Image ({})", super::keys::EYEDROPPER.label);
+                    let tip = tr!(
+                        "overlay.tip.eyedropper",
+                        key = super::keys::EYEDROPPER.label
+                    );
                     if theme::widgets::icon_button(ui, Icon::Eyedropper, &tip, info.picking)
                         .clicked()
                     {
@@ -267,7 +272,7 @@ pub fn tool_bar(
                     ui.painter().text(
                         wr.center(),
                         Align2::CENTER_CENTER,
-                        format!("{} px", info.width.round() as i32),
+                        tr!("overlay.px", n = info.width.round() as i32),
                         egui::FontId::proportional(12.0),
                         pal.text,
                     );
@@ -332,7 +337,7 @@ pub fn action_bar(
                         && theme::widgets::icon_button(
                             ui,
                             Icon::Regions,
-                            "Add Regions (Shift+Drag)",
+                            tr!("overlay.tip.add_regions"),
                             on,
                         )
                         .clicked()
@@ -348,15 +353,15 @@ pub fn action_bar(
                     if r.on_disabled_hover_text(&smart_tip).clicked() {
                         out.push(UiAction::FindSensitive);
                     }
-                    let scan_tip = format!("Read Codes and Text ({})", super::keys::SCAN.label);
+                    let scan_tip = tr!("overlay.tip.scan", key = super::keys::SCAN.label);
                     if theme::widgets::icon_button(ui, Icon::Qr, &scan_tip, panels.scan).clicked() {
                         out.push(UiAction::ToggleScan);
                     }
-                    let frame_tip = format!(
-                        "Beautify ({}){}",
-                        super::keys::BEAUTIFY.label,
-                        if panels.beautify_on { " \u{b7} On" } else { "" }
-                    );
+                    let frame_tip = if panels.beautify_on {
+                        tr!("overlay.tip.beautify_on", key = super::keys::BEAUTIFY.label)
+                    } else {
+                        tr!("overlay.tip.beautify", key = super::keys::BEAUTIFY.label)
+                    };
                     if theme::widgets::icon_button(
                         ui,
                         Icon::Frame,
@@ -368,34 +373,38 @@ pub fn action_bar(
                         out.push(UiAction::ToggleBeautify);
                     }
                     let ocr_tip = if ocr {
-                        "Copy Text (Ctrl+T)"
+                        tr!("overlay.tip.copy_text", key = super::keys::COPY_TEXT.label)
                     } else {
-                        "Copy Text Needs an OCR Language in Windows Settings"
+                        tr!("overlay.tip.copy_text_no_ocr").to_string()
                     };
                     let r = ui
                         .add_enabled_ui(ocr, |ui| {
-                            theme::widgets::icon_button(ui, Icon::Ocr, ocr_tip, false)
+                            theme::widgets::icon_button(ui, Icon::Ocr, &ocr_tip, false)
                         })
                         .inner;
-                    if r.on_disabled_hover_text(ocr_tip).clicked() {
+                    if r.on_disabled_hover_text(&ocr_tip).clicked() {
                         out.push(UiAction::Finish(FinishAction::CopyText));
                     }
-                    if theme::widgets::icon_button(ui, Icon::Pin, "Pin to Screen (Ctrl+P)", false)
-                        .clicked()
-                    {
+                    let pin_tip = tr!("overlay.tip.pin", key = super::keys::PIN.label);
+                    if theme::widgets::icon_button(ui, Icon::Pin, &pin_tip, false).clicked() {
                         out.push(UiAction::Finish(FinishAction::Pin));
                     }
-                    if theme::widgets::icon_button(ui, Icon::Save, "Save As (Ctrl+S)", false)
-                        .clicked()
-                    {
+                    let save_tip = tr!("overlay.tip.save_as", key = super::keys::SAVE.label);
+                    if theme::widgets::icon_button(ui, Icon::Save, &save_tip, false).clicked() {
                         out.push(UiAction::Finish(FinishAction::SaveAs));
                     }
-                    if theme::widgets::icon_button(ui, Icon::Close, "Cancel (Esc)", false).clicked()
+                    if theme::widgets::icon_button(
+                        ui,
+                        Icon::Close,
+                        tr!("overlay.tip.cancel"),
+                        false,
+                    )
+                    .clicked()
                     {
                         out.push(UiAction::Cancel);
                     }
-                    if theme::widgets::accent_button(ui, "Copy")
-                        .on_hover_text("Copy to Clipboard (Enter)")
+                    if theme::widgets::accent_button(ui, tr!("overlay.action.copy"))
+                        .on_hover_text(tr!("overlay.tip.copy"))
                         .clicked()
                     {
                         out.push(UiAction::Finish(FinishAction::Copy));
@@ -494,7 +503,7 @@ pub fn color_popup(
             ui.spacing_mut().item_spacing = Vec2::new(2.0, 4.0);
             ui.horizontal(|ui| {
                 for (i, c) in palette.iter().take(8).enumerate() {
-                    swatch(ui, *c, current, format!("Color {}", i + 1), pal, out);
+                    swatch(ui, *c, current, tr!("overlay.color.n", n = i + 1), pal, out);
                 }
             });
             if !recent.is_empty() {
@@ -503,13 +512,20 @@ pub fn color_popup(
                     ui.painter().text(
                         Pos2::new(r.left() + 8.0, r.center().y),
                         Align2::LEFT_CENTER,
-                        "Recent",
+                        tr!("overlay.color.recent"),
                         FontId::proportional(12.0),
                         pal.text_secondary,
                     );
                     for c in recent {
                         let hex = super::hover::hex_string([c[0], c[1], c[2]]);
-                        swatch(ui, *c, current, format!("Recent Color {hex}"), pal, out);
+                        swatch(
+                            ui,
+                            *c,
+                            current,
+                            tr!("overlay.color.recent_hex", hex = hex),
+                            pal,
+                            out,
+                        );
                     }
                 });
             }
@@ -672,9 +688,9 @@ pub fn context_bar(
                     ui.spacing_mut().item_spacing = Vec2::new(2.0, 0.0);
                     ui.horizontal(|ui| match bar {
                         ContextBar::Text { bold, pill, size } => {
-                            let tip = format!(
-                                "Smaller Text ({} px)",
-                                super::shapes::step_text_size(size, false).round()
+                            let tip = tr!(
+                                "overlay.ctx.text_smaller",
+                                px = super::shapes::step_text_size(size, false).round()
                             );
                             if opt_button(ui, &tip, false, |p, r, c| {
                                 p.text(
@@ -698,9 +714,9 @@ pub fn context_bar(
                                 FontId::proportional(12.0),
                                 pal.text_secondary,
                             );
-                            let tip = format!(
-                                "Larger Text ({} px)",
-                                super::shapes::step_text_size(size, true).round()
+                            let tip = tr!(
+                                "overlay.ctx.text_larger",
+                                px = super::shapes::step_text_size(size, true).round()
                             );
                             if opt_button(ui, &tip, false, |p, r, c| {
                                 p.text(
@@ -715,7 +731,7 @@ pub fn context_bar(
                             {
                                 out.push(UiAction::Shape(ShapeOpt::TextLarger));
                             }
-                            let tip = format!("Bold ({})", super::keys::BOLD.label);
+                            let tip = tr!("overlay.ctx.bold", key = super::keys::BOLD.label);
                             if opt_button(ui, &tip, bold, |p, r, c| {
                                 p.text(
                                     r.center(),
@@ -729,7 +745,7 @@ pub fn context_bar(
                             {
                                 out.push(UiAction::Shape(ShapeOpt::Bold(!bold)));
                             }
-                            if opt_button(ui, "Background Pill", pill, |p, r, c| {
+                            if opt_button(ui, tr!("overlay.ctx.pill"), pill, |p, r, c| {
                                 let pr = Rect::from_center_size(
                                     r.center(),
                                     Vec2::new(r.width(), r.height() * 0.62),
@@ -753,14 +769,14 @@ pub fn context_bar(
                             head,
                             curved,
                         } => {
-                            if opt_button(ui, "One Head", !double, |p, r, c| {
+                            if opt_button(ui, tr!("overlay.ctx.one_head"), !double, |p, r, c| {
                                 arrow_glyph(p, r, c, false, head)
                             })
                             .clicked()
                             {
                                 out.push(UiAction::Shape(ShapeOpt::Double(false)));
                             }
-                            if opt_button(ui, "Heads at Both Ends", double, |p, r, c| {
+                            if opt_button(ui, tr!("overlay.ctx.both_heads"), double, |p, r, c| {
                                 arrow_glyph(p, r, c, true, head)
                             })
                             .clicked()
@@ -769,9 +785,9 @@ pub fn context_bar(
                             }
                             separator(ui, pal);
                             for (h, tip) in [
-                                (ArrowHead::Notched, "Notched Head"),
-                                (ArrowHead::Triangle, "Triangle Head"),
-                                (ArrowHead::Open, "Open Head"),
+                                (ArrowHead::Notched, tr!("overlay.ctx.head_notched")),
+                                (ArrowHead::Triangle, tr!("overlay.ctx.head_triangle")),
+                                (ArrowHead::Open, tr!("overlay.ctx.head_open")),
                             ] {
                                 if opt_button(ui, tip, head == h, |p, r, c| {
                                     arrow_glyph(p, r, c, false, h)
@@ -784,7 +800,7 @@ pub fn context_bar(
                             if curved
                                 && opt_button(
                                     ui,
-                                    "Straighten (Double-Click the Curve Handle)",
+                                    tr!("overlay.ctx.straighten"),
                                     false,
                                     |p, r, c| {
                                         p.line_segment(
@@ -825,7 +841,7 @@ pub fn width_popup(
             ui.horizontal(|ui| {
                 for w in WIDTH_PRESETS {
                     let (r, resp) = ui.allocate_exact_size(Vec2::splat(34.0), Sense::click());
-                    let resp = resp.on_hover_text(format!("{} px", w as i32));
+                    let resp = resp.on_hover_text(tr!("overlay.px", n = w as i32));
                     let sel = (w - current).abs() < 0.5;
                     let (dark, _) = theme::current(ui.ctx());
                     if sel {
@@ -868,7 +884,7 @@ pub struct ChipState<'a> {
 }
 
 const PRESETS: [(&str, Option<Ratio>); 4] = [
-    ("Free", None),
+    ("", None), // "Free", localized at draw time
     ("16:9", Some((16, 9))),
     ("4:3", Some((4, 3))),
     ("1:1", Some((1, 1))),
@@ -911,9 +927,9 @@ pub fn size_chips(
                         })
                         .response
                         .interact(Sense::click())
-                        .on_hover_text(format!(
-                            "Zoom \u{b7} Click to Fit ({})",
-                            super::keys::ZOOM_FIT.label
+                        .on_hover_text(tr!(
+                            "overlay.chip.zoom_tip",
+                            key = super::keys::ZOOM_FIT.label
                         ));
                     if r.hovered() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -959,8 +975,13 @@ pub fn size_chips(
                                 } else {
                                     pal.text_secondary
                                 };
+                                let label = if ratio.is_none() {
+                                    tr!("overlay.chip.free")
+                                } else {
+                                    label
+                                };
                                 let r = ui.add(
-                                    egui::Label::new(RichText::new(*label).size(12.0).color(color))
+                                    egui::Label::new(RichText::new(label).size(12.0).color(color))
                                         .sense(Sense::click()),
                                 );
                                 if r.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
@@ -970,7 +991,9 @@ pub fn size_chips(
                             ui.label(RichText::new("\u{b7}").size(12.0).color(pal.text_tertiary));
                             let r = ui.add(
                                 egui::Label::new(
-                                    RichText::new("Exact").size(12.0).color(pal.text_secondary),
+                                    RichText::new(tr!("overlay.chip.exact"))
+                                        .size(12.0)
+                                        .color(pal.text_secondary),
                                 )
                                 .sense(Sense::click()),
                             );
@@ -1067,7 +1090,7 @@ pub fn loupe_plate(
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 4.0;
                             ui.label(
-                                RichText::new(format!("X {} \u{b7} Y {}", xy.0, xy.1))
+                                RichText::new(tr!("overlay.loupe.xy", x = xy.0, y = xy.1))
                                     .size(12.0)
                                     .color(pal.text),
                             );
@@ -1099,7 +1122,7 @@ pub fn loupe_plate(
                                 None => {
                                     ui.label(RichText::new(hex).size(12.0).color(pal.text));
                                     ui.label(
-                                        RichText::new("C to Copy")
+                                        RichText::new(tr!("overlay.loupe.c_to_copy"))
                                             .size(12.0)
                                             .color(pal.text_tertiary),
                                     );
@@ -1211,13 +1234,13 @@ pub fn shortcut_sheet(
                     ui.spacing_mut().item_spacing = Vec2::new(0.0, 6.0);
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new("Keyboard Shortcuts")
+                            RichText::new(tr!("overlay.help.title"))
                                 .font(theme::semibold(15.0))
                                 .color(pal.text),
                         );
                         ui.add_space(14.0);
                         ui.label(
-                            RichText::new("F1, ? or Esc to Close")
+                            RichText::new(tr!("overlay.help.close_hint"))
                                 .size(12.0)
                                 .color(pal.text_tertiary),
                         );
@@ -1285,7 +1308,11 @@ pub fn busy_pill(ctx: &Context, center: Pos2, pal: &Palette) {
                 .corner_radius(8)
                 .inner_margin(Margin::symmetric(14, 8))
                 .show(ui, |ui| {
-                    ui.label(RichText::new("Finishing...").size(13.0).color(pal.text));
+                    ui.label(
+                        RichText::new(tr!("overlay.busy.finishing"))
+                            .size(13.0)
+                            .color(pal.text),
+                    );
                 });
         });
 }

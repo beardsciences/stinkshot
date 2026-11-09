@@ -44,6 +44,8 @@ mod multi;
 mod paint;
 mod panels;
 mod picker;
+#[cfg(test)]
+mod pseudo_shots;
 mod render;
 mod scan;
 mod selection;
@@ -79,6 +81,7 @@ use self::textedit::Caret;
 use self::ui::{ChipState, GripEvent, Popup, UiAction};
 use self::undo::UndoStack;
 use self::view::View;
+use crate::l10n::tr;
 use crate::state::{
     CaptureOutput, Command, FinishAction, OverlayMode, OverlayRequest, RegionPurpose, Shared,
     SourceInfo, Surface, SurfaceStatus,
@@ -470,12 +473,13 @@ fn snap_label_text(control: &str, name: &str, level: usize, count: usize) -> Str
     let what = if name.is_empty() {
         control.to_string()
     } else {
-        format!("{control} \u{201c}{name}\u{201d}")
+        tr!("overlay.element.named", control = control, name = name)
     };
-    format!(
-        "{what} \u{b7} Level {} of {}",
-        level + 1,
-        count.max(level + 1)
+    tr!(
+        "overlay.element.level",
+        what = what,
+        level = level + 1,
+        count = count.max(level + 1)
     )
 }
 
@@ -1606,9 +1610,9 @@ impl Overlay {
             return None;
         }
         Some(if f.ok {
-            (format!("Copied {}", f.hex), true)
+            (tr!("overlay.notice.copied_hex", hex = f.hex), true)
         } else {
-            ("Clipboard Busy, Press C Again".to_string(), false)
+            (tr!("overlay.notice.clipboard_busy_c").to_string(), false)
         })
     }
 

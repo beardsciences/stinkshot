@@ -70,7 +70,7 @@ impl Overlay {
     pub(super) fn pick_and_close(&mut self, shared: &mut Shared, rgb: [u8; 3]) {
         if let Some(text) = self.copy_color(shared, rgb) {
             shared.outbox.push(Command::Notify {
-                title: "Color Copied".into(),
+                title: tr!("overlay.picker.copied_title").into(),
                 body: text,
                 error: false,
             });
@@ -125,13 +125,13 @@ pub fn panel(
                 ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("Copy As")
+                        RichText::new(tr!("overlay.picker.copy_as"))
                             .size(12.5)
                             .color(pal.text_secondary),
                     );
                     for f in ColorFormat::ALL {
                         if panels::chip(ui, f.label(), f == format)
-                            .on_hover_text("Tab switches format")
+                            .on_hover_text(tr!("overlay.picker.tab_tip"))
                             .clicked()
                         {
                             out.push(PickerAction::Format(f));
@@ -139,7 +139,11 @@ pub fn panel(
                     }
                     if !recent.is_empty() {
                         ui.add_space(8.0);
-                        ui.label(RichText::new("Recent").size(12.5).color(pal.text_secondary));
+                        ui.label(
+                            RichText::new(tr!("overlay.color.recent"))
+                                .size(12.5)
+                                .color(pal.text_secondary),
+                        );
                         for (i, h) in recent.iter().enumerate() {
                             let Some(c) = parse_hex_color(h) else {
                                 continue;
@@ -160,7 +164,10 @@ pub fn panel(
                             if resp.hovered() {
                                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                             }
-                            let tip = format!("Copy {}", format.format([c[0], c[1], c[2]]));
+                            let tip = tr!(
+                                "overlay.picker.copy_value",
+                                value = format.format([c[0], c[1], c[2]])
+                            );
                             if resp.on_hover_text(tip).clicked() {
                                 out.push(PickerAction::Recent(i));
                             }

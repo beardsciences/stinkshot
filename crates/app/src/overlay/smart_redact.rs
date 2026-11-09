@@ -23,9 +23,9 @@ impl RedactStyle {
 
     pub fn label(self) -> &'static str {
         match self {
-            RedactStyle::Box => "Solid Box",
-            RedactStyle::Blur => "Blur",
-            RedactStyle::Pixelate => "Pixelate",
+            RedactStyle::Box => tr!("overlay.redact.style_box"),
+            RedactStyle::Blur => tr!("overlay.redact.style_blur"),
+            RedactStyle::Pixelate => tr!("overlay.redact.style_pixelate"),
         }
     }
 
@@ -189,7 +189,7 @@ impl Overlay {
             return;
         }
         let Some(engine) = shared.ocr.clone() else {
-            self.flash_notice(NO_OCR_NOTICE);
+            self.flash_notice(no_ocr_notice());
             return;
         };
         self.commit_text();
@@ -216,7 +216,7 @@ impl Overlay {
             }
             Err(e) => {
                 log::error!("smart redact thread: {e}");
-                self.flash_notice("Could Not Start Finding Sensitive Info");
+                self.flash_notice(tr!("overlay.redact.start_failed"));
             }
         }
     }
@@ -244,7 +244,7 @@ impl Overlay {
                 }
                 Ok(Err(_)) | Err(TryRecvError::Disconnected) => {
                     self.smart = None;
-                    self.flash_notice("Could Not Read the Text in This Image");
+                    self.flash_notice(tr!("overlay.redact.read_failed"));
                 }
                 Err(TryRecvError::Empty) => {}
             },
@@ -375,14 +375,30 @@ impl Overlay {
     }
 }
 
-pub const NO_OCR_NOTICE: &str = "Find Sensitive Info Needs an OCR Language in Windows Settings";
+pub fn no_ocr_notice() -> &'static str {
+    tr!("overlay.redact.no_ocr")
+}
+
+/// Row label for a finding.
+fn kind_label(k: sensitive::SensitiveKind) -> &'static str {
+    use sensitive::SensitiveKind as K;
+    match k {
+        K::Email => tr!("overlay.redact.kind.email"),
+        K::Phone => tr!("overlay.redact.kind.phone"),
+        K::Card => tr!("overlay.redact.kind.card"),
+        K::Ssn => tr!("overlay.redact.kind.ssn"),
+        K::IpAddress => tr!("overlay.redact.kind.ip"),
+        K::Secret => tr!("overlay.redact.kind.secret"),
+        K::Password => tr!("overlay.redact.kind.password"),
+    }
+}
 
 /// Tooltip for the toolbar button.
 pub fn button_tip(ocr: bool) -> String {
     if ocr {
-        format!("Find Sensitive Info ({})", keys::FIND_SENSITIVE.label)
+        tr!("overlay.redact.tip", key = keys::FIND_SENSITIVE.label)
     } else {
-        format!("{NO_OCR_NOTICE}\n{}", crate::workers::NO_OCR_HELP)
+        format!("{}\n{}", no_ocr_notice(), crate::workers::NO_OCR_HELP)
     }
 }
 
@@ -428,7 +444,7 @@ pub fn panel(
                         ui.horizontal(|ui| {
                             ui.add(egui::Spinner::new().size(16.0).color(accent));
                             ui.label(
-                                RichText::new("Finding Sensitive Info\u{2026}")
+                                RichText::new(tr!("overlay.redact.finding"))
                                     .size(13.0)
                                     .color(pal.text),
                             );
@@ -445,7 +461,7 @@ pub fn panel(
                                 pal.text_secondary,
                             );
                             ui.label(
-                                RichText::new("No Sensitive Info Found")
+                                RichText::new(tr!("overlay.redact.none_found"))
                                     .size(13.0)
                                     .color(pal.text),
                             );
@@ -469,15 +485,11 @@ fn review(
     let count = r.on.iter().filter(|o| **o).count();
     ui.horizontal(|ui| {
         ui.label(
-            RichText::new(format!(
-                "Found {} {}",
-                r.findings.len(),
-                if r.findings.len() == 1 {
-                    "Item"
-                } else {
-                    "Items"
-                }
-            ))
+            RichText::new(if r.findings.len() == 1 {
+                tr!("overlay.redact.found_one").to_string()
+            } else {
+                tr!("overlay.redact.found_many", n = r.findings.len())
+            })
             .font(theme::semibold(13.0))
             .color(pal.text),
         );
@@ -496,7 +508,7 @@ fn review(
                     pal.text_secondary
                 },
             );
-            if close.on_hover_text("Close (Esc)").clicked() {
+            if close.on_hover_text(tr!("overlay.close")).clicked() {
                 out.push(SmartAction::Close);
             }
         });
@@ -536,20 +548,26 @@ fn review(
                         egui::epaint::StrokeKind::Inside,
                     );
                 }
-                ui.painter().text(
-                    egui::pos2(cb.right() + 10.0, rect.center().y),
-                    Align2::LEFT_CENTER,
-                    f.kind.label(),
-                    egui::FontId::proportional(12.5),
-                    pal.text,
-                );
-                ui.painter().text(
+                let preview = ui.painter().text(
                     egui::pos2(rect.right() - 8.0, rect.center().y),
                     Align2::RIGHT_CENTER,
                     &f.preview,
                     egui::FontId::monospace(12.0),
                     pal.text_secondary,
                 );
+                // The kind name gives way to the preview: long translations end in "...".
+                let left = cb.right() + 10.0;
+                let mut job = egui::text::LayoutJob::simple_singleline(
+                    kind_label(f.kind).to_owned(),
+                    egui::FontId::proportional(12.5),
+                    pal.text,
+                );
+                job.wrap = egui::text::TextWrapping::truncate_at_width(
+                    (preview.left() - 10.0 - left).max(20.0),
+                );
+                let galley = ui.painter().layout_job(job);
+                let y = rect.center().y - galley.size().y / 2.0;
+                ui.painter().galley(egui::pos2(left, y), galley, pal.text);
                 if resp.clicked() {
                     out.push(SmartAction::Toggle(i));
                 }
@@ -562,7 +580,11 @@ fn review(
     // Style segmented choice.
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        ui.label(RichText::new("Style").size(12.0).color(pal.text_secondary));
+        ui.label(
+            RichText::new(tr!("overlay.redact.style"))
+                .size(12.0)
+                .color(pal.text_secondary),
+        );
         ui.add_space(4.0);
         for st in RedactStyle::ALL {
             let active = r.style == st;
@@ -589,15 +611,15 @@ fn review(
     ui.add_space(2.0);
     ui.horizontal(|ui| {
         let label = if count == 1 {
-            "Redact 1 Selected".to_string()
+            tr!("overlay.redact.apply_one").to_string()
         } else {
-            format!("Redact {count} Selected")
+            tr!("overlay.redact.apply_many", n = count)
         };
         let resp = ui.add_enabled_ui(count > 0, |ui| theme::widgets::accent_button(ui, &label));
         if resp.inner.clicked() {
             out.push(SmartAction::Apply);
         }
-        if theme::widgets::button(ui, "Cancel").clicked() {
+        if theme::widgets::button(ui, tr!("overlay.redact.cancel")).clicked() {
             out.push(SmartAction::Close);
         }
     });
