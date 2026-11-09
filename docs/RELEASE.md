@@ -59,8 +59,11 @@ Add `-Jobs 4` if memory is tight. It checks fmt, clippy and tests, builds, and w
 | `test\` | no: smoke-test installer |
 | `winget\` | no: for step 7 |
 
-It prints a timing table at the end. The dry run took about 25 to 35 minutes from cold caches
-on a busy box; warm, about 4 minutes plus tests.
+It prints a timing table at the end. The Nov 8 dry run (cold target dir, `-Jobs 4`, other
+builds and soak tests running) took 30 minutes: fmt 16 s, clippy 34 s, tests 13.8 min, release
+build 13.5 min, zip 6 s, installer 36 s, test installer 33 s, SBOM, sums, manifest and signing
+under 10 s together. Reusing that target dir (`-TargetDir C:\dev\stinkshot-bench	arget-dist-dryrun`)
+skips most of the compile time.
 
 ## 3. Smoke test
 
@@ -72,6 +75,12 @@ Runs under the `smoke` profile with the test installer (own AppId, folder and sh
 your running copy and a real install are never touched. A 600x200 color swatch shows at the
 top left of the primary monitor for about 4 seconds during the recording check; the screen
 must be on. Exit code is the number of failed checks. Add `-Mode portable` to test the zip.
+
+On Nov 8 every check passed in both modes except `record`: with the dev and soak instances
+running, Desktop Duplication on the HDR monitor was refused ("too many applications are
+duplicating") and WGC timed out; when a session did start, the frames did not show the test
+window. If it fails again, close the other Stinkshot instances and rerun; if it still fails,
+record something with the installed app by hand before publishing. `-SkipRecord` skips it.
 
 ## 4. Create the repository and push (first release only)
 
