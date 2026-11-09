@@ -29,6 +29,9 @@ pub fn get(key: &str) -> Option<&'static str> {
         "settings.hotkeys.snipping_tool" => "Snipping Tool",
         "settings.hotkeys.also_used" => "Also used by {list}.",
         "settings.hotkeys.press_keys" => "Press Keys\u{2026}",
+        "settings.hotkeys.check_again" => "Check Again",
+        "settings.hotkeys.still_in_use" => "Still in use.",
+        "settings.hotkeys.no_change" => "No change.",
         "settings.capture.example_title" => "Example Page",
         "settings.capture.pattern.desc" => {
             "Tokens: {yyyy} {MM} {dd} {HH} {mm} {ss} {fff} {app} {title} {w} {h}. Example: {preview}"
@@ -340,6 +343,9 @@ pub const KEYS: &[&str] = &[
     "settings.hotkeys.snipping_tool",
     "settings.hotkeys.also_used",
     "settings.hotkeys.press_keys",
+    "settings.hotkeys.check_again",
+    "settings.hotkeys.still_in_use",
+    "settings.hotkeys.no_change",
     "settings.capture.example_title",
     "settings.capture.pattern.desc",
     "settings.recording.device_missing",

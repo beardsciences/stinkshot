@@ -703,11 +703,28 @@ pub mod widgets {
 
     /// Settings-style card row: title + description on the left, `add_right` on the right.
     pub fn setting_row(ui: &mut Ui, title: &str, desc: &str, add_right: impl FnOnce(&mut Ui)) {
+        setting_row_alert(ui, title, desc, None, add_right);
+    }
+
+    /// `setting_row` with an optional problem line under the description, in the danger
+    /// color, and a danger-tinted border while it shows.
+    pub fn setting_row_alert(
+        ui: &mut Ui,
+        title: &str,
+        desc: &str,
+        alert: Option<&str>,
+        add_right: impl FnOnce(&mut Ui),
+    ) {
         let (dark, _) = current(ui.ctx());
         let p = palette(dark);
+        let stroke = if alert.is_some() {
+            Stroke::new(1.0, p.danger.gamma_multiply(0.6))
+        } else {
+            Stroke::new(1.0, p.stroke)
+        };
         egui::Frame::new()
             .fill(p.card)
-            .stroke(Stroke::new(1.0, p.stroke))
+            .stroke(stroke)
             .corner_radius(CornerRadius::same(8))
             .inner_margin(egui::Margin::symmetric(18, 14))
             .show(ui, |ui| {
@@ -736,6 +753,14 @@ pub mod widgets {
                                     egui::RichText::new(desc)
                                         .size(12.0 * ts)
                                         .color(p.text_tertiary),
+                                )
+                                .wrap(),
+                            );
+                        }
+                        if let Some(alert) = alert {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(alert).size(12.0 * ts).color(p.danger),
                                 )
                                 .wrap(),
                             );

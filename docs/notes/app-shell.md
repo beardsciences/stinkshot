@@ -27,7 +27,11 @@ Files: `crates/app/src/{main,shell,cli,tray,hotkeys,update,theme,state}.rs`, new
 - **hotkeys**: global-hotkey, bridge thread wakes the UI, conflict and parse errors reported,
   PrintScreen takeover handled in `reload`/`shutdown`. Replace Snipping Tool installs the`
   platform `SnipHook` and routes Win+Shift+S / Win+Shift+R (`snip_routes`,`
-  docs/notes/snipping-tool.md).
+  docs/notes/snipping-tool.md). A key another program holds is retried in the background
+  (`Hotkeys::tick`, `RetryClock`: every 3 s for 2 min, then every 30 s; at once when Settings
+  opens, on Check Again, and on unlock/resume), so it starts working and its warning clears
+  without a restart once that program quits (issue #2). Windows has no API that names the
+  holder, so the text says "another program".
 - **cli**: clap; headless `full|window --out`, `ocr --file`; other subcommands forward over
   IPC. Release builds attach to the parent console so stdout/--help work.
 - **update**: ureq GETs (10 s timeout), `is_newer`. Only network code. Since Nov 8 2026 it trusts
@@ -105,7 +109,9 @@ Files: `crates/app/src/{main,shell,cli,tray,hotkeys,update,theme,state}.rs`, new
 2. Tray menu matches Tray design, labels follow hotkeys; left click = region at once; double
    click = History with no capture left open.
 3. PrintScreen opens the overlay (Snipping Tool does not); each default hotkey works; change one
-   in Settings and confirm re-register; conflict shows an error.
+   in Settings and confirm re-register; conflict shows an error. With another program holding
+   a bound key (e.g. Greenshot running), the row shows it in red with Check Again; quitting that
+   program makes the key work within a few seconds and the warning goes away.
 4. Region/Window/Full/Repeat: clipboard has image, toast appears, file in history folder, re-edit works.
 5. Save As dialog opens, remembers folder, format follows extension.
 6. Pin and Copy text (OCR) actions; OCR region copies text.
