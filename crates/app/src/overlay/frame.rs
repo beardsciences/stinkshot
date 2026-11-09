@@ -830,6 +830,25 @@ impl Overlay {
 
     // ---------------------------------------------------------------- chrome
 
+    /// What the overlay's live region says (`a11y::live_status`): the mode, the tool and the
+    /// region size; the key hints too until a region exists.
+    fn announcement(&self, leading: Option<&str>, items: &[(&str, &str)]) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(l) = leading {
+            parts.push(l.to_string());
+        }
+        match self.sel {
+            Some(s) => {
+                if self.annotating() {
+                    parts.push(keys::tool_name(self.tool).to_string());
+                }
+                parts.push(format!("{} by {}", s.w, s.h));
+            }
+            None => parts.extend(items.iter().map(|(k, a)| format!("{k}: {a}"))),
+        }
+        parts.join(". ")
+    }
+
     fn hint_items(&self) -> Vec<(&'static str, &'static str)> {
         let drag = tr!("overlay.keys.k.drag");
         let click = tr!("overlay.keys.k.click");
@@ -1065,6 +1084,8 @@ impl Overlay {
             pal,
             accent,
         );
+        // Screen readers: speak the mode, tool and region size whenever they change.
+        crate::a11y::live_status(ctx, || self.announcement(leading.as_deref(), &items));
 
         if self.picker_mode() && !self.help_open {
             let mut picks = Vec::new();

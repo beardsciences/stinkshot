@@ -998,6 +998,7 @@ impl Surface for HistoryWindow {
                     Rect::from_min_size(pos2(sidebar.left() + 12.0, *y), vec2(SIDEBAR_W - 24.0, h));
                 *y += h + 2.0;
                 let resp = ui.interact(r, ui.scope_id().with(("hist_nav", id)), Sense::click());
+                crate::a11y::describe(&resp, egui::accesskit::Role::Tab, label, Some(active));
                 if active {
                     ui.painter().rect_filled(r, CornerRadius::same(6), sel_fill);
                     ui.painter().rect_filled(
@@ -1117,6 +1118,7 @@ impl Surface for HistoryWindow {
                     Sense::click(),
                 )
                 .on_hover_text(tr!("history.retention.tip"));
+            crate::a11y::role(&footer_resp, egui::accesskit::Role::Link);
             if footer_resp.hovered() {
                 ui.painter().rect_filled(
                     footer_link,
@@ -1161,6 +1163,12 @@ impl Surface for HistoryWindow {
                                 r,
                                 ui.scope_id().with(("hist_app", name.as_str())),
                                 Sense::click(),
+                            );
+                            crate::a11y::describe_with(
+                                &resp,
+                                egui::accesskit::Role::Tab,
+                                Some(active),
+                                || pretty_app(name),
                             );
                             if active {
                                 ui.painter().rect_filled(r, CornerRadius::same(6), sel_fill);
@@ -1273,6 +1281,7 @@ impl Surface for HistoryWindow {
                         .desired_width(te_rect.width()),
                 )
             });
+            crate::a11y::name_from_placeholder(&te.inner);
             if focus_search {
                 te.inner.request_focus();
             }
@@ -1286,6 +1295,7 @@ impl Surface for HistoryWindow {
                 );
                 let cresp =
                     ui.interact(cr, ui.scope_id().with("hist_search_clear"), Sense::click());
+                crate::a11y::role(&cresp, egui::accesskit::Role::Button);
                 if cresp.hovered() {
                     ui.painter()
                         .rect_filled(cr, CornerRadius::same(5), hover_fill);
@@ -1553,6 +1563,12 @@ impl Surface for HistoryWindow {
                                         r,
                                         ui.scope_id().with(("hist_card", m.id)),
                                         Sense::click(),
+                                    );
+                                    crate::a11y::describe_with(
+                                        &resp,
+                                        egui::accesskit::Role::ListBoxOption,
+                                        Some(selected == Some(m.id)),
+                                        || crate::a11y::item_name(m),
                                     );
                                     let hovered = resp.hovered();
                                     paint_card(

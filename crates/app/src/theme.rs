@@ -9,6 +9,7 @@ use egui::{
     Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Id, Stroke, TextStyle,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
     pub bg: Color32,      // window background (Mica fallback)
     pub layer: Color32,   // content layer / main pane
@@ -130,7 +131,37 @@ pub fn accent_fg(accent: Color32, dark: bool) -> Color32 {
 pub const DEFAULT_ACCENT: Color32 = Color32::from_rgb(0x7f, 0xd3, 0x6a);
 
 pub fn palette(dark: bool) -> &'static Palette {
+    if let Some(p) = *HC_PALETTE.lock().unwrap_or_else(|e| e.into_inner()) {
+        return p;
+    }
     if dark { &DARK } else { &LIGHT }
+}
+
+/// The high-contrast palette while a Windows contrast theme is on (set by `install`).
+static HC_PALETTE: std::sync::Mutex<Option<&'static Palette>> = std::sync::Mutex::new(None);
+
+fn rgb(c: [u8; 3]) -> Color32 {
+    Color32::from_rgb(c[0], c[1], c[2])
+}
+
+/// Every token from the Windows contrast theme's system colors: one background, one text
+/// color for all text levels, opaque text-colored hairlines.
+pub fn high_contrast_palette(hc: &crate::a11y::HighContrast) -> Palette {
+    let dark = luminance(rgb(hc.window)) < 0.5;
+    Palette {
+        bg: rgb(hc.window),
+        layer: rgb(hc.window),
+        card: rgb(hc.window),
+        flyout: rgb(hc.window),
+        control: rgb(hc.button),
+        stroke: rgb(hc.text),
+        text: rgb(hc.text),
+        text_secondary: rgb(hc.text),
+        text_tertiary: rgb(hc.text),
+        overlay_dim: DARK.overlay_dim,
+        danger: if dark { DARK.danger } else { LIGHT.danger },
+        on_accent: rgb(hc.highlight_text),
+    }
 }
 
 pub fn rgba(c: [u8; 4]) -> Color32 {
@@ -159,6 +190,8 @@ pub fn accent_soft(accent: Color32, alpha: u8) -> Color32 {
 struct ThemeState {
     dark: bool,
     accent: Color32,
+    /// Windows Text size (1.0 = 100%).
+    text_scale: f32,
 }
 
 fn theme_id() -> Id {
@@ -170,6 +203,13 @@ pub fn current(ctx: &egui::Context) -> (bool, Color32) {
     ctx.data(|d| d.get_temp::<ThemeState>(theme_id()))
         .map(|s| (s.dark, s.accent))
         .unwrap_or((true, DEFAULT_ACCENT))
+}
+
+/// Windows Text size factor last applied by `install` (1.0 = 100%). Text sizes in `widgets`
+/// are multiplied by it; `TextStyle` sizes already are.
+pub fn text_scale(ctx: &egui::Context) -> f32 {
+    ctx.data(|d| d.get_temp::<ThemeState>(theme_id()))
+        .map_or(1.0, |s| s.text_scale)
 }
 
 fn hover_tint(base: Color32, dark: bool, amount: f32) -> Color32 {
@@ -201,6 +241,23 @@ pub fn install(
     dark: bool,
     accent: Color32,
 ) {
+    // Windows accessibility settings win over the configured theme: a contrast theme
+    // replaces every token with its system colors, and Text size scales all text styles.
+    let prefs = crate::a11y::prefs();
+    let hc = prefs.high_contrast;
+    {
+        let mut cur = HC_PALETTE.lock().unwrap_or_else(|e| e.into_inner());
+        let want = hc.map(|h| high_contrast_palette(&h));
+        if want.as_ref() != *cur {
+            // `palette` hands out `&'static`: one small leak per contrast theme change.
+            *cur = want.map(|w| &*Box::leak(Box::new(w)));
+        }
+    }
+    let (dark, accent) = match &hc {
+        Some(h) => (luminance(rgb(h.window)) < 0.5, rgb(h.highlight)),
+        None => (dark, accent),
+    };
+    let ts = prefs.text_scale;
     let fonts_id = Id::unique("stinkshot.theme.fonts");
     let have_fonts = ctx.data(|d| d.get_temp::<bool>(fonts_id)).unwrap_or(false);
     if !have_fonts {
@@ -314,6 +371,27 @@ pub fn install(
     visuals.widgets.hovered = widget_visuals(hover_tint(p.control, dark, 0.07), cs, p.text, 6);
     visuals.widgets.active = widget_visuals(hover_tint(p.control, dark, 0.12), cs, p.text, 6);
     visuals.widgets.open = widget_visuals(hover_tint(p.control, dark, 0.09), cs, p.text, 6);
+    if let Some(h) = &hc {
+        // Contrast themes: solid borders in the text color, the system highlight for
+        // selection and hover, the system link color, no soft shadows.
+        let hl = rgb(h.highlight);
+        visuals.widgets.noninteractive = widget_visuals(p.bg, p.text, p.text, 6);
+        visuals.widgets.inactive = widget_visuals(p.control, p.text, rgb(h.button_text), 6);
+        visuals.widgets.hovered = widget_visuals(p.control, hl, rgb(h.button_text), 6);
+        visuals.widgets.active = widget_visuals(hl, hl, rgb(h.highlight_text), 6);
+        visuals.widgets.open = widget_visuals(hl, hl, rgb(h.highlight_text), 6);
+        for w in [&mut visuals.widgets.hovered, &mut visuals.widgets.active] {
+            w.bg_stroke.width = 2.0;
+        }
+        visuals.selection.bg_fill = hl;
+        visuals.selection.stroke = Stroke::new(1.0, rgb(h.highlight_text));
+        visuals.hyperlink_color = rgb(h.link);
+        visuals.weak_text_color = Some(rgb(h.disabled));
+        visuals.window_shadow = egui::Shadow::NONE;
+        visuals.popup_shadow = egui::Shadow::NONE;
+        visuals.extreme_bg_color = p.bg;
+        visuals.text_cursor.stroke = Stroke::new(2.0, p.text);
+    }
 
     let mut style = egui::Style {
         visuals,
@@ -329,31 +407,44 @@ pub fn install(
     // Hover and press fades: quick enough to never feel sluggish.
     style.animation_time = 0.1;
     style.text_styles = [
-        (TextStyle::Heading, semibold(28.0)),
-        (title_style(), semibold(14.0)),
-        (TextStyle::Body, FontId::new(13.0, FontFamily::Proportional)),
+        (TextStyle::Heading, semibold(28.0 * ts)),
+        (title_style(), semibold(14.0 * ts)),
+        (
+            TextStyle::Body,
+            FontId::new(13.0 * ts, FontFamily::Proportional),
+        ),
         (
             TextStyle::Button,
-            FontId::new(13.0, FontFamily::Proportional),
+            FontId::new(13.0 * ts, FontFamily::Proportional),
         ),
         (
             TextStyle::Small,
-            FontId::new(12.0, FontFamily::Proportional),
+            FontId::new(12.0 * ts, FontFamily::Proportional),
         ),
         (
             TextStyle::Monospace,
-            FontId::new(12.5, FontFamily::Monospace),
+            FontId::new(12.5 * ts, FontFamily::Monospace),
         ),
     ]
     .into();
     ctx.set_style_of(theme, style);
-    ctx.data_mut(|d| d.insert_temp(theme_id(), ThemeState { dark, accent }));
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            theme_id(),
+            ThemeState {
+                dark,
+                accent,
+                text_scale: ts,
+            },
+        )
+    });
     ctx.request_repaint();
 }
 
 /// Shared widgets so every surface looks identical. Implemented by the shell agent;
 /// signatures are fixed.
 pub mod widgets {
+    use egui::accesskit::Role;
     use egui::{Color32, CornerRadius, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, vec2};
 
     use super::{accent_fg, accent_soft, control_stroke, current, hover_tint, palette, semibold};
@@ -389,16 +480,18 @@ pub mod widgets {
     }
 
     fn paint_button(ui: &mut Ui, text: &str, look: ButtonLook) -> Response {
+        let size = 13.0 * super::text_scale(ui.ctx());
         let font = if look.bold {
-            semibold(13.0)
+            semibold(size)
         } else {
-            egui::FontId::proportional(13.0)
+            egui::FontId::proportional(size)
         };
         let galley = ui
             .painter()
             .layout_no_wrap(text.to_owned(), font, look.text);
         let size = vec2(galley.size().x + 24.0, 32.0f32.max(galley.size().y + 12.0));
         let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::labeled(Role::Button, ui.is_enabled(), text));
         if ui.is_rect_visible(rect) {
             let enabled = ui.is_enabled();
             let hover_t = hover_fade(ui, &resp);
@@ -474,6 +567,10 @@ pub mod widgets {
         let (dark, accent) = current(ui.ctx());
         let p = palette(dark);
         let (rect, resp) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::click());
+        // Named by its tooltip; `selected` reads as a pressed toggle.
+        resp.widget_info(|| {
+            egui::WidgetInfo::selected(Role::Button, ui.is_enabled(), selected, tooltip)
+        });
         if ui.is_rect_visible(rect) {
             let enabled = ui.is_enabled();
             let hover_t = hover_fade(ui, &resp);
@@ -531,7 +628,7 @@ pub mod widgets {
         };
         let galley = ui.painter().layout_no_wrap(
             label.to_owned(),
-            egui::FontId::proportional(13.0),
+            egui::FontId::proportional(13.0 * super::text_scale(ui.ctx())),
             p.text_secondary,
         );
         let switch = vec2(40.0, 20.0);
@@ -542,6 +639,9 @@ pub mod widgets {
             *on = !*on;
             resp.mark_changed();
         }
+        // No name of its own: `setting_row` names it after the row title.
+        let state = *on;
+        resp.widget_info(|| egui::WidgetInfo::selected(Role::Switch, ui.is_enabled(), state, ""));
         if ui.is_rect_visible(rect) {
             let t = ui.ctx().animate_bool_responsive(resp.id, *on);
             let sw = Rect::from_min_size(
@@ -619,39 +719,47 @@ pub mod widgets {
                 let right_w = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or(0.0);
                 let text_w = ui.available_width() - right_w - 16.0;
                 let stacked = text_w < 200.0;
+                let ts = super::text_scale(ui.ctx());
                 let text = |ui: &mut Ui, max_w: f32| {
                     ui.vertical(|ui| {
                         ui.set_max_width(max_w);
                         ui.spacing_mut().item_spacing.y = 3.0;
-                        ui.add(
-                            egui::Label::new(egui::RichText::new(title).size(14.0).color(p.text))
-                                .wrap(),
+                        let t = ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(title).size(14.0 * ts).color(p.text),
+                            )
+                            .wrap(),
                         );
                         if !desc.is_empty() {
                             ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new(desc).size(12.0).color(p.text_tertiary),
+                                    egui::RichText::new(desc)
+                                        .size(12.0 * ts)
+                                        .color(p.text_tertiary),
                                 )
                                 .wrap(),
                             );
                         }
-                    });
+                        t.id
+                    })
+                    .inner
                 };
                 let right = egui::Layout::right_to_left(egui::Align::Center);
+                // Screen readers name the row's unnamed controls after its title.
                 let used = if stacked {
-                    text(ui, ui.available_width());
+                    let title_id = text(ui, ui.available_width());
                     ui.add_space(6.0);
                     let h = ui.spacing().interact_size.y;
                     ui.allocate_ui_with_layout(vec2(ui.available_width(), h), right, |ui| {
-                        add_right(ui);
+                        ui.label_inputs_by(title_id, add_right);
                         ui.min_rect().width()
                     })
                     .inner
                 } else {
                     ui.horizontal(|ui| {
-                        text(ui, text_w);
+                        let title_id = text(ui, text_w);
                         ui.with_layout(right, |ui| {
-                            add_right(ui);
+                            ui.label_inputs_by(title_id, add_right);
                             ui.min_rect().width()
                         })
                         .inner
@@ -1317,6 +1425,31 @@ mod icons {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod hc_tests {
+    use super::*;
+
+    #[test]
+    fn high_contrast_palette_uses_the_system_colors() {
+        let hc = crate::a11y::HighContrast {
+            window: [0, 0, 0],
+            text: [255, 255, 255],
+            button: [0, 0, 0],
+            button_text: [255, 255, 255],
+            highlight: [26, 235, 255],
+            highlight_text: [0, 0, 0],
+            disabled: [63, 242, 63],
+            link: [255, 255, 0],
+        };
+        let p = high_contrast_palette(&hc);
+        assert_eq!(p.bg, Color32::BLACK);
+        assert_eq!(p.text_tertiary, Color32::WHITE);
+        assert_eq!(p.stroke, Color32::WHITE);
+        assert!(contrast(p.text, p.bg) >= 7.0);
+        assert!(contrast(p.on_accent, rgb(hc.highlight)) >= 4.5);
     }
 }
 

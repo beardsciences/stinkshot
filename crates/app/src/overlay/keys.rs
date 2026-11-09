@@ -141,13 +141,19 @@ pub fn sheet(select_only: bool) -> Sheet {
             tr!("overlay.keys.k.space_drag").to_string(),
             tr!("overlay.keys.pan_or_move"),
         ),
+        // Keyboard-only selection (`Overlay::handle_keys`): arrows start a region when none
+        // exists, then move it; Enter confirms, Esc cancels.
         (
             tr!("overlay.keys.k.arrows").to_string(),
-            tr!("overlay.keys.nudge"),
+            tr!("overlay.keys.start_or_move"),
+        ),
+        (
+            tr!("overlay.keys.k.shift_arrows").to_string(),
+            tr!("overlay.keys.resize_selection"),
         ),
         (
             tr!("overlay.keys.k.ctrl_arrows").to_string(),
-            tr!("overlay.keys.resize_selection"),
+            tr!("overlay.keys.ten_px_steps"),
         ),
         (COPY_COLOR.label.to_string(), tr!("overlay.keys.copy_color")),
     ];

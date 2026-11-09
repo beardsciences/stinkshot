@@ -215,6 +215,12 @@ pub fn clamp_rect(r: PxRect, bounds: PxRect) -> PxRect {
 }
 
 /// Move a rect by (dx, dy) keeping it inside `bounds`.
+/// Where a keyboard-only selection starts on monitor `mon`: the middle half of it.
+pub fn keyboard_start(mon: PxRect) -> PxRect {
+    let (w, h) = ((mon.w / 2).max(1), (mon.h / 2).max(1));
+    PxRect::new(mon.x + (mon.w - w) / 2, mon.y + (mon.h - h) / 2, w, h)
+}
+
 pub fn move_rect(r: PxRect, dx: i32, dy: i32, bounds: PxRect) -> PxRect {
     clamp_rect(r.translate(dx, dy), bounds)
 }
@@ -455,6 +461,16 @@ mod tests {
         let s = PxRect::new(100, 100, 50, 50);
         let r = resize_px_rect(s, Handle8::Right, (100, 120), B, None);
         assert!(r.w >= 1 && r.h >= 1);
+    }
+
+    #[test]
+    fn keyboard_start_is_the_middle_half() {
+        let m = PxRect::new(1920, 0, 2560, 1440);
+        assert_eq!(keyboard_start(m), PxRect::new(2560, 360, 1280, 720));
+        assert_eq!(
+            keyboard_start(PxRect::new(0, 0, 1, 1)),
+            PxRect::new(0, 0, 1, 1)
+        );
     }
 
     #[test]
