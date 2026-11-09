@@ -28,6 +28,8 @@ const BAR_GAP_PT: f32 = 8.0;
 /// Smallest window (client area, points) and the initial size cap (share of the work area).
 const MIN_CLIENT_PT: (f32, f32) = (640.0, 420.0);
 const MAX_SHARE: f32 = 0.9;
+/// Extra tool bar width while the Highlighter shows its Freehand / Box buttons.
+const HIGHLIGHT_MODES_PT: f32 = 72.0;
 /// Frames the cloaked window waits for its size to settle before it is shown.
 const REVEAL_MIN_FRAMES: u8 = 2;
 const REVEAL_MAX_FRAMES: u8 = 20;
@@ -44,7 +46,15 @@ pub(super) fn bars_height_pt(client_w_pt: f32, tool: Vec2, act: Vec2) -> f32 {
     } else {
         tool.y + BAR_GAP_PT + act.y
     };
-    rows + 2.0 * BAR_GAP_PT
+    // `selection::layout_bars` puts the bars 14 pt under the selection and keeps 8 pt
+    // (BAR_GAP_PT) from the window edge; anything less and it docks them over the picture.
+    rows + 14.0 + BAR_GAP_PT + 4.0
+}
+
+/// Narrowest client width (points) that shows the whole tool bar, with room for the
+/// Highlighter's mode buttons, and never less than the minimum window size.
+pub(super) fn min_width_pt(tool: Vec2, act: Vec2) -> f32 {
+    (tool.x.max(act.x) + HIGHLIGHT_MODES_PT + 2.0 * SIDE_PT).max(MIN_CLIENT_PT.0)
 }
 
 /// Fit an `img` px picture into a `client` px window: (canvas px per image px, top-left of
@@ -70,14 +80,21 @@ pub(super) fn fit(
 
 /// Initial client size in points for an `img` px picture on a monitor with `scale` and a
 /// `work` px work area: the picture at 100 % plus the margins, within the size limits.
-pub(super) fn initial_client_pt(img: (u32, u32), scale: f32, work: PxRect, bottom_pt: f32) -> Vec2 {
+pub(super) fn initial_client_pt(
+    img: (u32, u32),
+    scale: f32,
+    work: PxRect,
+    bottom_pt: f32,
+    min_w_pt: f32,
+) -> Vec2 {
     let s = scale.max(0.1);
+    let min_w = min_w_pt.max(MIN_CLIENT_PT.0);
     let want_w = img.0 as f32 / s + 2.0 * SIDE_PT;
     let want_h = img.1 as f32 / s + TOP_PT + bottom_pt;
-    let max_w = (work.w as f32 / s * MAX_SHARE).max(MIN_CLIENT_PT.0);
+    let max_w = (work.w as f32 / s * MAX_SHARE).max(min_w);
     let max_h = (work.h as f32 / s * MAX_SHARE).max(MIN_CLIENT_PT.1);
     vec2(
-        want_w.clamp(MIN_CLIENT_PT.0, max_w).round(),
+        want_w.clamp(min_w, max_w).round(),
         want_h.clamp(MIN_CLIENT_PT.1, max_h).round(),
     )
 }
@@ -199,7 +216,8 @@ impl EditorWindow {
         ov.carried_edits = carried;
         ov.bar_origin = None;
         let bars = bars_height_pt(f32::INFINITY, ov.bar_sizes.0, ov.bar_sizes.1);
-        let init_client_pt = initial_client_pt(img, target_scale, target_work, bars);
+        let min_w = min_width_pt(ov.bar_sizes.0, ov.bar_sizes.1);
+        let init_client_pt = initial_client_pt(img, target_scale, target_work, bars, min_w);
         EditorWindow {
             ov,
             title,
@@ -264,7 +282,22 @@ impl EditorWindow {
         let now = window_util::get_rect(hwnd);
         let stable = now.is_some() && now == last;
         if (frames >= REVEAL_MIN_FRAMES && stable) || frames >= REVEAL_MAX_FRAMES {
-            if let Some(r) = now {
+            if let Some(mut r) = now {
+                // The DPI move can leave the client under the size it was created for (the
+                // min size is applied in the creating monitor's scale): grow it to fit the bars.
+                let ppp = ctx.pixels_per_point();
+                let have = ctx.content_rect().size();
+                let need = vec2(
+                    min_width_pt(self.ov.bar_sizes.0, self.ov.bar_sizes.1)
+                        .max(self.init_client_pt.x),
+                    MIN_CLIENT_PT.1.max(self.init_client_pt.y),
+                );
+                if have.x < need.x - 1.0 {
+                    r.w += ((need.x - have.x) * ppp).round() as i32;
+                }
+                if have.y < need.y - 1.0 {
+                    r.h += ((need.y - have.y) * ppp).round() as i32;
+                }
                 let want = centred_in(r, self.target_work);
                 if want != r {
                     window_util::set_rect(hwnd, want);
@@ -353,7 +386,10 @@ impl Surface for EditorWindow {
         egui::ViewportBuilder::default()
             .with_title(self.title())
             .with_inner_size(self.init_client_pt)
-            .with_min_inner_size(vec2(MIN_CLIENT_PT.0, MIN_CLIENT_PT.1))
+            .with_min_inner_size(vec2(
+                min_width_pt(self.ov.bar_sizes.0, self.ov.bar_sizes.1),
+                MIN_CLIENT_PT.1,
+            ))
             .with_position(Pos2::new(w.x as f32 / s, w.y as f32 / s))
             .with_resizable(true)
             .with_visible(false)
@@ -470,21 +506,26 @@ mod tests {
         let act = vec2(330.0, 46.0);
         let one = bars_height_pt(1400.0, tool, act);
         let two = bars_height_pt(900.0, tool, act);
-        assert_eq!(one, 46.0 + 2.0 * BAR_GAP_PT);
-        assert_eq!(two, 46.0 * 2.0 + BAR_GAP_PT + 2.0 * BAR_GAP_PT);
+        assert_eq!(one, 46.0 + 14.0 + BAR_GAP_PT + 4.0);
+        assert_eq!(two, 46.0 * 2.0 + BAR_GAP_PT + 14.0 + BAR_GAP_PT + 4.0);
     }
 
     #[test]
     fn initial_size_is_the_picture_at_100_percent_within_limits() {
         let work = PxRect::new(0, 0, 3840, 2100);
         // 1200 x 800 px at 150 %: 800 x 533 pt plus margins.
-        let v = initial_client_pt((1200, 800), 1.5, work, 62.0);
+        let v = initial_client_pt((1200, 800), 1.5, work, 62.0, MIN_CLIENT_PT.0);
         assert_eq!(v.x, (800.0 + 2.0 * SIDE_PT).round());
         assert_eq!(v.y, (800.0f32 / 1.5 + TOP_PT + 62.0).round());
         // Tiny pictures get the minimum, huge ones the work-area cap.
-        let small = initial_client_pt((50, 40), 1.0, work, 62.0);
+        let small = initial_client_pt((50, 40), 1.0, work, 62.0, MIN_CLIENT_PT.0);
         assert_eq!((small.x, small.y), MIN_CLIENT_PT);
-        let big = initial_client_pt((20000, 20000), 1.0, work, 62.0);
+        // A small picture still gets a window as wide as the tool bar.
+        let min_w = min_width_pt(vec2(760.0, 46.0), vec2(330.0, 46.0));
+        assert_eq!(min_w, 760.0 + HIGHLIGHT_MODES_PT + 2.0 * SIDE_PT);
+        let narrow = initial_client_pt((50, 40), 1.0, work, 62.0, min_w);
+        assert_eq!(narrow.x, min_w.round());
+        let big = initial_client_pt((20000, 20000), 1.0, work, 62.0, MIN_CLIENT_PT.0);
         assert_eq!(big.x, (3840.0 * MAX_SHARE).round());
         assert_eq!(big.y, (2100.0 * MAX_SHARE).round());
     }

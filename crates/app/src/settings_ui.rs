@@ -869,10 +869,7 @@ impl SettingsWindow {
     ) {
         let p = uc::pal(shared);
         let accent = uc::accent(shared);
-        let mark = (
-            p.text,
-            accent.gamma_multiply(if shared.dark { 0.45 } else { 0.35 }),
-        );
+        let mark = (p.on_accent, accent);
         let pages: Vec<Section> = SEARCH_KEYWORDS.iter().map(|(s, _)| *s).collect();
         let mut scores = Vec::new();
         let head_h = 30.0;

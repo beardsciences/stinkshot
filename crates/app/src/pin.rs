@@ -732,9 +732,25 @@ impl Surface for Pin {
             }
 
             if bar_shown && (strip || hovered) {
-                let bar_fill = Color32::from_rgba_unmultiplied(32, 32, 32, 230);
-                ui.painter()
-                    .rect_filled(bar, CornerRadius::same(6), bar_fill);
+                if strip {
+                    // The strip is window, not overlay: opaque across its full width and
+                    // down to the image, so nothing behind the pin shows through.
+                    let strip_rect = Rect::from_min_max(rect.min, pos2(rect.max.x, img_rect.top()));
+                    ui.painter().rect_filled(
+                        strip_rect,
+                        CornerRadius {
+                            nw: 6,
+                            ne: 6,
+                            sw: 0,
+                            se: 0,
+                        },
+                        Color32::from_rgb(32, 32, 32),
+                    );
+                } else {
+                    let bar_fill = Color32::from_rgba_unmultiplied(32, 32, 32, 230);
+                    ui.painter()
+                        .rect_filled(bar, CornerRadius::same(6), bar_fill);
+                }
                 let icon_col = Color32::from_rgb(0xe6, 0xe6, 0xe6);
                 for (tool, r) in tool_list.iter().zip(buttons.iter().copied()) {
                     let resp = ui.interact(

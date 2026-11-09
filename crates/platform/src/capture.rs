@@ -49,9 +49,10 @@ use windows::Win32::System::WinRT::Direct3D11::{
 };
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::HiDpi::GetSystemMetricsForDpi;
 use windows::Win32::UI::WindowsAndMessaging::{
     CURSOR_SHOWING, CURSORINFO, DI_NORMAL, DrawIconEx, GetCursorInfo, GetIconInfo, GetWindowRect,
-    HICON, ICONINFO, IsZoomed,
+    HICON, ICONINFO, IsZoomed, SM_CXCURSOR,
 };
 use windows::core::{Interface, factory};
 
@@ -2022,21 +2023,49 @@ fn try_cursor_shot() -> anyhow::Result<Option<CursorShot>> {
         else {
             return Ok(None);
         };
+        // The bitmap is the cursor at 96 dpi; Windows draws it scaled for the monitor's
+        // DPI, so render it at that size (bigger accessibility sizes are already big).
+        let pos = PxPoint {
+            x: ci.ptScreenPos.x,
+            y: ci.ptScreenPos.y,
+        };
+        let mon_scale = crate::monitors::list()
+            .iter()
+            .find(|m| m.rect.contains(pos))
+            .map_or(1.0, |m| m.scale);
+        let base = GetSystemMetricsForDpi(SM_CXCURSOR, 96).max(1);
+        let k = cursor_draw_scale(cw, base, mon_scale);
+        let (dw, dh) = (
+            ((cw as f32 * k).round() as i32).min(max),
+            ((ch as f32 * k).round() as i32).min(max),
+        );
+        let hot = PxPoint {
+            x: (ii.xHotspot as f32 * dw as f32 / cw as f32).round() as i32,
+            y: (ii.yHotspot as f32 * dh as f32 / ch as f32).round() as i32,
+        };
         // DrawIconEx applies the AND/XOR masks itself; two passes recover alpha.
-        let black = render_icon(hicon, cw, ch, 0)?;
-        let white = render_icon(hicon, cw, ch, 255)?;
-        let image = combine_black_white(&black, &white, cw as u32, ch as u32);
+        let black = render_icon(hicon, dw, dh, 0)?;
+        let white = render_icon(hicon, dw, dh, 255)?;
+        let image = combine_black_white(&black, &white, dw as u32, dh as u32);
         Ok(Some(CursorShot {
             image,
             top_left: PxPoint {
-                x: ci.ptScreenPos.x - ii.xHotspot as i32,
-                y: ci.ptScreenPos.y - ii.yHotspot as i32,
+                x: pos.x - hot.x,
+                y: pos.y - hot.y,
             },
-            hotspot: PxPoint {
-                x: ii.xHotspot as i32,
-                y: ii.yHotspot as i32,
-            },
+            hotspot: hot,
         }))
+    }
+}
+
+/// How much to enlarge a `bitmap_w` px cursor bitmap on a monitor at `mon_scale`: bitmaps at
+/// the 96 dpi size (`base_w`, SM_CXCURSOR at 96 dpi) get the monitor's scale, larger ones
+/// (accessibility pointer sizes) are drawn as they are.
+pub(crate) fn cursor_draw_scale(bitmap_w: i32, base_w: i32, mon_scale: f32) -> f32 {
+    if bitmap_w <= base_w && mon_scale > 1.01 {
+        mon_scale
+    } else {
+        1.0
     }
 }
 
@@ -2497,5 +2526,18 @@ mod tests {
         assert_eq!(dst.pixel(0, 0), [0, 0, 0, 255]);
         // fully outside is a no-op
         blend_over(&mut dst, &src, 5, 5);
+    }
+}
+
+#[cfg(test)]
+mod cursor_scale_tests {
+    use super::cursor_draw_scale;
+
+    #[test]
+    fn standard_cursors_follow_the_monitor_scale() {
+        assert_eq!(cursor_draw_scale(32, 32, 1.5), 1.5);
+        assert_eq!(cursor_draw_scale(32, 32, 1.0), 1.0);
+        // Already-big accessibility pointers are drawn as they are.
+        assert_eq!(cursor_draw_scale(64, 32, 1.5), 1.0);
     }
 }

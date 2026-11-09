@@ -723,10 +723,9 @@ pub mod widgets {
         };
         let (dark, accent) = current(ui.ctx());
         let p = palette(dark);
-        let mark = (
-            p.text,
-            accent.gamma_multiply(if dark { 0.45 } else { 0.35 }),
-        );
+        // Solid accent with the accent-button text color: a tinted accent under white text
+        // was hard to read.
+        let mark = (p.on_accent, accent);
         let stroke = if alert.is_some() {
             Stroke::new(1.0, p.danger.gamma_multiply(0.6))
         } else {
