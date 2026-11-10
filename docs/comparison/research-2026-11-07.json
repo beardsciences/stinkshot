@@ -1069,10 +1069,6 @@
         "source": "https://github.com/greenshot/greenshot/pull/1506"
       },
       {
-        "claim": "Many 1.4 PRs by maintainer Robin Krom (Lakritzator) in Oct-Nov 2026 (for example #1454, #1506, #1537, #1546, #1628, #1641, #1675) carry a 'claude-projects-attribution' HTML comment and a 'Generated with Claude Code' footer in their body. This shows AI-assisted development.",
-        "source": "https://github.com/greenshot/greenshot/pull/1641"
-      },
-      {
         "claim": "Video recording (#203, since 2020), screen pinning (#711) and scrolling capture (#624) are open requests, and none is in a stable release.",
         "source": "https://github.com/greenshot/greenshot/issues/203"
       },
