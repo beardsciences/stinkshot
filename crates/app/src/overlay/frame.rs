@@ -1172,17 +1172,35 @@ impl Overlay {
         }
 
         if self.help_open {
-            ui::shortcut_sheet(
+            let mode = match self.kind {
+                Kind::Select(_) => keys::SheetFor::Region,
+                Kind::Capture => keys::SheetFor::Capture,
+                Kind::Annotate => keys::SheetFor::Editor,
+            };
+            // The editor is one window; the capture overlay spans monitors, so it uses the
+            // one under the cursor.
+            let (center, max) = if matches!(self.kind, Kind::Annotate) {
+                let r = ctx.content_rect();
+                (r.center(), r.size())
+            } else {
+                (
+                    Pos2::new(
+                        (ref_mon.x as f32 + ref_mon.w as f32 / 2.0) * k,
+                        (ref_mon.y as f32 + ref_mon.h as f32 / 2.0) * k,
+                    ),
+                    Vec2::new(ref_mon.w as f32 * k, ref_mon.h as f32 * k),
+                )
+            };
+            self.help_scroll_max = ui::shortcut_sheet(
                 ctx,
-                Pos2::new(
-                    (ref_mon.x as f32 + ref_mon.w as f32 / 2.0) * k,
-                    (ref_mon.y as f32 + ref_mon.h as f32 / 2.0) * k,
-                ),
-                ref_mon.w as f32 * k,
-                &keys::sheet(matches!(self.kind, Kind::Select(_))),
+                center,
+                max,
+                &keys::sheet(mode),
+                self.help_scroll,
                 pal,
                 accent,
             );
+            self.help_scroll = self.help_scroll.min(self.help_scroll_max);
         }
 
         // Which element the wheel picked (type, name, level), next to the highlight.

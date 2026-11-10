@@ -117,9 +117,21 @@ pub fn tool_for_key(k: Key) -> Option<Tool> {
 /// Cheat sheet groups: (title, rows of (keys, what they do)).
 pub type Sheet = Vec<(&'static str, Vec<(String, &'static str)>)>;
 
-/// The cheat sheet for an overlay. `select_only`: the overlay only picks a region (Copy Text,
-/// recording, scrolling capture), so tools, editing and the finish shortcuts do nothing there.
-pub fn sheet(select_only: bool) -> Sheet {
+/// Which overlay a cheat sheet is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SheetFor {
+    /// Only picks a region (Copy Text, recording, scrolling capture): tools, editing and the
+    /// finish shortcuts do nothing there.
+    Region,
+    /// The screen overlay: select a region, then annotate it.
+    Capture,
+    /// The editor: the region is the picture's crop, so the selecting shortcuts do nothing.
+    Editor,
+}
+
+/// The cheat sheet for an overlay.
+pub fn sheet(mode: SheetFor) -> Sheet {
+    let select_only = mode == SheetFor::Region;
     let select = vec![
         (
             tr!("overlay.keys.k.drag").to_string(),
@@ -258,7 +270,7 @@ pub fn sheet(select_only: bool) -> Sheet {
             tr!("overlay.keys.front_back"),
         ),
     ];
-    let view = vec![
+    let mut view = vec![
         (
             tr!("overlay.keys.k.ctrl_wheel").to_string(),
             tr!("overlay.keys.zoom_cursor"),
@@ -293,6 +305,45 @@ pub fn sheet(select_only: bool) -> Sheet {
         ("Esc".to_string(), tr!("overlay.keys.cancel")),
         help,
     ];
+    if mode == SheetFor::Editor {
+        // No region to pick: the crop takes the arrow keys, and the scrolling rows move to View.
+        let crop = vec![
+            (
+                tr!("overlay.keys.k.arrows").to_string(),
+                tr!("overlay.keys.move_crop"),
+            ),
+            (
+                tr!("overlay.keys.k.shift_arrows").to_string(),
+                tr!("overlay.keys.resize_crop"),
+            ),
+            (
+                tr!("overlay.keys.k.ctrl_arrows").to_string(),
+                tr!("overlay.keys.ten_px_steps"),
+            ),
+            (COPY_COLOR.label.to_string(), tr!("overlay.keys.copy_color")),
+        ];
+        view.push((
+            tr!("overlay.keys.k.space_drag").to_string(),
+            tr!("overlay.keys.pan"),
+        ));
+        view.push((
+            tr!("overlay.keys.k.wheel").to_string(),
+            tr!("overlay.keys.scroll_zoomed"),
+        ));
+        view.push((
+            tr!("overlay.keys.k.shift_wheel").to_string(),
+            tr!("overlay.keys.scroll_sideways"),
+        ));
+        // Long groups first, so the short ones stack into shared columns.
+        return vec![
+            (tr!("overlay.keys.group.tools"), tools),
+            (tr!("overlay.keys.group.edit"), edit),
+            (tr!("overlay.keys.group.crop"), crop),
+            (tr!("overlay.keys.group.arrange"), arrange),
+            (tr!("overlay.keys.group.view"), view),
+            (tr!("overlay.keys.group.finish"), finish),
+        ];
+    }
     vec![
         (tr!("overlay.keys.group.select"), select),
         (tr!("overlay.keys.group.tools"), tools),
@@ -374,7 +425,7 @@ mod tests {
 
     #[test]
     fn sheet_has_the_four_groups_and_every_tool() {
-        let s = sheet(false);
+        let s = sheet(SheetFor::Capture);
         let titles: Vec<&str> = s.iter().map(|(t, _)| *t).collect();
         assert_eq!(
             titles,
@@ -390,7 +441,7 @@ mod tests {
 
     #[test]
     fn select_only_sheet_has_no_tools_or_edit() {
-        let s = sheet(true);
+        let s = sheet(SheetFor::Region);
         let titles: Vec<&str> = s.iter().map(|(t, _)| *t).collect();
         assert_eq!(titles, ["Select", "Finish"]);
         let finish = &s[1].1;
@@ -415,7 +466,7 @@ mod tests {
     fn every_handled_edit_key_is_on_the_sheet() {
         // Each key `read_keys` handles for editing (redo both ways, delete both ways, Shift
         // constraining a shape) has a row.
-        let s = sheet(false);
+        let s = sheet(SheetFor::Capture);
         let rows: Vec<&(String, &str)> = s.iter().flat_map(|(_, r)| r.iter()).collect();
         let has = |k: &str| rows.iter().any(|(key, _)| key.contains(k));
         for k in [
@@ -472,7 +523,7 @@ mod tests {
 
     #[test]
     fn view_and_snapping_rows_match_the_behaviour() {
-        let s = sheet(false);
+        let s = sheet(SheetFor::Capture);
         let rows: Vec<&(String, &str)> = s.iter().flat_map(|(_, r)| r.iter()).collect();
         let what = |k: &str| -> Vec<&str> {
             rows.iter()
@@ -499,7 +550,7 @@ mod tests {
 
     #[test]
     fn ctrl_c_on_the_sheet_says_when_it_copies_shapes() {
-        let s = sheet(false);
+        let s = sheet(SheetFor::Capture);
         let rows: Vec<&(String, &str)> = s.iter().flat_map(|(_, r)| r.iter()).collect();
         let ctrl_c: Vec<&str> = rows
             .iter()

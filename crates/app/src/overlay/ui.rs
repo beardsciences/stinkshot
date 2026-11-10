@@ -1305,47 +1305,119 @@ pub fn element_chip(ctx: &Context, pos: Pos2, text: &str, pal: &Palette) {
         });
 }
 
-/// Columns per row for groups of the given widths: all in one row when they fit in `max_w`,
-/// else half per row (2x2 for four groups), else one per row.
-pub fn sheet_columns(widths: &[f32], gap: f32, max_w: f32) -> usize {
-    let n = widths.len().max(1);
-    let fits = |cols: usize| {
-        widths.chunks(cols).all(|row| {
-            row.iter().sum::<f32>() + gap * (row.len().saturating_sub(1)) as f32 <= max_w
-        })
-    };
-    let half = n.div_ceil(2);
-    if fits(n) {
-        n
-    } else if half < n && fits(half) {
-        half
-    } else {
-        1
+/// Measured size of one cheat-sheet group, in points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SheetGroup {
+    pub key_w: f32,
+    pub what_w: f32,
+    pub title_w: f32,
+    pub rows: usize,
+}
+
+const SHEET_KEY_GAP: f32 = 10.0;
+const SHEET_COL_GAP: f32 = 18.0;
+const SHEET_GROUP_GAP: f32 = 12.0;
+const SHEET_ROW_H: f32 = 16.0;
+const SHEET_ROW_GAP: f32 = 5.0;
+const SHEET_TITLE_H: f32 = 18.0;
+
+/// Width of a column holding these groups: they share one key column so the rows line up.
+fn sheet_col_width(col: &[SheetGroup]) -> (f32, f32) {
+    let max = |f: fn(&SheetGroup) -> f32| col.iter().map(f).fold(0.0_f32, f32::max);
+    let key_w = max(|g| g.key_w);
+    (
+        key_w,
+        (key_w + SHEET_KEY_GAP + max(|g| g.what_w)).max(max(|g| g.title_w)),
+    )
+}
+
+fn sheet_col_height(col: &[SheetGroup]) -> f32 {
+    col.iter()
+        .map(|g| SHEET_TITLE_H + 2.0 + g.rows as f32 * (SHEET_ROW_H + SHEET_ROW_GAP))
+        .sum::<f32>()
+        + SHEET_GROUP_GAP * col.len().saturating_sub(1) as f32
+}
+
+/// Groups per column, in order. One group per column when that fits in `max_w`; otherwise the
+/// split into stacked columns that fits and is shortest (fewest columns on a tie), so short
+/// groups share a column instead of leaving holes. Nothing fits: a single column.
+pub fn sheet_layout(groups: &[SheetGroup], max_w: f32) -> Vec<usize> {
+    let n = groups.len();
+    if n == 0 {
+        return Vec::new();
     }
+    // Bit i set: a column break after group i.
+    let split = |mask: u32| -> Vec<usize> {
+        let mut out = Vec::new();
+        let mut len = 0;
+        for i in 0..n {
+            len += 1;
+            if i + 1 == n || mask & (1 << i) != 0 {
+                out.push(len);
+                len = 0;
+            }
+        }
+        out
+    };
+    let size = |cols: &[usize]| -> (f32, f32) {
+        let mut at = 0;
+        let (mut w, mut h) = (0.0_f32, 0.0_f32);
+        for &len in cols {
+            let col = &groups[at..at + len];
+            w += sheet_col_width(col).1;
+            h = h.max(sheet_col_height(col));
+            at += len;
+        }
+        (w + SHEET_COL_GAP * cols.len().saturating_sub(1) as f32, h)
+    };
+    let all = split(u32::MAX);
+    if size(&all).0 <= max_w {
+        return all;
+    }
+    let mut best: Option<(f32, Vec<usize>)> = None;
+    for mask in 0..(1u32 << (n - 1).min(16)) {
+        let cols = split(mask);
+        let (w, h) = size(&cols);
+        if w > max_w {
+            continue;
+        }
+        let better = match &best {
+            None => true,
+            Some((bh, bc)) => h < *bh || (h == *bh && cols.len() < bc.len()),
+        };
+        if better {
+            best = Some((h, cols));
+        }
+    }
+    best.map_or_else(|| vec![n], |(_, cols)| cols)
 }
 
 /// F1 / ? cheat sheet: the overlay's shortcuts in columns sized to their text, centered on the
-/// monitor. Four columns wrap to two rows when the monitor (`max_w` logical px) is too narrow.
+/// monitor or editor window (`max` logical px). Short groups stack when one row is too wide, and
+/// the body scrolls by `scroll` points when the window is too short. Returns the scroll limit.
 pub fn shortcut_sheet(
     ctx: &Context,
     center: Pos2,
-    max_w: f32,
+    max: Vec2,
     groups: &super::keys::Sheet,
+    scroll: f32,
     pal: &Palette,
     accent: Color32,
-) {
-    const KEY_GAP: f32 = 10.0;
-    const COL_GAP: f32 = 18.0;
+) -> f32 {
     const MARGIN_X: i8 = 22;
+    const MARGIN_Y: i8 = 18;
     let key_font = theme::semibold(12.0);
     let what_font = FontId::proportional(12.0);
+    let mut scroll_max = 0.0;
     Area::new(Id::unique("stinkshot-ov-shortcuts"))
         .order(Order::Tooltip)
         .fixed_pos(center)
         .pivot(Align2::CENTER_CENTER)
         .interactable(false)
+        // egui's default area size would cap the sheet on its first frame, and it never grows.
+        .default_size(max)
         .show(ctx, |ui| {
-            // Column widths from the text itself: (key column, whole column) per group.
+            ui.set_max_size(max);
             let measure = |t: &str, f: &FontId| {
                 ui.painter()
                     .layout_no_wrap(t.to_owned(), f.clone(), pal.text)
@@ -1353,29 +1425,39 @@ pub fn shortcut_sheet(
                     .x
                     .ceil()
             };
-            let cols: Vec<(f32, f32)> = groups
+            let sizes: Vec<SheetGroup> = groups
                 .iter()
-                .map(|(title, rows)| {
-                    let key_w = rows
+                .map(|(title, rows)| SheetGroup {
+                    key_w: rows
                         .iter()
                         .map(|(k, _)| measure(k, &key_font))
-                        .fold(0.0_f32, f32::max);
-                    let what_w = rows
+                        .fold(0.0_f32, f32::max),
+                    what_w: rows
                         .iter()
                         .map(|(_, w)| measure(w, &what_font))
-                        .fold(0.0_f32, f32::max);
-                    let title_w = measure(title, &theme::semibold(13.0));
-                    (key_w, (key_w + KEY_GAP + what_w).max(title_w))
+                        .fold(0.0_f32, f32::max),
+                    title_w: measure(title, &theme::semibold(13.0)),
+                    rows: rows.len(),
                 })
                 .collect();
-            let widths: Vec<f32> = cols.iter().map(|c| c.1).collect();
-            let room = max_w - 32.0 - 2.0 * MARGIN_X as f32;
-            let per_row = sheet_columns(&widths, COL_GAP, room);
+            let room = max.x - 32.0 - 2.0 * MARGIN_X as f32;
+            let layout = sheet_layout(&sizes, room);
+            // Header (title row and its gap) plus margins leave this much height for the body.
+            let body_h = (max.y - 32.0 - 2.0 * MARGIN_Y as f32 - 34.0).max(80.0);
+            let content_h = {
+                let mut at = 0;
+                let mut h = 0.0_f32;
+                for &len in &layout {
+                    h = h.max(sheet_col_height(&sizes[at..at + len]));
+                    at += len;
+                }
+                h
+            };
             Frame::NONE
-                .fill(pal.flyout.gamma_multiply(0.97))
+                .fill(pal.flyout)
                 .stroke(egui::Stroke::new(1.0, pal.stroke))
                 .corner_radius(10)
-                .inner_margin(Margin::symmetric(MARGIN_X, 18))
+                .inner_margin(Margin::symmetric(MARGIN_X, MARGIN_Y))
                 .shadow(egui::epaint::Shadow {
                     offset: [0, 8],
                     blur: 24,
@@ -1399,52 +1481,65 @@ pub fn shortcut_sheet(
                         );
                     });
                     ui.add_space(8.0);
-                    let indexed: Vec<usize> = (0..groups.len()).collect();
-                    for (row_i, row) in indexed.chunks(per_row).enumerate() {
-                        if row_i > 0 {
-                            ui.add_space(12.0);
-                        }
-                        ui.horizontal_top(|ui| {
-                            ui.spacing_mut().item_spacing = Vec2::new(COL_GAP, 0.0);
-                            for &gi in row {
-                                let (title, rows) = &groups[gi];
-                                let (key_w, col_w) = cols[gi];
-                                ui.vertical(|ui| {
-                                    ui.set_width(col_w);
-                                    ui.spacing_mut().item_spacing = Vec2::new(0.0, 5.0);
-                                    ui.label(
-                                        RichText::new(*title)
-                                            .font(theme::semibold(13.0))
-                                            .color(accent_fg),
-                                    );
-                                    ui.add_space(2.0);
-                                    for (keys, what) in rows {
-                                        ui.horizontal(|ui| {
-                                            ui.spacing_mut().item_spacing.x = KEY_GAP;
-                                            let (r, _) = ui.allocate_exact_size(
-                                                Vec2::new(key_w, 16.0),
-                                                Sense::hover(),
-                                            );
-                                            ui.painter().text(
-                                                r.left_center(),
-                                                Align2::LEFT_CENTER,
-                                                keys,
-                                                key_font.clone(),
-                                                pal.text,
-                                            );
+                    let out = egui::ScrollArea::vertical()
+                        .id_salt("stinkshot-ov-shortcuts-body")
+                        .max_height(body_h)
+                        .min_scrolled_height(body_h.min(content_h + 4.0))
+                        .vertical_scroll_offset(scroll)
+                        .show(ui, |ui| {
+                            ui.horizontal_top(|ui| {
+                                ui.spacing_mut().item_spacing = Vec2::new(SHEET_COL_GAP, 0.0);
+                                let mut at = 0;
+                                for &len in &layout {
+                                    let (key_w, col_w) = sheet_col_width(&sizes[at..at + len]);
+                                    ui.vertical(|ui| {
+                                        ui.set_width(col_w);
+                                        ui.spacing_mut().item_spacing =
+                                            Vec2::new(0.0, SHEET_ROW_GAP);
+                                        for (i, (title, rows)) in
+                                            groups[at..at + len].iter().enumerate()
+                                        {
+                                            if i > 0 {
+                                                ui.add_space(SHEET_GROUP_GAP - SHEET_ROW_GAP);
+                                            }
                                             ui.label(
-                                                RichText::new(*what)
-                                                    .font(what_font.clone())
-                                                    .color(pal.text_secondary),
+                                                RichText::new(*title)
+                                                    .font(theme::semibold(13.0))
+                                                    .color(accent_fg),
                                             );
-                                        });
-                                    }
-                                });
-                            }
+                                            ui.add_space(2.0);
+                                            for (keys, what) in rows {
+                                                // Painted, not laid out: every row is exactly SHEET_ROW_H.
+                                                let (r, _) = ui.allocate_exact_size(
+                                                    Vec2::new(col_w, SHEET_ROW_H),
+                                                    Sense::hover(),
+                                                );
+                                                ui.painter().text(
+                                                    r.left_center(),
+                                                    Align2::LEFT_CENTER,
+                                                    keys,
+                                                    key_font.clone(),
+                                                    pal.text,
+                                                );
+                                                ui.painter().text(
+                                                    r.left_center()
+                                                        + Vec2::new(key_w + SHEET_KEY_GAP, 0.0),
+                                                    Align2::LEFT_CENTER,
+                                                    *what,
+                                                    what_font.clone(),
+                                                    pal.text_secondary,
+                                                );
+                                            }
+                                        }
+                                    });
+                                    at += len;
+                                }
+                            });
                         });
-                    }
+                    scroll_max = (out.content_size.y - out.inner_rect.height()).max(0.0);
                 });
         });
+    scroll_max
 }
 
 /// Small centered pill ("Saving...") shown while the final flatten runs.
@@ -1472,19 +1567,40 @@ pub fn busy_pill(ctx: &Context, center: Pos2, pal: &Palette) {
 
 #[cfg(test)]
 mod sheet_tests {
-    use super::sheet_columns;
+    use super::{SheetGroup, sheet_layout};
+
+    fn g(rows: usize) -> SheetGroup {
+        SheetGroup {
+            key_w: 90.0,
+            what_w: 136.0,
+            title_w: 40.0,
+            rows,
+        }
+    }
 
     #[test]
-    fn sheet_wraps_to_two_rows_on_narrow_monitors() {
-        let w = [236.0, 236.0, 236.0, 236.0];
+    fn sheet_stacks_short_groups_when_one_row_is_too_wide() {
+        // Each column is 236 wide with an 18 gap.
+        let four = [g(8), g(8), g(8), g(8)];
         // 1920 px at 100 %: one row.
-        assert_eq!(sheet_columns(&w, 18.0, 1920.0 - 76.0), 4);
-        // 1280 px at 125 % or 1920 px at 200 %: 2x2.
-        assert_eq!(sheet_columns(&w, 18.0, 1024.0 - 76.0), 2);
-        assert_eq!(sheet_columns(&w, 18.0, 960.0 - 76.0), 2);
+        assert_eq!(sheet_layout(&four, 1920.0 - 76.0), vec![1, 1, 1, 1]);
+        // 1280 px at 125 % or 1920 px at 200 %: only three columns fit, so the groups pair up
+        // (as tall as three columns with one pair, and narrower).
+        assert_eq!(sheet_layout(&four, 1024.0 - 76.0), vec![2, 2]);
         // Absurdly narrow: one column.
-        assert_eq!(sheet_columns(&w, 18.0, 300.0), 1);
+        assert_eq!(sheet_layout(&four, 300.0), vec![4]);
         // The region-only sheet has two groups.
-        assert_eq!(sheet_columns(&w[..2], 18.0, 960.0 - 76.0), 2);
+        assert_eq!(sheet_layout(&four[..2], 960.0 - 76.0), vec![1, 1]);
+        assert!(sheet_layout(&[], 500.0).is_empty());
+    }
+
+    #[test]
+    fn editor_sheet_pairs_its_short_groups() {
+        // Tools, Edit, Crop, Arrange, View, Finish in a window with room for four columns.
+        let six = [g(13), g(12), g(4), g(4), g(7), g(4)];
+        assert_eq!(
+            sheet_layout(&six, 4.0 * 236.0 + 3.0 * 18.0),
+            vec![1, 1, 2, 2]
+        );
     }
 }

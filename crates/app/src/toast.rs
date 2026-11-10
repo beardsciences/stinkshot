@@ -525,12 +525,17 @@ impl Surface for Toast {
             let top = inner.top();
             let painter = ui.painter();
             let sq = Rect::from_min_size(pos2(text_x, top + 1.0), vec2(14.0, 14.0));
-            let (sq_col, sq_r) = if error {
-                (p.danger, CornerRadius::same(7))
+            if error {
+                painter.rect_filled(sq, CornerRadius::same(7), p.danger);
             } else {
-                (accent, CornerRadius::same(4))
-            };
-            painter.rect_filled(sq, sq_r, sq_col);
+                let tex = logo_texture(ui.ctx(), accent);
+                painter.image(
+                    tex.id(),
+                    sq.expand(1.0),
+                    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+            }
             painter.text(
                 pos2(text_x + 20.0, top + 8.0),
                 Align2::LEFT_CENTER,
@@ -613,6 +618,21 @@ impl Surface for Toast {
             SurfaceStatus::Open
         }
     }
+}
+
+/// The logo in the accent color, for the toast header. Rebuilt when the accent changes.
+fn logo_texture(ctx: &egui::Context, accent: Color32) -> egui::TextureHandle {
+    let id = egui::Id::unique("stinkshot-toast-logo");
+    if let Some((a, tex)) = ctx.data(|d| d.get_temp::<(Color32, egui::TextureHandle)>(id))
+        && a == accent
+    {
+        return tex;
+    }
+    let rgba = crate::icon_gen::render_rgba(32, [accent.r(), accent.g(), accent.b()]);
+    let img = egui::ColorImage::from_rgba_unmultiplied([32, 32], &rgba);
+    let tex = ctx.load_texture("toast-logo", img, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, (accent, tex.clone())));
+    tex
 }
 
 #[cfg(test)]

@@ -430,6 +430,9 @@ pub struct Overlay {
     notice: Option<Notice>,
     /// The F1 / ? shortcut cheat sheet is showing.
     help_open: bool,
+    /// Cheat sheet scroll (points) for windows too short to show it whole, and its limit.
+    help_scroll: f32,
+    help_scroll_max: f32,
     /// Find Sensitive Info scan or review panel (see `smart_redact.rs`).
     smart: Option<smart_redact::SmartRedact>,
     /// Codes and Text panel (see `scan.rs`).
@@ -703,6 +706,8 @@ impl Overlay {
                 until: None,
             }),
             help_open: false,
+            help_scroll: 0.0,
+            help_scroll_max: 0.0,
             smart: None,
             scan: None,
             beautify_open: false,
@@ -1379,6 +1384,7 @@ impl Overlay {
         }
         if k.help {
             self.help_open = !self.help_open;
+            self.help_scroll = 0.0;
             return;
         }
         if self.help_open {

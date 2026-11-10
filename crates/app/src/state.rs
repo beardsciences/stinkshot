@@ -29,6 +29,8 @@ pub struct Shared {
     pub accent: [u8; 4],
     /// The newer release the update check found, for Settings > Privacy.
     pub update: UpdateState,
+    /// The last update check got no usable answer (cleared by the next one that does).
+    pub update_check_failed: bool,
 }
 
 /// What Settings shows about a newer release.

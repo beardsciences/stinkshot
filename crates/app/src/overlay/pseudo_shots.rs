@@ -132,8 +132,16 @@ fn scenes() -> Vec<(&'static str, Vec2, Scene)> {
             "help",
             Vec2::new(1920.0, 1000.0),
             Box::new(move |ctx| {
-                let sheet = super::keys::sheet(false);
-                ui::shortcut_sheet(ctx, Pos2::new(960.0, 500.0), 1920.0, &sheet, pal(), accent);
+                let sheet = super::keys::sheet(super::keys::SheetFor::Capture);
+                ui::shortcut_sheet(
+                    ctx,
+                    Pos2::new(960.0, 500.0),
+                    Vec2::new(1920.0, 1000.0),
+                    &sheet,
+                    0.0,
+                    pal(),
+                    accent,
+                );
             }),
         ),
         (

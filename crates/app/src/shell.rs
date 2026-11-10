@@ -529,6 +529,8 @@ fn run_app(
         viewport: root_viewport(),
         renderer: eframe::Renderer::Wgpu,
         wgpu_options,
+        // `clipboard_in` / `clipboard_out` do this with the app's own clipboard code.
+        clipboard_shortcuts: false,
         ..Default::default()
     };
     // A device loss inside a paint ends in a panic in egui-wgpu (`gpu.rs`). winit hands panics
@@ -605,6 +607,69 @@ struct ToastSlot {
     index: usize,
 }
 
+/// Ctrl+C / Ctrl+X / Ctrl+V as egui's clipboard events, with the text read from the system
+/// clipboard. egui-winit's own translation only reaches the system clipboard with its
+/// `clipboard` feature (arboard); without it a paste is dropped. Ctrl+V with no text on the
+/// clipboard stays a key press (the editor pastes shapes on it).
+fn clipboard_in(ctx: &egui::Context) {
+    use egui::{Event, Key};
+    ctx.input_mut(|i| {
+        for ev in &mut i.events {
+            let Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } = ev
+            else {
+                continue;
+            };
+            if !modifiers.command || modifiers.alt {
+                continue;
+            }
+            match key {
+                Key::C => *ev = Event::Copy,
+                Key::X => *ev = Event::Cut,
+                Key::V => {
+                    let text = stinkshot_platform::clipboard::get_text()
+                        .map(|t| t.replace("\r\n", "\n"))
+                        .filter(|t| !t.is_empty());
+                    if let Some(text) = text {
+                        *ev = Event::Paste(text);
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+}
+
+/// Text that egui widgets copied this frame goes to the system clipboard.
+fn clipboard_out(ctx: &egui::Context) {
+    let copied: Vec<String> = ctx.output(|o| {
+        o.commands
+            .iter()
+            .filter_map(|c| match c {
+                egui::OutputCommand::CopyText(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect()
+    });
+    if let Some(text) = copied.last()
+        && let Err(e) = stinkshot_platform::clipboard::set_text(text)
+    {
+        log::warn!("copy text: {e:#}");
+    }
+}
+
+/// One frame of a surface, with the clipboard wired to its text fields.
+fn show_surface(ctx: &egui::Context, surf: &mut dyn Surface, shared: &mut Shared) -> SurfaceStatus {
+    clipboard_in(ctx);
+    let status = surf.show(ctx, shared);
+    clipboard_out(ctx);
+    status
+}
+
 /// Show one surface as an immediate viewport; resolve its HWND once.
 fn drive(
     ctx: &egui::Context,
@@ -619,8 +684,9 @@ fn drive(
         .viewport_builder(shared)
         .with_title(title.clone())
         .with_icon(crate::app_icon::window_icon());
-    let mut status =
-        ctx.show_viewport_immediate(id, builder.clone(), |ctx, _class| surf.show(ctx, shared));
+    let mut status = ctx.show_viewport_immediate(id, builder.clone(), |ctx, _class| {
+        show_surface(ctx, surf, shared)
+    });
     // The frame is presented by now (immediate viewports paint inside the call).
     surf.after_paint();
     if let Some((hwnd, dpi)) = &mut st.icon {
@@ -648,8 +714,9 @@ fn drive(
     let mut extra = 0;
     while status == SurfaceStatus::Open && extra < 3 && surf.wants_frame_now() {
         extra += 1;
-        status =
-            ctx.show_viewport_immediate(id, builder.clone(), |ctx, _class| surf.show(ctx, shared));
+        status = ctx.show_viewport_immediate(id, builder.clone(), |ctx, _class| {
+            show_surface(ctx, surf, shared)
+        });
         surf.after_paint();
     }
     status
@@ -899,6 +966,7 @@ impl Shell {
                 dark: resolved_theme.0,
                 accent: resolved_theme.1,
                 update: Default::default(),
+                update_check_failed: false,
             },
             applied: config,
             tray,
@@ -2505,6 +2573,7 @@ impl Shell {
         let install = std::mem::take(&mut self.install_after_check);
         match result {
             Ok(release) => {
+                self.shared.update_check_failed = false;
                 self.shared.config.privacy.last_update_check = Some(chrono::Utc::now());
                 self.shared.config_dirty = true;
                 if let Some(r) = release {
@@ -2559,6 +2628,7 @@ impl Shell {
                 if forced {
                     self.notify(tr!("shell.update.failed"), body, true);
                 }
+                self.shared.update_check_failed = true;
                 self.update_retry_at = Instant::now() + Duration::from_secs(3600);
             }
         }

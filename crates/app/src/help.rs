@@ -78,7 +78,7 @@ pub fn hotkey_rows(cfg: &Hotkeys) -> Vec<(String, String)> {
 
 /// Overlay shortcut groups, straight from the overlay's own cheat sheet.
 pub fn editor_groups() -> Vec<Group> {
-    crate::overlay::keys::sheet(false)
+    crate::overlay::keys::sheet(crate::overlay::keys::SheetFor::Capture)
         .into_iter()
         .map(|(title, rows)| Group {
             title,
@@ -281,7 +281,7 @@ mod tests {
     fn every_overlay_binding_is_listed() {
         let rows = all_editor_rows();
         // The whole cheat sheet, row for row.
-        let sheet: Vec<(String, String)> = keys::sheet(false)
+        let sheet: Vec<(String, String)> = keys::sheet(keys::SheetFor::Capture)
             .into_iter()
             .flat_map(|(_, r)| r)
             .map(|(k, v)| (k, v.to_string()))
@@ -328,9 +328,22 @@ mod tests {
             assert!(has(k), "{k} missing");
         }
         // The select-only sheet is a subset in its keys.
-        for (_, r) in keys::sheet(true) {
-            for (k, _) in r {
-                assert!(rows.iter().any(|(key, _)| *key == k), "{k} missing");
+        for mode in [keys::SheetFor::Region, keys::SheetFor::Editor] {
+            for (_, r) in keys::sheet(mode) {
+                for (k, _) in r {
+                    assert!(rows.iter().any(|(key, _)| *key == k), "{k} missing");
+                }
+            }
+        }
+        // The editor has no region to pick, so its sheet leaves the picking rows out.
+        let picking = [
+            lookup("overlay.keys.select_region"),
+            lookup("overlay.keys.window_or_element"),
+            lookup("overlay.keys.add_region"),
+        ];
+        for (_, r) in keys::sheet(keys::SheetFor::Editor) {
+            for (_, what) in r {
+                assert!(!picking.contains(&what), "{what} listed in the editor");
             }
         }
     }

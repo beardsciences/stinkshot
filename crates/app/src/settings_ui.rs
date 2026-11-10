@@ -322,6 +322,8 @@ pub struct SettingsWindow {
     search: String,
     /// Best row score per page from the last results frame, to put the best page first.
     search_scores: Vec<(Section, u32)>,
+    /// A page asked to switch to another one (Privacy's History link).
+    goto: Option<Section>,
 }
 
 impl SettingsWindow {
@@ -350,6 +352,7 @@ impl SettingsWindow {
             hotkey_checked_at: None,
             search: String::new(),
             search_scores: Vec::new(),
+            goto: None,
         }
     }
 
@@ -665,7 +668,9 @@ impl Surface for SettingsWindow {
 
             // Page, or search results while the search has words.
             let query = search::Query::parse(&self.search);
-            let area = content.shrink2(vec2(28.0, 18.0));
+            // No bottom inset: rows scroll out under the window edge, not a gap above it.
+            let mut area = content.shrink2(vec2(28.0, 18.0));
+            area.max.y = content.bottom();
             let w = area.width().min(CONTENT_MAX_W);
             let page_rect = egui::Rect::from_min_size(area.min, vec2(w, area.height()));
             ui.scope_builder(UiBuilder::new().max_rect(page_rect), |ui| {
@@ -697,7 +702,10 @@ impl Surface for SettingsWindow {
                         );
                         ui.add_space(6.0);
                         self.page(section, ui, shared, key_consumed);
-                        ui.add_space(16.0);
+                        if let Some(s) = self.goto.take() {
+                            section = s;
+                        }
+                        ui.add_space(24.0);
                     });
             });
         });
@@ -2170,9 +2178,11 @@ impl SettingsWindow {
         let mut check = false;
         widgets::setting_row(
             ui,
-            tr!("settings.privacy.check_now"),
+            tr!("settings.privacy.manual_check"),
             &if requested {
                 tr!("settings.privacy.check_requested").to_string()
+            } else if shared.update_check_failed {
+                tr!("settings.privacy.check_failed").to_string()
             } else {
                 last
             },
@@ -2203,8 +2213,17 @@ impl SettingsWindow {
         if search::searching() {
             return;
         }
-        group_title(ui, p, tr!("settings.privacy.history"));
-        self.history_rows(ui, shared);
+        ui.add_space(8.0);
+        widgets::setting_row(
+            ui,
+            tr!("settings.privacy.history"),
+            tr!("settings.privacy.history.desc"),
+            |ui| {
+                if widgets::button(ui, tr!("settings.privacy.history.open")).clicked() {
+                    self.goto = Some(Section::History);
+                }
+            },
+        );
         ui.add_space(14.0);
         ui.horizontal(|ui| {
             ui.label(

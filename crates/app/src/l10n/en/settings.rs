@@ -3,7 +3,7 @@
 pub fn get(key: &str) -> Option<&'static str> {
     Some(match key {
         "settings.language" => "Language",
-        "settings.language.desc" => "Pseudo checks layout with longer, accented text.",
+        "settings.language.desc" => "Language for menus and messages. Pseudo is a layout test.",
         "settings.language.system" => "System Default",
         "settings.language.en" => "English",
         "settings.language.pseudo" => "Pseudo",
@@ -53,14 +53,14 @@ pub fn get(key: &str) -> Option<&'static str> {
         "settings.history.days" => "{n} days",
         "settings.history.no_cap" => "No Cap",
         "settings.history.gb" => "{gb} GB",
-        "settings.history.folder.desc" => "{path}  Existing captures stay where they are.",
+        "settings.history.folder.desc" => "{path}\nExisting captures stay where they are.",
         "settings.history.ocr.desc" => {
             "OCR each capture in the background so you can search what was on screen."
         }
         "settings.history.ocr.desc_missing" => {
             "OCR each capture in the background so you can search what was on screen. No OCR language is installed. {help}"
         }
-        "settings.history.stats" => "{count} items, {size} used. 0 days or 0 GB means no limit.",
+        "settings.history.stats" => "{count} items, {size} used.",
         "settings.privacy.never_checked" => "Never checked",
         "settings.privacy.just_now" => "just now",
         "settings.privacy.min_ago" => "{n} min ago",
@@ -257,6 +257,10 @@ pub fn get(key: &str) -> Option<&'static str> {
             "Once a day, fetches signed release info from stinkshot.com. Sends nothing else. Update Now downloads the signed installer only when you click it."
         }
         "settings.privacy.check_now" => "Check Now",
+        "settings.privacy.manual_check" => "Manual Check",
+        "settings.privacy.check_failed" => "Last check failed. Try again later.",
+        "settings.privacy.history.desc" => "Where captures are kept, and for how long.",
+        "settings.privacy.history.open" => "History Settings",
         "settings.privacy.updates_off" => "Turn on update checks first",
         "settings.privacy.update_ready" => "Stinkshot {tag} Is Available",
         "settings.privacy.update_ready.desc" => {
@@ -276,9 +280,7 @@ pub fn get(key: &str) -> Option<&'static str> {
             "Windows could not open the settings file. Check that a text editor is set for .toml files."
         }
         "settings.about.license" => "License",
-        "settings.about.license.desc" => {
-            "GPL-3.0-or-later. Free software: use, study, share and change it."
-        }
+        "settings.about.license.desc" => "Free software: use, study, share and change it.",
         "settings.about.source" => "Source Code",
         "settings.about.copied" => "Copied",
         "settings.about.copy_link" => "Copy Link",
@@ -554,6 +556,10 @@ pub const KEYS: &[&str] = &[
     "settings.privacy.updates",
     "settings.privacy.updates.desc",
     "settings.privacy.check_now",
+    "settings.privacy.manual_check",
+    "settings.privacy.check_failed",
+    "settings.privacy.history.desc",
+    "settings.privacy.history.open",
     "settings.privacy.updates_off",
     "settings.privacy.update_ready",
     "settings.privacy.update_ready.desc",

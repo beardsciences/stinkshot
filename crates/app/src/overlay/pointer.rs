@@ -109,6 +109,10 @@ impl Overlay {
             self.exact_open = false;
         }
 
+        // The wheel scrolls the cheat sheet when the window is too short for all of it.
+        if self.help_open && inp.wheel.y != 0.0 {
+            self.help_scroll = (self.help_scroll - inp.wheel.y).clamp(0.0, self.help_scroll_max);
+        }
         // Ctrl+wheel zooms around the cursor; the plain wheel scrolls a zoomed view.
         if self.sel.is_some() && !inp.over_ui && !self.help_open {
             if (inp.zoom - 1.0).abs() > 1e-4

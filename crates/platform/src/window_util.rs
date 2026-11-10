@@ -136,7 +136,13 @@ pub fn set_topmost(hwnd: Hwnd, topmost: bool) {
 }
 
 /// Hide from screen capture (WDA_EXCLUDEFROMCAPTURE): recording HUD, toasts, overlays.
+///
+/// Debug builds skip the exclusion when `STINKSHOT_SHOW_IN_CAPTURE=1`, so UI reviews can
+/// screenshot these windows. Release builds ignore the variable.
 pub fn exclude_from_capture(hwnd: Hwnd, exclude: bool) {
+    let exclude = exclude
+        && !(cfg!(debug_assertions)
+            && std::env::var("STINKSHOT_SHOW_IN_CAPTURE").is_ok_and(|v| v == "1"));
     let aff = if exclude {
         WDA_EXCLUDEFROMCAPTURE
     } else {
