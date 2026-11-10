@@ -43,6 +43,21 @@ use crate::mf::{ComGuard, SendCom};
 /// How long WGC gets to create its sessions before we fall back to Desktop Duplication.
 const WGC_INIT_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// The capture source went away (display unplugged, resolution or arrangement changed). The
+/// recorder builds a new [`Capturer`] for the same region when it sees this.
+#[derive(Debug)]
+pub struct DisplayLost;
+
+impl std::fmt::Display for DisplayLost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "the captured display was disconnected or changed, so the recording cannot continue",
+        )
+    }
+}
+
+impl std::error::Error for DisplayLost {}
+
 /// WGC session creation hangs (not ordinary errors, which may be transient such as a display
 /// reconfiguration): while a hung helper is still blocked, and for a while after, recordings
 /// skip WGC instead of waiting for the timeout and leaving one more blocked thread (with its
@@ -375,7 +390,10 @@ impl Capturer {
                 .map_err(|e| format!("{e:#}"))
         });
         match r {
-            Ok(Ok(c)) => Ok(c.0),
+            Ok(Ok(c)) => {
+                stinkshot_platform::wgc_memo::note_ok();
+                Ok(c.0)
+            }
             Ok(Err(e)) => Err(anyhow!(e)),
             // A timed-out helper stays blocked inside the OS call; it holds nothing we need.
             Err(Hang::TimedOut) => {
@@ -829,7 +847,7 @@ fn poll_wgc(
     stats: &mut PollStats,
 ) -> Result<bool> {
     if closed.load(Ordering::Relaxed) {
-        bail!("the captured display was disconnected or changed, so the recording cannot continue");
+        return Err(anyhow::Error::new(DisplayLost));
     }
     let mut latest: Option<windows::Graphics::Capture::Direct3D11CaptureFrame> = None;
     let mut delivered = 0u32;

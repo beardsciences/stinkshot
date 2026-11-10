@@ -110,6 +110,14 @@ pub fn code_name(key: Key) -> Option<&'static str> {
     })
 }
 
+/// Keys that make a usable global hotkey without Ctrl, Alt or Win.
+fn works_alone(code: &str) -> bool {
+    matches!(code, "PrintScreen" | "Pause" | "ScrollLock")
+        || code
+            .strip_prefix('F')
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
 fn is_modifier_key(key: Key) -> bool {
     use Key::*;
     matches!(
@@ -189,6 +197,10 @@ pub fn scan(
                     _ => {}
                 }
                 if let Some(code) = code_name(main).or_else(|| code_name(*key)) {
+                    if !(m.ctrl || m.alt || win || works_alone(code)) {
+                        // A bare or Shift-only typing key would be taken from every app.
+                        continue;
+                    }
                     return Captured::Combo(build_hotkey(m.ctrl, m.shift, m.alt, win, code));
                 }
             }
@@ -371,15 +383,35 @@ mod tests {
     #[test]
     fn prefers_the_physical_key() {
         // Dvorak: logical 'Semicolon' sits on the physical 'Z' key.
+        let ev = [key_event(Key::Semicolon, Some(Key::Z), true, ctrl_shift())];
+        assert_eq!(
+            scan(&ev, ctrl_shift(), false, None),
+            Captured::Combo("Control+Shift+KeyZ".into())
+        );
+    }
+
+    #[test]
+    fn typing_keys_need_ctrl_alt_or_win() {
+        let none = Modifiers::default();
+        let shift = Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        for m in [none, shift] {
+            let ev = [key_event(Key::A, Some(Key::A), true, m)];
+            assert_eq!(scan(&ev, m, false, None), Captured::Nothing);
+        }
+        let ev = [key_event(Key::F9, Some(Key::F9), true, none)];
+        assert_eq!(scan(&ev, none, false, None), Captured::Combo("F9".into()));
         let ev = [key_event(
-            Key::Semicolon,
-            Some(Key::Z),
-            true,
-            Modifiers::default(),
+            Key::PrintScreen,
+            Some(Key::PrintScreen),
+            false,
+            shift,
         )];
         assert_eq!(
-            scan(&ev, Modifiers::default(), false, None),
-            Captured::Combo("KeyZ".into())
+            scan(&ev, shift, false, None),
+            Captured::Combo("Shift+PrintScreen".into())
         );
     }
 

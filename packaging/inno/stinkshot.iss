@@ -147,6 +147,7 @@ const
 
 var
   WasRunning: Boolean;
+  Installed: Boolean;
   PrevVersion: String;
 
 { The version already installed under this AppId, or '' for a fresh install. }
@@ -267,6 +268,30 @@ end;
 function RelaunchAfterSilentUpgrade(): Boolean;
 begin
   Result := WasRunning and WizardSilent();
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    Installed := True;
+end;
+
+{ Setup was cancelled or failed after PrepareToInstall closed the running copy: start that
+  copy again so a stopped update does not leave the app closed. }
+procedure DeinitializeSetup();
+var
+  Exe: String;
+  Code: Integer;
+begin
+  if WasRunning and not Installed then
+  begin
+    Exe := ExpandConstant('{app}\stinkshot.exe');
+    if FileExists(Exe) then
+      if Exec(Exe, '--tray', '', SW_SHOWNORMAL, ewNoWait, Code) then
+        Log('setup did not finish: started the previous copy again')
+      else
+        Log('setup did not finish and the previous copy could not be started');
+  end;
 end;
 
 procedure RemoveAutostartIfOurs();

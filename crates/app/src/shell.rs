@@ -435,6 +435,8 @@ struct Boot {
     tray: Option<Tray>,
     hotkeys: Hotkeys,
     hotkey_errors: Vec<String>,
+    /// The custom history folder that could not be opened at start-up (the default is in use).
+    history_fallback: Option<String>,
 }
 
 /// Body of the tr!("shell.welcome.title") toast shown when the user starts the app by hand.
@@ -454,7 +456,16 @@ fn run_app(
     ipc_rx: Receiver<Vec<String>>,
     gpu: Option<std::thread::JoinHandle<Option<eframe::egui_wgpu::WgpuSetupExisting>>>,
 ) -> anyhow::Result<()> {
-    let config = Config::load();
+    let first_run = !Config::path().exists();
+    let mut config = Config::load();
+    if first_run && !config.general.start_with_windows && system::autostart_enabled() {
+        // The installer's Start With Windows task wrote the Run value before any config
+        // existed. Keep that choice instead of deleting the value below.
+        config.general.start_with_windows = true;
+        if let Err(e) = config.save() {
+            log::warn!("could not save config: {e:#}");
+        }
+    }
     crate::l10n::apply(&config.general.language);
     timing::point(format_args!("config loaded"));
 
@@ -482,11 +493,29 @@ fn run_app(
 
     let fonts = Arc::new(Fonts::load_system().context("load system fonts")?);
     timing::point(format_args!("fonts loaded"));
-    let history_dir = config.history_folder();
-    let history = Arc::new(
-        History::open(&history_dir)
-            .with_context(|| format!("open history folder {}", history_dir.display()))?,
-    );
+    let mut history_dir = config.history_folder();
+    let mut history_fallback = None;
+    let history = match History::open(&history_dir) {
+        Ok(h) => h,
+        // A custom folder on a drive or share that is not there right now must not keep the
+        // app from starting: use the default folder for this run and say so.
+        Err(e) if !config.history.folder.trim().is_empty() => {
+            log::error!(
+                "history folder {} could not be opened, using the default: {e:#}",
+                history_dir.display()
+            );
+            history_fallback = Some(history_dir.display().to_string());
+            config.history.folder.clear();
+            history_dir = config.history_folder();
+            History::open(&history_dir)
+                .with_context(|| format!("open history folder {}", history_dir.display()))?
+        }
+        Err(e) => {
+            return Err(e)
+                .with_context(|| format!("open history folder {}", history_dir.display()));
+        }
+    };
+    let history = Arc::new(history);
     timing::point(format_args!("history opened"));
     crate::recompress::clean_up(&history_dir);
 
@@ -524,6 +553,7 @@ fn run_app(
         tray,
         hotkeys,
         hotkey_errors,
+        history_fallback,
     };
     let options = eframe::NativeOptions {
         viewport: root_viewport(),
@@ -936,6 +966,7 @@ impl Shell {
             tray,
             hotkeys,
             hotkey_errors,
+            history_fallback,
         } = boot;
         let resolved_theme = resolve_theme(&config);
         theme::install(
@@ -953,6 +984,8 @@ impl Shell {
             ocr.clone(),
         )));
         let bg_kick = workers::start_background(bg_cfg.clone(), worker_tx.clone());
+        // Listed now, before this run can record anything of its own.
+        let leftover_recordings = workers::leftover_recordings(&history);
 
         let mut shell = Shell {
             ctx,
@@ -1047,11 +1080,19 @@ impl Shell {
             }
         }
         shell.apply_autostart();
+        workers::recover_recordings(&shell.env(), leftover_recordings);
         if !shell.hotkey_errors.is_empty() {
             let body = shell.hotkey_errors.join("\n");
             shell.pending.push_back(Command::Notify {
                 title: tr!("shell.hotkeys.inactive").into(),
                 body,
+                error: true,
+            });
+        }
+        if let Some(dir) = history_fallback {
+            shell.pending.push_back(Command::Notify {
+                title: tr!("shell.history_dir.fallback").into(),
+                body: tr!("shell.history_dir.fallback.body", dir = dir),
                 error: true,
             });
         }
@@ -1791,18 +1832,42 @@ impl Shell {
         }
         self.quitting = true;
         log::info!("quitting");
-        if let Rec::Active { .. } = &self.rec
-            && let Rec::Active { rec, .. } = std::mem::replace(&mut self.rec, Rec::Idle)
-        {
-            // Finish the file so a recording in progress is not lost. The window closes
-            // only once this (and every other tracked job) is done, see `finish_quit`.
-            let in_flight = workers::InFlight::begin();
-            std::thread::spawn(move || {
-                let _in_flight = in_flight;
-                if let Err(e) = rec.stop() {
-                    log::warn!("stop on quit failed: {e:#}");
-                }
-            });
+        match std::mem::replace(&mut self.rec, Rec::Idle) {
+            Rec::Active { rec, .. } => {
+                // Finish the file and save it to history untrimmed, so a recording in
+                // progress is not lost. The window closes only once this (and every other
+                // tracked job) is done, see `finish_quit`. If it does not get that far, the
+                // next start picks the file up (`workers::recover_recordings`).
+                let in_flight = workers::InFlight::begin();
+                let env = self.env();
+                std::thread::spawn(move || {
+                    let _in_flight = in_flight;
+                    match rec.stop() {
+                        Ok(res) => {
+                            if let Err(e) = workers::keep_raw_recording(&env, &res.path) {
+                                log::warn!("keeping the recording on quit failed: {e:#}");
+                            }
+                        }
+                        Err(e) => log::warn!("stop on quit failed: {e:#}"),
+                    }
+                });
+            }
+            // Still in the Trim window with no choice made: keep it untrimmed.
+            Rec::Trim {
+                source,
+                done_issued: false,
+                ..
+            } if !self.exporting => {
+                let in_flight = workers::InFlight::begin();
+                let env = self.env();
+                std::thread::spawn(move || {
+                    let _in_flight = in_flight;
+                    if let Err(e) = workers::keep_raw_recording(&env, &source) {
+                        log::warn!("keeping the recording on quit failed: {e:#}");
+                    }
+                });
+            }
+            other => self.rec = other,
         }
         if let Some(s) = &self.scroll {
             s.control.store(SCROLL_CANCEL, Ordering::Relaxed);
@@ -2351,6 +2416,7 @@ impl Shell {
                 }
             }
             WorkerMsg::UpdateDownloaded(result) => self.update_downloaded(result),
+            WorkerMsg::InstallerExited(code) => self.installer_exited(code),
         }
     }
 
@@ -2690,11 +2756,15 @@ impl Shell {
 
     fn update_downloaded(&mut self, result: Result<PathBuf, String>) {
         let Some(r) = self.update_release.clone() else {
+            self.update_installing = false;
             return;
         };
         let started = result.and_then(|path| {
             crate::update::run_installer(&path)
-                .map(|()| path)
+                .map(|child| {
+                    workers::watch_installer(self.worker_tx.clone(), child);
+                    path
+                })
                 .map_err(|e| format!("{e:#}"))
         });
         match started {
@@ -2729,6 +2799,27 @@ impl Shell {
                 self.pending.push_back(Command::OpenUrl(r.url));
             }
         }
+    }
+
+    /// The installer ended and this copy is still running: it was cancelled or failed before
+    /// it asked us to quit. Offer the update again instead of showing Installing forever.
+    fn installer_exited(&mut self, code: Option<i32>) {
+        if !self.update_installing {
+            return;
+        }
+        log::warn!("update: the installer exited with {code:?} without replacing this copy");
+        self.update_installing = false;
+        if let Some(r) = self.update_release.clone() {
+            self.shared.update = crate::state::UpdateState::Available {
+                tag: r.tag,
+                self_update: r.installer.is_some(),
+            };
+        }
+        self.notify(
+            tr!("shell.update.install_failed"),
+            tr!("shell.update.install_stopped"),
+            true,
+        );
     }
 
     // ------------------------------------------------------------- config apply

@@ -84,6 +84,8 @@ pub enum WorkerMsg {
     UpdateProgress(u8),
     /// Update Now download finished: the verified installer, or why it failed.
     UpdateDownloaded(Result<std::path::PathBuf, String>),
+    /// The update installer ended while this copy was still running (exit code if known).
+    InstallerExited(Option<i32>),
 }
 
 pub struct CaptureSaved {
@@ -325,7 +327,12 @@ pub fn finish_capture(env: &Env, out: CaptureOutput) {
                 .ok()
                 .and_then(|g| g.clone())
                 .unwrap_or_else(|| env.history.folder().to_path_buf());
-            match filedialog::save_image(&stem, env.cfg.capture.format, Some(&start_dir)) {
+            let fmt = env
+                .cfg
+                .capture
+                .format
+                .for_size(flattened.width, flattened.height);
+            match filedialog::save_image(&stem, fmt, Some(&start_dir)) {
                 Ok(Some(target)) => match encode_save(&flattened, &target, &env.cfg) {
                     Ok(()) => {
                         crate::recompress::enqueue(&target, None);
@@ -759,8 +766,13 @@ fn export_inner(
         let outcome = if full {
             let moved = std::fs::rename(source, &dest).or_else(|_| {
                 // Different volume: copy, then drop the original.
+                // Different volume, or the file is still open elsewhere: copy. A leftover
+                // original is swept from the temp folder later.
                 std::fs::copy(source, &dest)?;
-                std::fs::remove_file(source)
+                if let Err(e) = std::fs::remove_file(source) {
+                    log::debug!("temp recording {} not removed: {e}", source.display());
+                }
+                Ok::<(), std::io::Error>(())
             });
             if moved.is_ok() {
                 source_consumed = true;
@@ -819,6 +831,69 @@ fn export_inner(
         bytes,
         error,
     })
+}
+
+/// Save a finished raw recording into history untrimmed, as MP4.
+pub fn keep_raw_recording(env: &Env, source: &Path) -> anyhow::Result<()> {
+    let x = export_inner(env, source, Duration::ZERO, Duration::ZERO, false, true)?;
+    match x.error {
+        Some(e) if x.items.is_empty() => Err(anyhow!(e)),
+        _ => Ok(()),
+    }
+}
+
+/// Raw recordings a previous run left in the temp folder: it quit, crashed or lost the GPU
+/// before they were saved. Call at startup, before this run can start one of its own.
+pub fn leftover_recordings(history: &History) -> Vec<PathBuf> {
+    let dir = history.folder().join(".stinkshot").join("tmp");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("mp4")))
+        .collect()
+}
+
+/// Save `files` (from `leftover_recordings`) into history. A file that is not a finished
+/// recording stays where it is for the weekly temp cleanup.
+pub fn recover_recordings(env: &Env, files: Vec<PathBuf>) {
+    if files.is_empty() {
+        return;
+    }
+    job(env, "recording-recover", move |env| {
+        let mut saved = 0;
+        for f in &files {
+            // Another copy of the app sharing this folder may still be writing it.
+            if !opens_exclusively(f) {
+                log::info!("leftover recording {} is in use, skipped", f.display());
+                continue;
+            }
+            match keep_raw_recording(env, f) {
+                Ok(()) => saved += 1,
+                Err(e) => log::warn!("leftover recording {} not recovered: {e:#}", f.display()),
+            }
+        }
+        if saved > 0 {
+            log::info!("recovered {saved} unsaved recording(s)");
+            env.notify(
+                tr!("shell.record.recovered"),
+                tr!("shell.record.recovered.body"),
+                false,
+            );
+            env.send(WorkerMsg::HistoryChanged);
+        }
+    });
+}
+
+fn opens_exclusively(path: &Path) -> bool {
+    use std::os::windows::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(path)
+        .is_ok()
 }
 
 // ------------------------------------------------------------------------ history items
@@ -1138,7 +1213,8 @@ fn maintain(c: &BgConfig, tx: &Sender<WorkerMsg>) {
     }
 }
 
-/// Raw recordings abandoned by a crash are kept a week, then removed.
+/// Raw recordings that could not be recovered at startup (`recover_recordings`) are kept a
+/// week, then removed.
 fn clean_temp_recordings(history: &History) {
     let dir = history.folder().join(".stinkshot").join("tmp");
     let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -1163,9 +1239,14 @@ fn index_ocr(c: &BgConfig, tx: &Sender<WorkerMsg>) {
         return;
     }
     let mut done_since_post = 0;
+    // Items the recognizer failed on in this pass: skipped so they cannot hold up the rest.
+    let mut skipped = std::collections::HashSet::new();
     loop {
-        let batch = match c.history.pending_ocr(25) {
-            Ok(b) => b,
+        let batch = match c.history.pending_ocr(25 + skipped.len()) {
+            Ok(mut b) => {
+                b.retain(|m| !skipped.contains(&m.id));
+                b
+            }
             Err(e) => {
                 log::warn!("pending_ocr failed: {e:#}");
                 return;
@@ -1176,8 +1257,17 @@ fn index_ocr(c: &BgConfig, tx: &Sender<WorkerMsg>) {
         }
         let mut stored = 0;
         for item in batch {
-            let text = match Rgba::load(&item.path).and_then(|img| engine.recognize(&img)) {
-                Ok(r) => r.text,
+            // An image that cannot be read is indexed as empty. A recognizer failure may be
+            // temporary, so that item stays pending for a later pass.
+            let text = match Rgba::load(&item.path) {
+                Ok(img) => match engine.recognize(&img) {
+                    Ok(r) => r.text,
+                    Err(e) => {
+                        log::debug!("ocr index {}: {e:#}", item.path.display());
+                        skipped.insert(item.id);
+                        continue;
+                    }
+                },
                 Err(e) => {
                     log::debug!("ocr index {}: {e:#}", item.path.display());
                     String::new()
@@ -1195,13 +1285,22 @@ fn index_ocr(c: &BgConfig, tx: &Sender<WorkerMsg>) {
             std::thread::sleep(Duration::from_millis(25));
         }
         if stored == 0 {
-            log::warn!("ocr indexer made no progress; stopping this pass");
+            log::debug!("ocr indexer made no progress; stopping this pass");
             break;
         }
     }
     if done_since_post > 0 {
         post(tx, WorkerMsg::HistoryChanged);
     }
+}
+
+/// Wait for the update installer. A successful install quits this copy first, so a message
+/// from here means the install was cancelled or failed.
+pub fn watch_installer(tx: Sender<WorkerMsg>, mut child: std::process::Child) {
+    spawn("update-installer", move || {
+        let code = child.wait().ok().and_then(|s| s.code());
+        post(&tx, WorkerMsg::InstallerExited(code));
+    });
 }
 
 pub fn check_updates(tx: Sender<WorkerMsg>) {

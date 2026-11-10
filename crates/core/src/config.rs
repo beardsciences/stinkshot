@@ -374,8 +374,10 @@ impl Config {
     pub fn path() -> PathBuf {
         Self::dir().join("config.toml")
     }
-    /// Load from `path()`; missing file -> defaults (and writes them). Malformed file ->
-    /// back it up as config.toml.bad-<timestamp>, log, return defaults.
+    /// Load from `path()`; missing file -> defaults (and writes them). A setting with a
+    /// value that cannot be used -> only that setting goes back to its default, and the
+    /// file as it was is kept as config.toml.bad-<timestamp>. A file that is not TOML at
+    /// all -> backed up the same way, log, return defaults.
     pub fn load() -> Config {
         let path = Self::path();
         if !path.exists() {
@@ -388,17 +390,34 @@ impl Config {
             }
             return cfg;
         }
+        let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+        let mut backup_name = path
+            .file_name()
+            .map(|n| n.to_os_string())
+            .unwrap_or_default();
+        backup_name.push(format!(".bad-{stamp}"));
+        let backup = path.with_file_name(backup_name);
         match Self::load_from(&path) {
             Ok(cfg) => cfg,
             Err(e) => {
+                if let Some((cfg, dropped)) = Self::salvage(&path) {
+                    log::error!(
+                        "config {}: {e:#}; reset to default: {}",
+                        path.display(),
+                        dropped.join(", ")
+                    );
+                    match std::fs::copy(&path, &backup) {
+                        Ok(_) => {
+                            log::warn!("kept the config as it was in {}", backup.display());
+                            if let Err(e) = cfg.save_to(&path) {
+                                log::warn!("could not write repaired config: {e:#}");
+                            }
+                        }
+                        Err(e) => log::warn!("could not back up config: {e}"),
+                    }
+                    return cfg;
+                }
                 log::error!("config {} is unreadable: {e:#}", path.display());
-                let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-                let mut backup_name = path
-                    .file_name()
-                    .map(|n| n.to_os_string())
-                    .unwrap_or_default();
-                backup_name.push(format!(".bad-{stamp}"));
-                let backup = path.with_file_name(backup_name);
                 match std::fs::rename(&path, &backup) {
                     Ok(()) => {
                         log::warn!("backed up malformed config to {}", backup.display());
@@ -416,9 +435,58 @@ impl Config {
             }
         }
     }
+    /// The file's text. A read that fails for a reason other than the file being absent
+    /// is tried again: a scanner or sync tool holding the file must not cost the settings.
+    fn read_text(path: &Path) -> std::io::Result<String> {
+        let mut tries = 0;
+        loop {
+            match std::fs::read_to_string(path) {
+                Ok(t) => return Ok(t),
+                Err(e)
+                    if tries < 4
+                        && !matches!(
+                            e.kind(),
+                            std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidData
+                        ) =>
+                {
+                    tries += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(150));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// For a file that is valid TOML but does not load: the config without the settings
+    /// whose values cannot be used, and their names. None when nothing can be saved from it.
+    fn salvage(path: &Path) -> Option<(Config, Vec<String>)> {
+        let text = Self::read_text(path).ok()?;
+        let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+        let mut table: toml::Table = toml::from_str(text).ok()?;
+        let mut leaves = Vec::new();
+        leaf_paths(&table, &mut Vec::new(), &mut leaves);
+        let mut dropped = Vec::new();
+        for leaf in leaves {
+            // Every struct has defaults for missing fields, so a setting loads on its own
+            // exactly when its value is usable.
+            let Some(value) = get_path(&table, &leaf).cloned() else {
+                continue;
+            };
+            if nest(&leaf, value).try_into::<Config>().is_err() {
+                remove_path(&mut table, &leaf);
+                dropped.push(leaf.join("."));
+            }
+        }
+        if dropped.is_empty() {
+            return None;
+        }
+        let mut cfg: Config = table.try_into().ok()?;
+        cfg.normalize();
+        Some((cfg, dropped))
+    }
+
     pub fn load_from(path: &Path) -> anyhow::Result<Config> {
-        let text =
-            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let text = Self::read_text(path).with_context(|| format!("reading {}", path.display()))?;
         let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
         let mut cfg: Config =
             toml::from_str(text).with_context(|| format!("parsing {}", path.display()))?;
@@ -428,6 +496,8 @@ impl Config {
     /// Clamp values that would break callers (hand-edited files).
     fn normalize(&mut self) {
         self.capture.jpeg_quality = self.capture.jpeg_quality.clamp(1, 100);
+        // The settings slider stops at 200; a huge hand-edited value would exhaust memory.
+        self.capture.window_padding_px = self.capture.window_padding_px.min(1024);
         // Empty, or the untouched default from before the "Stinkshot" spelling (Nov 2026):
         // both become the current default. A customized pattern is left alone.
         if self.capture.filename_pattern.trim().is_empty()
@@ -480,6 +550,55 @@ impl Config {
 }
 
 /// Expand `%NAME%` references; unknown variables are left as written.
+/// Key paths of every value in `t` that is not itself a table.
+fn leaf_paths(t: &toml::Table, at: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
+    for (k, v) in t {
+        at.push(k.clone());
+        match v {
+            toml::Value::Table(inner) => leaf_paths(inner, at, out),
+            _ => out.push(at.clone()),
+        }
+        at.pop();
+    }
+}
+
+fn get_path<'a>(t: &'a toml::Table, path: &[String]) -> Option<&'a toml::Value> {
+    let (last, parents) = path.split_last()?;
+    let mut t = t;
+    for k in parents {
+        t = t.get(k)?.as_table()?;
+    }
+    t.get(last)
+}
+
+fn remove_path(t: &mut toml::Table, path: &[String]) {
+    let Some((last, parents)) = path.split_last() else {
+        return;
+    };
+    let mut t = t;
+    for k in parents {
+        match t.get_mut(k).and_then(|v| v.as_table_mut()) {
+            Some(inner) => t = inner,
+            None => return,
+        }
+    }
+    t.remove(last);
+}
+
+/// A table holding only `value` at `path`.
+fn nest(path: &[String], value: toml::Value) -> toml::Table {
+    let mut v = value;
+    for k in path.iter().rev() {
+        let mut t = toml::Table::new();
+        t.insert(k.clone(), v);
+        v = toml::Value::Table(t);
+    }
+    match v {
+        toml::Value::Table(t) => t,
+        _ => toml::Table::new(),
+    }
+}
+
 fn expand_env(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
@@ -726,6 +845,37 @@ after_region = \"window\"
         assert!(Config::load_from(&p).is_err());
         std::fs::write(&p, "[capture]\njpeg_quality = \"high\"\n").unwrap();
         assert!(Config::load_from(&p).is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn one_bad_value_costs_only_that_setting() {
+        let d = tmp("salvage");
+        let p = d.join("config.toml");
+        std::fs::write(
+            &p,
+            "[capture]
+jpeg_quality = \"high\"
+window_padding_px = 7
+             [history]
+keep_days = 30
+max_gb = \"lots\"
+",
+        )
+        .unwrap();
+        assert!(Config::load_from(&p).is_err());
+        let (cfg, dropped) = Config::salvage(&p).unwrap();
+        assert_eq!(dropped, ["capture.jpeg_quality", "history.max_gb"]);
+        assert_eq!(cfg.capture.window_padding_px, 7);
+        assert_eq!(cfg.history.keep_days, 30);
+        assert_eq!(
+            cfg.capture.jpeg_quality,
+            Config::default().capture.jpeg_quality
+        );
+        assert_eq!(cfg.history.max_gb, Config::default().history.max_gb);
+        // Not TOML at all: nothing to save.
+        std::fs::write(&p, "this is [not toml").unwrap();
+        assert!(Config::salvage(&p).is_none());
         let _ = std::fs::remove_dir_all(&d);
     }
 

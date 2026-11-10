@@ -146,6 +146,7 @@ pub fn download_installer(
         .timeout_connect(Some(Duration::from_secs(15)))
         .timeout_global(Some(Duration::from_secs(15 * 60)))
         .user_agent(format!("Stinkshot/{}", env!("CARGO_PKG_VERSION")))
+        .https_only(download_base().starts_with("https://"))
         .build()
         .into();
     let url = format!("{}/{}", download_base(), inst.name);
@@ -207,12 +208,11 @@ fn hex(bytes: &[u8]) -> String {
 
 /// Start the verified installer silently. It asks this copy to quit, replaces it, and starts
 /// the new version in the tray (packaging/inno/stinkshot.iss, RelaunchAfterSilentUpgrade).
-pub fn run_installer(path: &std::path::Path) -> anyhow::Result<()> {
+pub fn run_installer(path: &std::path::Path) -> anyhow::Result<std::process::Child> {
     std::process::Command::new(path)
         .args(["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
         .spawn()
-        .context("the installer could not be started")?;
-    Ok(())
+        .context("the installer could not be started")
 }
 
 /// `stinkshot-release.json`, written and signed by `scripts/release.ps1`.
@@ -243,6 +243,7 @@ pub fn check() -> anyhow::Result<Option<Release>> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(10)))
         .user_agent(format!("Stinkshot/{}", env!("CARGO_PKG_VERSION")))
+        .https_only(release_base().starts_with("https://"))
         .build()
         .into();
     // 404 before the first release is published: nothing newer exists, so this is a

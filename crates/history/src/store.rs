@@ -21,6 +21,45 @@ const COLS: &str = "id, path, kind, created, width, height, app, window_title, s
 pub struct History {
     folder: PathBuf,
     conn: Mutex<Connection>,
+    /// The index was rebuilt after corruption: the next `rescan` takes the files it finds
+    /// back as this app's captures instead of marking them `EXTERNAL_MODE`.
+    adopt: std::sync::atomic::AtomicBool,
+}
+
+/// `mode` of a file `rescan` found in the folder that this app did not index itself. The
+/// folder may be one the user shares with other things (Pictures, Desktop), so retention
+/// never deletes these.
+pub const EXTERNAL_MODE: &str = "external";
+
+/// The index file itself is damaged, as opposed to locked, unreadable or out of disk space.
+fn is_corrupt(e: &anyhow::Error) -> bool {
+    e.chain()
+        .filter_map(|c| c.downcast_ref::<rusqlite::Error>())
+        .any(|e| {
+            matches!(
+                e.sqlite_error_code(),
+                Some(rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase)
+            )
+        })
+}
+
+/// `open_connection`, tried again a few times on a failure that may pass (the file locked
+/// by a scanner or a backup, a network drive waking up).
+fn open_connection_patiently(db: &Path) -> anyhow::Result<Connection> {
+    let mut tries = 0;
+    loop {
+        match open_connection(db) {
+            Ok(c) => return Ok(c),
+            Err(e) => {
+                tries += 1;
+                if tries >= 3 || is_corrupt(&e) || e.to_string().contains("newer than supported") {
+                    return Err(e);
+                }
+                log::warn!("history: index not opened ({e:#}); trying again");
+                std::thread::sleep(std::time::Duration::from_millis(400));
+            }
+        }
+    }
 }
 
 fn kind_to_i(k: ItemKind) -> i64 {
@@ -214,18 +253,21 @@ fn write_png_atomic(dest: &Path, img: &image::RgbaImage) -> anyhow::Result<()> {
 
 impl History {
     /// Creates the folder and index if needed; migrates schema. A corrupt index is moved
-    /// aside and recreated empty (run `rescan` to refill it).
+    /// aside and recreated empty (run `rescan` to refill it). Any other failure to open it
+    /// (locked, no access, disk full) is an error and leaves the index alone.
     pub fn open(folder: &Path) -> anyhow::Result<History> {
         let meta = folder.join(META_DIR);
         std::fs::create_dir_all(&meta).with_context(|| format!("create {}", meta.display()))?;
         let db = meta.join("index.sqlite");
         let existed = db.exists();
         let mut fresh = !existed;
-        let conn = match open_connection(&db) {
+        let mut rebuilt = false;
+        let conn = match open_connection_patiently(&db) {
             Ok(c) => c,
-            Err(e) if e.to_string().contains("newer than supported") => return Err(e),
+            Err(e) if !is_corrupt(&e) => return Err(e),
             Err(e) => {
-                log::warn!("history: index unusable ({e:#}); rebuilding");
+                log::warn!("history: index corrupt ({e:#}); rebuilding");
+                rebuilt = true;
                 let bad = meta.join("index.sqlite.corrupt");
                 let _ = std::fs::remove_file(&bad);
                 std::fs::rename(&db, &bad).context("move corrupt index aside")?;
@@ -243,6 +285,7 @@ impl History {
         let h = History {
             folder: folder.to_path_buf(),
             conn: Mutex::new(conn),
+            adopt: std::sync::atomic::AtomicBool::new(rebuilt),
         };
         if !fresh && !meta.join(STARRED_FILE).exists() {
             // Index from an older build: seed the star file so a later rebuild keeps stars.
@@ -560,16 +603,18 @@ impl History {
 
     /// Remove non-starred items older than `keep_days` (0 = no age limit), then oldest
     /// non-starred until total bytes <= `max_bytes` (0 = no cap). Returns removed count.
-    /// The byte total includes starred items, which are never removed.
+    /// The byte total includes starred items and files this app did not create
+    /// (`EXTERNAL_MODE`), which are never removed.
     pub fn apply_retention(&self, keep_days: u32, max_bytes: u64) -> anyhow::Result<u32> {
         let mut removed = 0u32;
         if keep_days > 0 {
             let cutoff = Local::now().timestamp_millis() - i64::from(keep_days) * 86_400_000;
             let ids: Vec<ItemId> = {
                 let conn = self.lock();
-                let mut stmt =
-                    conn.prepare("SELECT id FROM items WHERE starred = 0 AND created < ?1")?;
-                let rows = stmt.query_map([cutoff], |r| r.get(0))?;
+                let mut stmt = conn.prepare(
+                    "SELECT id FROM items WHERE starred = 0 AND mode <> ?2 AND created < ?1",
+                )?;
+                let rows = stmt.query_map(params![cutoff, EXTERNAL_MODE], |r| r.get(0))?;
                 rows.collect::<rusqlite::Result<Vec<_>>>()?
             };
             for id in ids {
@@ -584,9 +629,10 @@ impl History {
             let rows: Vec<(ItemId, PathBuf, i64, bool)> = {
                 let conn = self.lock();
                 let mut stmt = conn.prepare(
-                    "SELECT id, path, bytes, starred FROM items ORDER BY created ASC, id ASC",
+                    "SELECT id, path, bytes, starred OR mode = ?1 FROM items \
+                     ORDER BY created ASC, id ASC",
                 )?;
-                let rows = stmt.query_map([], |r| {
+                let rows = stmt.query_map([EXTERNAL_MODE], |r| {
                     Ok((
                         r.get(0)?,
                         PathBuf::from(r.get::<_, String>(1)?),
@@ -598,10 +644,10 @@ impl History {
             };
             let mut total = 0i64;
             let mut candidates: Vec<(ItemId, i64)> = Vec::new();
-            for (id, path, bytes, starred) in rows {
+            for (id, path, bytes, kept) in rows {
                 let size = self.disk_size(id, &path, bytes);
                 total = total.saturating_add(size);
-                if !starred {
+                if !kept {
                     candidates.push((id, size));
                 }
             }
@@ -623,6 +669,8 @@ impl History {
 
     /// Sync index with folder: add files the user dropped in (png/jpg/webp/mp4/gif, not
     /// under .stinkshot), drop rows whose files vanished. Returns (added, removed).
+    /// Added files are marked `EXTERNAL_MODE`, except on the first pass over an index
+    /// rebuilt after corruption, where they are this app's captures coming back.
     pub fn rescan(&self) -> anyhow::Result<(u32, u32)> {
         // Filesystem work first, without holding the database lock.
         let mut on_disk: Vec<(PathBuf, ItemKind, std::fs::Metadata)> = Vec::new();
@@ -653,6 +701,8 @@ impl History {
         };
 
         let stars = self.saved_stars();
+        let adopt = self.adopt.load(std::sync::atomic::Ordering::Relaxed);
+        let mode = if adopt { "" } else { EXTERNAL_MODE };
         let mut added = 0u32;
         for (path, kind, md) in &on_disk {
             if known.contains_key(&path.to_string_lossy().to_lowercase()) {
@@ -665,8 +715,8 @@ impl History {
             };
             let res = self.lock().execute(
                 "INSERT OR IGNORE INTO items \
-                 (path, name, kind, created, width, height, bytes, starred) \
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                 (path, name, kind, created, width, height, bytes, starred, mode) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
                 params![
                     path.to_string_lossy().as_ref(),
                     file_name_of(path),
@@ -675,7 +725,8 @@ impl History {
                     w,
                     h,
                     md.len() as i64,
-                    stars.contains(&file_name_of(path).to_lowercase())
+                    stars.contains(&file_name_of(path).to_lowercase()),
+                    mode
                 ],
             );
             match res {
@@ -683,6 +734,9 @@ impl History {
                 Err(e) => log::warn!("history: rescan could not add {}: {e}", path.display()),
             }
         }
+
+        self.adopt
+            .store(false, std::sync::atomic::Ordering::Relaxed);
 
         let mut removed = 0u32;
         for (id, path) in known.values() {
@@ -1331,6 +1385,33 @@ mod tests {
         h.apply_retention(0, 1).unwrap();
         assert!(p.exists());
         assert!(!t.0.join("other.png").exists());
+    }
+
+    #[test]
+    fn retention_spares_files_it_did_not_create() {
+        let t = Tmp::new();
+        let h = History::open(&t.0).unwrap();
+        let own = write_png(&t.0, "own.png", 4, 4);
+        h.add(new_item(own.clone(), "", "")).unwrap();
+        // Dropped into the folder by something else.
+        let photo = write_png(&t.0, "photo.png", 4, 4);
+        assert_eq!(h.rescan().unwrap(), (1, 0));
+        assert_eq!(h.find_by_path(&photo).unwrap().unwrap().mode, EXTERNAL_MODE);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert_eq!(h.apply_retention(0, 1).unwrap(), 1);
+        assert!(!own.exists());
+        assert!(photo.exists());
+    }
+
+    #[test]
+    fn an_index_that_cannot_be_opened_is_left_alone() {
+        let t = Tmp::new();
+        let meta = t.0.join(".stinkshot");
+        // Not a damaged file: something that cannot be opened at all.
+        std::fs::create_dir_all(meta.join("index.sqlite")).unwrap();
+        assert!(History::open(&t.0).is_err());
+        assert!(meta.join("index.sqlite").is_dir());
+        assert!(!meta.join("index.sqlite.corrupt").exists());
     }
 
     #[test]

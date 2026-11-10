@@ -7,8 +7,10 @@
 //! - `Save` (Ctrl+S) writes the edits back to that item: the image file, its re-edit sidecar
 //!   (which keeps the original unannotated base, so the item stays re-editable), the index
 //!   row (size, bytes, OCR text reset) and the thumbnail (dropped, regenerated on demand).
-//! - `SaveCopy` adds a new history item and leaves the original untouched.
-//! - `SaveAs` (file dialog), `Copy` and `Pin` also write back, as they always have.
+//! - `SaveCopy` and `SaveAs` (file dialog) add a new history item and leave the original
+//!   untouched: Save As asks for another file, so it must not replace this one, least of
+//!   all when the dialog is cancelled.
+//! - `Copy` and `Pin` also write back, as they always have.
 
 use std::path::{Path, PathBuf};
 
@@ -25,7 +27,7 @@ use crate::state::{FinishAction, SourceInfo};
 /// The history item a finished edit overwrites; None adds a new item.
 pub fn history_target(action: FinishAction, editing: Option<ItemId>) -> Option<ItemId> {
     match action {
-        FinishAction::SaveCopy => None,
+        FinishAction::SaveCopy | FinishAction::SaveAs => None,
         _ => editing,
     }
 }
@@ -114,7 +116,9 @@ pub fn write_to_history(
             updated: true,
         });
     }
-    let fmt = cfg.capture.format;
+    // A picture too large for the chosen format (a long scrolling capture as WebP) is saved
+    // as PNG instead of failing.
+    let fmt = cfg.capture.format.for_size(flat.width, flat.height);
     let parts = NameParts {
         now: chrono::Local::now(),
         app: &r.source.app,
@@ -137,7 +141,8 @@ pub fn write_to_history(
         fmt,
         t0.elapsed().as_secs_f64() * 1000.0
     );
-    write_sidecar(cfg, &path, r.base, r.doc, r.unframed, false);
+    // `true`: a sidecar left under this name by a file deleted outside the app must go.
+    write_sidecar(cfg, &path, r.base, r.doc, r.unframed, true);
     let id = history.add(NewItem {
         path: path.clone(),
         kind: Some(ItemKind::Image),
@@ -164,7 +169,7 @@ pub(crate) fn write_sidecar(
     base: &Rgba,
     doc: &Doc,
     unframed: Option<&Rgba>,
-    was_editing: bool,
+    drop_stale: bool,
 ) {
     let flat_doc;
     let keep = if cfg.history.keep_editable && !doc.shapes.is_empty() {
@@ -182,7 +187,7 @@ pub(crate) fn write_sidecar(
                 path.display()
             );
         }
-    } else if was_editing && let Err(e) = annotate::delete_editable(path) {
+    } else if drop_stale && let Err(e) = annotate::delete_editable(path) {
         log::warn!(
             "could not remove stale sidecar for {}: {e:#}",
             path.display()
@@ -253,7 +258,7 @@ mod tests {
     fn targets_and_shortcuts() {
         assert_eq!(history_target(FinishAction::Save, Some(4)), Some(4));
         assert_eq!(history_target(FinishAction::Copy, Some(4)), Some(4));
-        assert_eq!(history_target(FinishAction::SaveAs, Some(4)), Some(4));
+        assert_eq!(history_target(FinishAction::SaveAs, Some(4)), None);
         assert_eq!(history_target(FinishAction::SaveCopy, Some(4)), None);
         assert_eq!(history_target(FinishAction::Save, None), None);
         assert_eq!(save_shortcut(true, false), FinishAction::Save);

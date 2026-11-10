@@ -23,16 +23,21 @@ pub(crate) fn magnifier_ring_width(style: &Style) -> f32 {
     (style.width * 0.75).max(2.5)
 }
 
-fn is_destructive(k: &ShapeKind) -> bool {
+pub(crate) fn is_destructive(k: &ShapeKind) -> bool {
     matches!(
         k,
         ShapeKind::Blur { .. } | ShapeKind::Pixelate { .. } | ShapeKind::Redact { .. }
     )
 }
 
-/// Apply the destructive shapes (Blur, Pixelate, Redact) to `work` in z-order.
-pub(crate) fn apply_destructive(work: &mut Rgba, shapes: &[&Shape]) {
+/// Apply the destructive shapes (Blur, Pixelate, Redact) to `work` in z-order. A shape listed
+/// unchanged in `baked` is already in the pixels (the base came from an edit sidecar) and is
+/// skipped: blurring a blur again would smear it wider on every save.
+pub(crate) fn apply_destructive(work: &mut Rgba, shapes: &[&Shape], baked: &[Shape]) {
     for s in shapes {
+        if baked.contains(s) {
+            continue;
+        }
         match &s.kind {
             ShapeKind::Blur { rect, radius } => redact::blur(work, norm(*rect).to_px(), *radius),
             ShapeKind::Pixelate { rect, block } => {
@@ -47,9 +52,81 @@ pub(crate) fn apply_destructive(work: &mut Rgba, shapes: &[&Shape]) {
     }
 }
 
+/// True when `shapes[i]` is a Blur or Pixelate with a vector shape (text, pen stroke, ...)
+/// drawn before it inside its rectangle. The effect then also runs on the canvas, so what
+/// was drawn under it is hidden like the image is.
+fn vector_under(shapes: &[&Shape], i: usize, fonts: &Fonts) -> bool {
+    let rect = match &shapes[i].kind {
+        ShapeKind::Blur { rect, .. } | ShapeKind::Pixelate { rect, .. } => norm(*rect).to_px(),
+        _ => return false,
+    };
+    shapes[..i].iter().any(|s| {
+        if is_destructive(&s.kind) || matches!(s.kind, ShapeKind::Spotlight { .. }) {
+            return false;
+        }
+        let size = match &s.kind {
+            ShapeKind::Text { size, .. } | ShapeKind::Callout { size, .. } => *size,
+            _ => 0.0,
+        };
+        shape_bounds(s, fonts)
+            .expand(8.0 + s.style.width + size * 0.3)
+            .to_px()
+            .intersect(&rect)
+            .is_some()
+    })
+}
+
+/// Run a Blur or Pixelate shape on the canvas pixels inside its rectangle.
+fn destroy_on_canvas(pm: &mut Pixmap, s: &Shape) {
+    let rect = match &s.kind {
+        ShapeKind::Blur { rect, .. } | ShapeKind::Pixelate { rect, .. } => norm(*rect).to_px(),
+        _ => return,
+    };
+    let bounds = PxRect::new(0, 0, pm.width() as i32, pm.height() as i32);
+    let Some(r) = rect.intersect(&bounds) else {
+        return;
+    };
+    let stride = pm.width() as usize * 4;
+    let mut img = Rgba::new(r.w as u32, r.h as u32);
+    let data = pm.data_mut();
+    for y in 0..r.h as usize {
+        for x in 0..r.w as usize {
+            let si = (r.y as usize + y) * stride + (r.x as usize + x) * 4;
+            let di = (y * r.w as usize + x) * 4;
+            let a = data[si + 3] as u32;
+            for c in 0..3 {
+                img.data[di + c] = if a == 0 {
+                    0
+                } else {
+                    ((data[si + c] as u32 * 255 + a / 2) / a).min(255) as u8
+                };
+            }
+            img.data[di + 3] = a as u8;
+        }
+    }
+    let local = PxRect::new(0, 0, r.w, r.h);
+    match &s.kind {
+        ShapeKind::Blur { radius, .. } => redact::blur(&mut img, local, *radius),
+        ShapeKind::Pixelate { block, .. } => redact::pixelate(&mut img, local, *block),
+        _ => return,
+    }
+    for y in 0..r.h as usize {
+        for x in 0..r.w as usize {
+            let si = (r.y as usize + y) * stride + (r.x as usize + x) * 4;
+            let di = (y * r.w as usize + x) * 4;
+            let a = img.data[di + 3] as u32;
+            for c in 0..3 {
+                data[si + c] = ((img.data[di + c] as u32 * a + 127) / 255) as u8;
+            }
+            data[si + 3] = a as u8;
+        }
+    }
+}
+
 pub(crate) fn render_shapes(
     base: &Rgba,
     shapes: &[&Shape],
+    baked: &[Shape],
     fonts: &Fonts,
     transparent: bool,
 ) -> Rgba {
@@ -60,7 +137,7 @@ pub(crate) fn render_shapes(
 
     // Step 2: destructive shapes on a copy of the base pixels.
     let mut work = base.clone();
-    apply_destructive(&mut work, shapes);
+    apply_destructive(&mut work, shapes, baked);
 
     // The magnifier samples this (post-redaction, pre-annotation) image.
     let has_magnifier = shapes
@@ -111,7 +188,11 @@ pub(crate) fn render_shapes(
     draw_spotlights(&mut pm, shapes);
 
     // Step 4: remaining vector shapes in z-order.
-    for s in shapes {
+    for (i, s) in shapes.iter().enumerate() {
+        if !transparent && vector_under(shapes, i, fonts) {
+            destroy_on_canvas(&mut pm, s);
+            continue;
+        }
         if let ShapeKind::Redact { rect } = &s.kind {
             // Redact boxes also cover vector shapes drawn before them (z-order), so text
             // or callouts underneath cannot show through the box.
@@ -160,6 +241,28 @@ pub(crate) fn render_over_region(
             }
         }
     }
+    // A Blur or Pixelate that also runs on the canvas needs its whole rectangle in the crop
+    // (and so does any other one it overlaps), or the result would differ from a full render.
+    let over: Vec<(usize, PxRect)> = (0..shapes.len())
+        .filter(|i| vector_under(shapes, *i, fonts))
+        .filter_map(|i| match &shapes[i].kind {
+            ShapeKind::Blur { rect, .. } | ShapeKind::Pixelate { rect, .. } => {
+                Some((i, norm(*rect).to_px().intersect(&work.bounds())?))
+            }
+            _ => None,
+        })
+        .collect();
+    loop {
+        let before = e;
+        for (_, b) in &over {
+            if b.intersect(&e).is_some() {
+                e = e.union(b);
+            }
+        }
+        if e == before {
+            break;
+        }
+    }
     let crop = work.crop(e);
     let Some(mut pm) = rgba_to_pixmap(&crop) else {
         return Rgba::new(r.w as u32, r.h as u32);
@@ -184,7 +287,11 @@ pub(crate) fn render_over_region(
         .collect();
     let refs: Vec<&Shape> = moved.iter().collect();
     draw_spotlights(&mut pm, &refs);
-    for s in &refs {
+    for (i, s) in refs.iter().enumerate() {
+        if over.iter().any(|(o, _)| *o == i) {
+            destroy_on_canvas(&mut pm, s);
+            continue;
+        }
         if let ShapeKind::Redact { rect } = &s.kind {
             fill_pixmap(
                 &mut pm,

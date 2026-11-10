@@ -586,11 +586,15 @@ impl Session {
                     None,
                     Some(&mut ctx),
                 ) {
-                    log::debug!("D3D11CreateDevice for adapter {} failed: {e}", ai - 1);
-                    continue;
+                    // This adapter drives a monitor: a session without it would paint that
+                    // monitor black. No session at all sends every capture to GDI instead.
+                    anyhow::bail!("D3D11CreateDevice for adapter {} failed: {e}", ai - 1);
                 }
                 let (Some(device), Some(ctx)) = (device, ctx) else {
-                    continue;
+                    anyhow::bail!(
+                        "D3D11CreateDevice for adapter {} returned no device",
+                        ai - 1
+                    );
                 };
                 log::trace!("mem: d3d11 device {:.1} MB", private_mb());
                 for (output, rect, color) in attached {
@@ -1671,7 +1675,12 @@ fn wgc_with_timeout(hwnd: Hwnd, include_cursor: bool) -> anyhow::Result<Rgba> {
         crate::util::ensure_com();
         wgc_capture(HWND(hwnd as *mut _), include_cursor)
     }) {
-        Ok(r) => r,
+        Ok(r) => {
+            if r.is_ok() {
+                crate::wgc_memo::note_ok();
+            }
+            r
+        }
         Err(crate::hang::Hang::Skipped(why)) => {
             anyhow::bail!("Windows.Graphics.Capture skipped ({why})")
         }

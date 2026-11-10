@@ -2219,7 +2219,7 @@ fn sidecar_round_trip_and_layout() {
     assert_eq!(b2, bake_destructive(&base, &doc));
     assert_ne!(b2.pixel(3, 4), [9, 8, 7, 255]);
     assert_eq!(b2.pixel(20, 15), base.pixel(20, 15));
-    assert_eq!(d2, doc);
+    assert_eq!(d2.shapes, doc.shapes);
 
     // Overwrite with a changed doc.
     doc.add(
@@ -2237,6 +2237,24 @@ fn sidecar_round_trip_and_layout() {
     assert!(load_editable(&flat).unwrap().is_none());
     // Deleting again is fine.
     delete_editable(&flat).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_sidecar_older_than_its_file_is_ignored() {
+    let dir = tmpdir("sidecar-stale");
+    let flat = dir.join("a.png");
+    let base = white(10, 10);
+    std::fs::write(&flat, base.to_png().unwrap()).unwrap();
+    save_editable(&flat, &base, &Doc::new(10, 10)).unwrap();
+    assert!(has_editable(&flat));
+    // Another picture takes the name later (the first was deleted outside the app).
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+    let f = std::fs::OpenOptions::new().write(true).open(&flat).unwrap();
+    f.set_modified(later).unwrap();
+    drop(f);
+    assert!(!has_editable(&flat));
+    assert!(load_editable(&flat).unwrap().is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2545,7 +2563,7 @@ fn sidecar_base_has_redactions_baked_in() {
     save_editable(&flat, &base, &doc).unwrap();
     let (stored, d2) = load_editable(&flat).unwrap().unwrap();
     // The shapes stay editable.
-    assert_eq!(d2, doc);
+    assert_eq!(d2.shapes, doc.shapes);
     // Inside the Redact box: no source pixel survives.
     for y in 10..20 {
         for x in 5..25 {
@@ -2782,4 +2800,74 @@ fn cursor_patch_renders_alone() {
     let (r, img) = render_shape_patch(&s, &test_fonts()).unwrap();
     let p = img.pixel((3 - r.x) as u32, (3 - r.y) as u32);
     assert_eq!(p, [0, 0, 0, 255]);
+}
+
+#[test]
+fn blur_and_pixelate_cover_shapes_drawn_under_them() {
+    let f = test_fonts();
+    let base = white(200, 120);
+    for cover in [
+        ShapeKind::Blur {
+            rect: RectF::new(20.0, 20.0, 120.0, 60.0),
+            radius: 8.0,
+        },
+        ShapeKind::Pixelate {
+            rect: RectF::new(20.0, 20.0, 120.0, 60.0),
+            block: 12,
+        },
+    ] {
+        let mut d = Doc::new(200, 120);
+        // A thin black line through the middle of the covered area.
+        d.add(
+            ShapeKind::Pen {
+                points: vec![pt(30.0, 50.0), pt(130.0, 50.0)],
+            },
+            style([0, 0, 0, 255], 2.0),
+        );
+        d.add(cover, style(RED, 1.0));
+        let full = render(&base, &d, &f);
+        // The line is smeared: no pixel on it is still near black.
+        for x in 40..120 {
+            let i = ((50 * 200 + x) * 4) as usize;
+            assert!(full.data[i] > 60, "line shows through at x={x}");
+        }
+        // A partial render inside the covered area matches the full one.
+        let work = bake_destructive(&base, &d);
+        let r = PxRect::new(60, 40, 30, 20);
+        assert_eq!(render_region(&work, &d, &f, r).data, full.crop(r).data);
+    }
+}
+
+#[test]
+fn a_saved_blur_is_not_applied_again() {
+    let f = test_fonts();
+    let dir = tmpdir("sidecar-baked-once");
+    let flat = dir.join("a.png");
+    let mut base = white(80, 60);
+    for (i, px) in base.data.chunks_exact_mut(4).enumerate() {
+        px[0] = (i * 37 % 251) as u8;
+    }
+    let mut d = Doc::new(80, 60);
+    d.add(
+        ShapeKind::Blur {
+            rect: RectF::new(10.0, 10.0, 50.0, 30.0),
+            radius: 6.0,
+        },
+        style(RED, 1.0),
+    );
+    let first = render(&base, &d, &f);
+    save_editable(&flat, &base, &d).unwrap();
+    let (b2, d2) = load_editable(&flat).unwrap().unwrap();
+    assert_eq!(render(&b2, &d2, &f).data, first.data);
+    // And again after a second save.
+    save_editable(&flat, &b2, &d2).unwrap();
+    let (b3, d3) = load_editable(&flat).unwrap().unwrap();
+    assert_eq!(render(&b3, &d3, &f).data, first.data);
+    // A moved blur is applied at its new place.
+    let mut moved = d3.clone();
+    if let ShapeKind::Blur { rect, .. } = &mut moved.shapes[0].kind {
+        rect.x += 15.0;
+    }
+    assert_ne!(render(&b3, &moved, &f).data, first.data);
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -94,6 +94,10 @@ pub fn get(key: &str) -> Option<&'static str> {
         "shell.hud.system_audio" => "System Audio",
         "shell.hud.no_audio" => "No Audio",
         "shell.hotkeys.inactive" => "Some Hotkeys Are Not Active",
+        "shell.history_dir.fallback" => "History Folder Unavailable",
+        "shell.history_dir.fallback.body" => {
+            "{dir} could not be opened. Captures go to the default folder until you pick another in Settings."
+        }
         "shell.tray.unavailable" => "Tray Icon Unavailable",
         "shell.tray.unavailable.body" => {
             "Stinkshot is running but could not create its tray icon. Use the hotkeys or the command line."
@@ -148,6 +152,8 @@ pub fn get(key: &str) -> Option<&'static str> {
             "The recording file could not be finished. Try recording again."
         }
         "shell.record.finish_failed" => "Could Not Finish the Recording",
+        "shell.record.recovered" => "Recording Recovered",
+        "shell.record.recovered.body" => "An unsaved recording was added to History.",
         "shell.record.at_60" => "Recording at 60 FPS",
         "shell.record.mic_failed" => "Microphone Not Added",
         "shell.record.mic_failed.body" => {
@@ -189,6 +195,7 @@ pub fn get(key: &str) -> Option<&'static str> {
         "shell.update.downloading" => "Downloading Stinkshot {tag}",
         "shell.update.downloading.body" => "Stinkshot restarts on the new version when it's done.",
         "shell.update.install_failed" => "Could Not Update",
+        "shell.update.install_stopped" => "The installer closed before it finished.",
         "shell.update.install_failed.body" => "The download did not finish.",
         "shell.update.install_untrusted" => {
             "The download did not match the signed release info, so it was deleted."
@@ -472,6 +479,8 @@ pub const KEYS: &[&str] = &[
     "shell.hud.system_audio",
     "shell.hud.no_audio",
     "shell.hotkeys.inactive",
+    "shell.history_dir.fallback",
+    "shell.history_dir.fallback.body",
     "shell.tray.unavailable",
     "shell.tray.unavailable.body",
     "shell.welcome.title",
@@ -508,6 +517,8 @@ pub const KEYS: &[&str] = &[
     "shell.scroll.failed",
     "shell.record.finish_failed.body",
     "shell.record.finish_failed",
+    "shell.record.recovered",
+    "shell.record.recovered.body",
     "shell.record.at_60",
     "shell.record.mic_failed",
     "shell.record.mic_failed.body",
@@ -554,6 +565,7 @@ pub const KEYS: &[&str] = &[
     "shell.update.downloading",
     "shell.update.downloading.body",
     "shell.update.install_failed",
+    "shell.update.install_stopped",
     "shell.update.install_failed.body",
     "shell.update.install_untrusted",
     "shell.update.opening_page",

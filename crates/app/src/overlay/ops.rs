@@ -98,7 +98,7 @@ impl Overlay {
                 }
             }
         }
-        if self.doc != pre {
+        if self.edit.is_none() && self.doc != pre {
             self.undo.push(&pre);
         }
     }

@@ -38,6 +38,24 @@ impl ImageFormat {
             ImageFormat::Webp => "webp",
         }
     }
+
+    /// Largest width or height the format can store (None: no practical limit).
+    pub fn max_side(&self) -> Option<u32> {
+        match self {
+            ImageFormat::Png => None,
+            ImageFormat::Jpeg => Some(65_535),
+            ImageFormat::Webp => Some(16_383),
+        }
+    }
+
+    /// This format, or PNG when a `width` x `height` picture is too large for it (a long
+    /// scrolling capture as WebP). PNG is lossless and has no such limit.
+    pub fn for_size(self, width: u32, height: u32) -> ImageFormat {
+        match self.max_side() {
+            Some(max) if width > max || height > max => ImageFormat::Png,
+            _ => self,
+        }
+    }
 }
 
 impl Rgba {
@@ -325,7 +343,10 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
         .file_name()
         .map(|n| n.to_os_string())
         .unwrap_or_default();
-    tmp_name.push(format!(".tmp{}", std::process::id()));
+    // Unique per call: two writers of one file must not share a temp file.
+    static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    tmp_name.push(format!(".tmp{}-{seq}", std::process::id()));
     let tmp = path.with_file_name(tmp_name);
     let result = (|| -> anyhow::Result<()> {
         {
@@ -347,6 +368,19 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_picture_too_large_for_the_format_falls_back_to_png() {
+        assert_eq!(ImageFormat::Webp.for_size(1920, 16_383), ImageFormat::Webp);
+        assert_eq!(ImageFormat::Webp.for_size(1920, 16_384), ImageFormat::Png);
+        assert_eq!(ImageFormat::Webp.for_size(16_384, 10), ImageFormat::Png);
+        assert_eq!(ImageFormat::Jpeg.for_size(1920, 16_384), ImageFormat::Jpeg);
+        assert_eq!(ImageFormat::Jpeg.for_size(1920, 65_536), ImageFormat::Png);
+        assert_eq!(ImageFormat::Png.for_size(1920, 100_000), ImageFormat::Png);
+        // The largest side the WebP encoder is trusted with really encodes.
+        let tall = Rgba::filled(2, 16_383, [10, 20, 30, 255]);
+        assert!(tall.encode(ImageFormat::Webp, 90).is_ok());
+    }
 
     fn gradient(w: u32, h: u32) -> Rgba {
         let mut img = Rgba::new(w, h);

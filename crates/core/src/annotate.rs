@@ -189,6 +189,10 @@ pub struct Doc {
     /// Back to front.
     pub shapes: Vec<Shape>,
     pub next_id: ShapeId,
+    /// Blur, Pixelate and Redact shapes as they were when the base was stored in an edit
+    /// sidecar: their effect is already in the base pixels. Empty for a fresh capture.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub baked: Vec<Shape>,
 }
 
 // ---------------------------------------------------------------------------------------
@@ -760,6 +764,7 @@ impl Doc {
             base_height,
             shapes: Vec::new(),
             next_id: 1,
+            baked: Vec::new(),
         }
     }
     /// Append a shape, assigning its id. Returns the id.
@@ -1043,7 +1048,7 @@ pub fn translate_shape(kind: &mut ShapeKind, dx: f32, dy: f32) {
 ///      Magnifier samples from the result of step 2 (so redactions stay redacted when magnified).
 pub fn render(base: &Rgba, doc: &Doc, fonts: &Fonts) -> Rgba {
     let shapes: Vec<&Shape> = doc.shapes.iter().collect();
-    render::render_shapes(base, &shapes, fonts, false)
+    render::render_shapes(base, &shapes, &doc.baked, fonts, false)
 }
 
 /// The part `region` (image px, clipped to the image) of `render(base, doc)`, drawn over
@@ -1068,7 +1073,7 @@ pub fn render_shape_patch(shape: &Shape, fonts: &Fonts) -> Option<(PxRect, Rgba)
 /// their effect using `base` pixels.
 pub fn render_subset(base: &Rgba, doc: &Doc, ids: &[ShapeId], fonts: &Fonts) -> Rgba {
     let shapes: Vec<&Shape> = ids.iter().filter_map(|id| doc.get(*id)).collect();
-    render::render_shapes(base, &shapes, fonts, true)
+    render::render_shapes(base, &shapes, &doc.baked, fonts, true)
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1138,13 +1143,25 @@ pub fn editable_files(flat_path: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// True when the flat file was written after its sidecar: the name was reused by another
+/// picture (the capture was deleted or replaced outside the app), so the sidecar holds some
+/// other image's edits. The app always writes the flat file first.
+fn sidecar_is_stale(flat_path: &Path, json_path: &Path) -> bool {
+    let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    let (Some(flat), Some(side)) = (modified(flat_path), modified(json_path)) else {
+        return false;
+    };
+    flat.duration_since(side)
+        .is_ok_and(|d| d > std::time::Duration::from_secs(2))
+}
+
 /// The base with every destructive shape (Blur, Pixelate, Redact) already applied: what an
 /// edit sidecar stores, so the pixels a redaction hides never reach the disk. The shapes stay
 /// in the doc as editable objects; moving or deleting one later leaves its old spot redacted.
 pub fn bake_destructive(base: &Rgba, doc: &Doc) -> Rgba {
     let mut out = base.clone();
     let shapes: Vec<&Shape> = doc.shapes.iter().collect();
-    render::apply_destructive(&mut out, &shapes);
+    render::apply_destructive(&mut out, &shapes, &doc.baked);
     out
 }
 
@@ -1155,7 +1172,16 @@ pub fn save_editable(flat_path: &Path, base: &Rgba, doc: &Doc) -> anyhow::Result
         .with_context(|| format!("bad capture path {}", flat_path.display()))?;
     let baked = bake_destructive(base, doc);
     let png = baked.to_png().context("encoding base image")?;
-    let json = doc.to_json().context("serializing annotations")?;
+    // The stored base now holds every destructive shape; say so, or the next save would
+    // apply them a second time.
+    let mut stored = doc.clone();
+    stored.baked = doc
+        .shapes
+        .iter()
+        .filter(|s| render::is_destructive(&s.kind))
+        .cloned()
+        .collect();
+    let json = stored.to_json().context("serializing annotations")?;
     // Base first: a doc without its base is useless, a base without a doc is ignored.
     crate::image::write_atomic(&base_path, &png)?;
     crate::image::write_atomic(&json_path, json.as_bytes())?;
@@ -1178,6 +1204,13 @@ pub fn load_editable(flat_path: &Path) -> anyhow::Result<Option<(Rgba, Doc)>> {
         if json_path.is_file() != base_path.is_file() {
             log::warn!("incomplete edit sidecar for {}", flat_path.display());
         }
+        return Ok(None);
+    }
+    if sidecar_is_stale(flat_path, &json_path) {
+        log::warn!(
+            "edit sidecar for {} is older than the file, ignoring it",
+            flat_path.display()
+        );
         return Ok(None);
     }
     let json = std::fs::read_to_string(&json_path)
@@ -1206,8 +1239,9 @@ pub fn delete_editable(flat_path: &Path) -> anyhow::Result<()> {
 }
 
 pub fn has_editable(flat_path: &Path) -> bool {
-    let has =
-        |pair: Option<(PathBuf, PathBuf)>| pair.is_some_and(|(j, b)| j.is_file() && b.is_file());
+    let has = |pair: Option<(PathBuf, PathBuf)>| {
+        pair.is_some_and(|(j, b)| j.is_file() && b.is_file() && !sidecar_is_stale(flat_path, &j))
+    };
     has(sidecar_paths(flat_path))
         || (!stem_shared(flat_path) && has(legacy_sidecar_paths(flat_path)))
 }

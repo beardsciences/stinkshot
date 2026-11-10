@@ -220,7 +220,7 @@ pub fn friendly_date(created: DateTime<Local>, now: DateTime<Local>) -> String {
 /// "Today 9:14 · 1280 × 720", with the capture mode when it is not a plain region grab.
 pub fn item_meta_line(m: &ItemMeta, now: DateTime<Local>) -> String {
     let mut parts = vec![friendly_date(m.created, now)];
-    if !m.mode.is_empty() && m.mode != "region" {
+    if !m.mode.is_empty() && m.mode != "region" && m.mode != stinkshot_history::EXTERNAL_MODE {
         parts.push(mode_label(&m.mode));
     }
     if m.width > 0 && m.height > 0 {
@@ -714,6 +714,7 @@ impl HistoryWindow {
                         uploads += 1;
                     }
                     None => {
+                        self.requested.remove(&res.key);
                         self.failed.insert(res.key);
                     }
                 },

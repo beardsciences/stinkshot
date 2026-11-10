@@ -38,6 +38,14 @@ pub fn zoom_step(zoom: f32, notches: f32) -> f32 {
     (zoom * 1.1_f32.powf(notches)).clamp(ZOOM_MIN, ZOOM_MAX)
 }
 
+/// Largest zoom at which the pin window (image plus its frame) still fits a GPU surface of
+/// `max_side` px; a larger window cannot be drawn at all.
+pub fn zoom_cap(img: (u32, u32), max_side: usize) -> f32 {
+    const FRAME: f32 = 64.0;
+    let side = img.0.max(img.1).max(1) as f32;
+    ((max_side as f32 - FRAME) / side).clamp(ZOOM_MIN, ZOOM_MAX)
+}
+
 /// Opacity after `notches` wheel notches (5 points per notch), snapped to whole percent.
 pub fn opacity_step(opacity: f32, notches: f32) -> f32 {
     (((opacity + notches * 0.05) * 100.0).round() / 100.0).clamp(OPACITY_MIN, OPACITY_MAX)
@@ -583,7 +591,11 @@ impl Surface for Pin {
                     self.set_chip(tr!("shell.pin.opacity", pct = (o * 100.0).round() as i32));
                 }
             } else {
-                let z = zoom_step(self.zoom, notches);
+                let mut z = zoom_step(self.zoom, notches);
+                if notches > 0.0 {
+                    let cap = zoom_cap(dims, ctx.input(|i| i.max_texture_side));
+                    z = z.min(cap.max(self.zoom));
+                }
                 if (z - self.zoom).abs() > f32::EPSILON {
                     let old = window_size_px(dims, self.zoom);
                     let new = window_size_px(dims, z);
@@ -875,6 +887,18 @@ mod tests {
         assert!((zoom_step(1.0, -1.0) - 1.0 / 1.1).abs() < 1e-6);
         assert_eq!(zoom_step(7.9, 5.0), ZOOM_MAX);
         assert_eq!(zoom_step(0.11, -10.0), ZOOM_MIN);
+    }
+
+    #[test]
+    fn zoom_stops_at_the_surface_limit() {
+        // A 4K capture on a GPU with 8192 px surfaces stops near 2x, not 8x.
+        let z = zoom_cap((3840, 2160), 8192);
+        assert!(3840.0 * z + 64.0 <= 8192.0 + 0.5);
+        assert!(z > 2.0 && z < 2.2);
+        // A small image keeps the normal maximum.
+        assert_eq!(zoom_cap((200, 100), 8192), ZOOM_MAX);
+        // An image larger than the limit keeps the minimum instead of going to zero.
+        assert_eq!(zoom_cap((200_000, 100), 8192), ZOOM_MIN);
     }
 
     #[test]

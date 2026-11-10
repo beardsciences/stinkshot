@@ -620,7 +620,8 @@ pub fn drag_handle(
     measure: Measure,
 ) {
     let old_main = main_rect(shape);
-    let text_h = bounds(shape, measure).h;
+    let text_box = bounds(shape, measure);
+    let text_h = text_box.h;
     match (&mut shape.kind, handle) {
         (ShapeKind::Arrow { from, to, ctrl, .. }, ShapeHandle::P1 | ShapeHandle::P2) => {
             let (old_from, old_to) = (*from, *to);
@@ -697,8 +698,10 @@ pub fn drag_handle(
                 pos.x = x;
             }
         }
-        (ShapeKind::Text { pos, size, .. }, ShapeHandle::Rect(_)) if text_h > 1.0 => {
-            let new_h = (p.y - pos.y).max(4.0);
+        (ShapeKind::Text { size, .. }, ShapeHandle::Rect(_)) if text_h > 1.0 => {
+            // The handle sits on the padded box, so measure from the box's top: a press
+            // without movement leaves the size alone.
+            let new_h = (p.y - text_box.y).max(4.0);
             *size = (*size * new_h / text_h).clamp(8.0, 400.0);
         }
         (ShapeKind::Magnifier { source, .. }, ShapeHandle::Src(h)) => {

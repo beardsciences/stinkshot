@@ -14,6 +14,8 @@ struct FileLogger {
     file: Mutex<File>,
     path: PathBuf,
     written: Mutex<u64>,
+    /// The profile folder, written as `~` so a shared log does not name the account.
+    home: Option<String>,
 }
 
 impl FileLogger {
@@ -63,6 +65,10 @@ impl Log for FileLogger {
             record.target(),
             record.args()
         );
+        let line = match &self.home {
+            Some(h) => line.replace(h.as_str(), "~"),
+            None => line,
+        };
         if cfg!(debug_assertions) && record.level() <= log::Level::Warn {
             eprint!("{line}");
         }
@@ -107,6 +113,7 @@ pub fn init() {
         file: Mutex::new(file),
         path,
         written: Mutex::new(written),
+        home: std::env::var("USERPROFILE").ok().filter(|h| h.len() > 3),
     };
     if log::set_boxed_logger(Box::new(logger)).is_ok() {
         // `STINKSHOT_LOG=debug|trace` raises the level of a release build (timing trace points,

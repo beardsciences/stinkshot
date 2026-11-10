@@ -78,4 +78,4 @@ pub struct Stats {
 
 mod store;
 
-pub use store::History;
+pub use store::{EXTERNAL_MODE, History};

@@ -161,12 +161,17 @@ pub fn spawn(
     }
 }
 
-fn run(
-    source: &Source,
-    queue: &Arc<Mutex<SourceQueue>>,
-    stop: &Arc<AtomicBool>,
-    ready: &mpsc::Sender<Result<(), String>>,
-) -> Result<()> {
+/// How often a lost audio device is looked for again.
+const REOPEN_EVERY: Duration = Duration::from_millis(500);
+
+/// A started capture stream.
+struct Stream {
+    client: IAudioClient,
+    capture: IAudioCaptureClient,
+    fmt: Format,
+}
+
+fn open(source: &Source) -> Result<Stream> {
     unsafe {
         let en: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
             .context("MMDeviceEnumerator")?;
@@ -185,14 +190,57 @@ fn run(
         init.context("IAudioClient::Initialize")?;
         let capture: IAudioCaptureClient = client.GetService().context("IAudioCaptureClient")?;
         client.Start().context("IAudioClient::Start")?;
-        let _ = ready.send(Ok(()));
         log::info!(
             "audio capture {source:?}: {} Hz, {} ch, {:?}",
             fmt.rate,
             fmt.channels,
             fmt.sample
         );
+        Ok(Stream {
+            client,
+            capture,
+            fmt,
+        })
+    }
+}
 
+/// Capture until `stop`. Failing to open the device at the start is an error; once capture
+/// has begun, losing the device (unplugged, disabled, default changed under a loopback) is
+/// not: that source goes silent and the device is looked for again, so the recording goes on.
+fn run(
+    source: &Source,
+    queue: &Arc<Mutex<SourceQueue>>,
+    stop: &Arc<AtomicBool>,
+    ready: &mpsc::Sender<Result<(), String>>,
+) -> Result<()> {
+    let mut stream = open(source)?;
+    let _ = ready.send(Ok(()));
+    loop {
+        match pump(&stream, queue, stop) {
+            Ok(()) => return Ok(()),
+            Err(e) => log::warn!("audio capture {source:?} lost its device, retrying: {e:#}"),
+        }
+        drop(stream);
+        stream = loop {
+            if stop.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+            std::thread::sleep(REOPEN_EVERY);
+            match open(source) {
+                Ok(s) => break s,
+                Err(e) => log::debug!("audio capture {source:?} still unavailable: {e:#}"),
+            }
+        };
+    }
+}
+
+fn pump(stream: &Stream, queue: &Arc<Mutex<SourceQueue>>, stop: &Arc<AtomicBool>) -> Result<()> {
+    let Stream {
+        client,
+        capture,
+        fmt,
+    } = stream;
+    unsafe {
         let mut resampler = Resampler::new(fmt.rate, OUT_RATE);
         let frame_bytes = fmt.sample.bytes() * fmt.channels;
         let mut stereo = Vec::<f32>::new();

@@ -48,25 +48,45 @@ impl Drop for ClipboardGuard {
     }
 }
 
-/// Place `bytes` on the (already open) clipboard under `format`.
-fn put(format: u32, bytes: &[u8]) -> anyhow::Result<()> {
-    // SAFETY: the HGLOBAL is filled while locked; ownership transfers to the clipboard on
-    // success and is freed here on failure.
-    unsafe {
-        let h: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, bytes.len().max(1))?;
-        let p = GlobalLock(h);
-        if p.is_null() {
-            let _ = GlobalFree(Some(h));
-            anyhow::bail!("GlobalLock failed");
-        }
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), p as *mut u8, bytes.len());
-        let _ = GlobalUnlock(h);
-        if let Err(e) = SetClipboardData(format, Some(HANDLE(h.0))) {
-            let _ = GlobalFree(Some(h));
-            anyhow::bail!("SetClipboardData({format}): {e}");
+/// A filled global memory block, freed on drop unless the clipboard took it.
+struct Block(HGLOBAL);
+
+impl Block {
+    fn new(bytes: &[u8]) -> anyhow::Result<Block> {
+        // SAFETY: the HGLOBAL is filled while locked and freed here on failure.
+        unsafe {
+            let h: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, bytes.len().max(1))?;
+            let p = GlobalLock(h);
+            if p.is_null() {
+                let _ = GlobalFree(Some(h));
+                anyhow::bail!("GlobalLock failed");
+            }
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), p as *mut u8, bytes.len());
+            let _ = GlobalUnlock(h);
+            Ok(Block(h))
         }
     }
-    Ok(())
+
+    /// Hand the block to the (already open) clipboard under `format`.
+    fn set(self, format: u32) -> anyhow::Result<()> {
+        // SAFETY: ownership transfers to the clipboard on success; on failure Drop frees it.
+        unsafe { SetClipboardData(format, Some(HANDLE(self.0.0))) }
+            .map_err(|e| anyhow::anyhow!("SetClipboardData({format}): {e}"))?;
+        std::mem::forget(self);
+        Ok(())
+    }
+}
+
+impl Drop for Block {
+    fn drop(&mut self) {
+        // SAFETY: the block was never given to the clipboard.
+        let _ = unsafe { GlobalFree(Some(self.0)) };
+    }
+}
+
+/// Place `bytes` on the (already open) clipboard under `format`.
+fn put(format: u32, bytes: &[u8]) -> anyhow::Result<()> {
+    Block::new(bytes)?.set(format)
 }
 
 fn png_format() -> u32 {
@@ -193,19 +213,28 @@ fn image_payloads(img: &Rgba) -> anyhow::Result<Vec<(u32, Vec<u8>)>> {
     Ok(v)
 }
 
-fn put_all(payloads: &[(u32, Vec<u8>)]) -> anyhow::Result<()> {
-    for (format, bytes) in payloads {
-        put(*format, bytes)?;
+/// Copy every payload into global memory. Done before the clipboard is emptied, so running
+/// out of memory on a huge image leaves what the user had there.
+fn blocks(payloads: Vec<(u32, Vec<u8>)>) -> anyhow::Result<Vec<(u32, Block)>> {
+    payloads
+        .into_iter()
+        .map(|(format, bytes)| Ok((format, Block::new(&bytes)?)))
+        .collect()
+}
+
+fn set_all(blocks: Vec<(u32, Block)>) -> anyhow::Result<()> {
+    for (format, block) in blocks {
+        block.set(format)?;
     }
     Ok(())
 }
 
 pub fn set_image(img: &Rgba) -> anyhow::Result<()> {
-    let payloads = image_payloads(img)?;
+    let blocks = blocks(image_payloads(img)?)?;
     let _g = ClipboardGuard::open()?;
     // SAFETY: clipboard is open on this thread.
     unsafe { EmptyClipboard() }?;
-    put_all(&payloads)
+    set_all(blocks)
 }
 
 pub fn set_text(text: &str) -> anyhow::Result<()> {
@@ -235,17 +264,22 @@ pub(crate) fn build_hdrop(path: &std::path::Path) -> Vec<u8> {
 /// Also used by "copy file" from history: CF_HDROP with the path, plus the image formats.
 pub fn set_file_and_image(path: &std::path::Path, img: Option<&Rgba>) -> anyhow::Result<()> {
     let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-    let payloads = img.map(image_payloads).transpose()?;
+    let mut all = vec![
+        (CF_HDROP.0 as u32, build_hdrop(&abs)),
+        // DROPEFFECT_COPY, so paste in Explorer copies rather than moves.
+        (
+            name_format("Preferred DropEffect"),
+            1u32.to_le_bytes().to_vec(),
+        ),
+    ];
+    if let Some(img) = img {
+        all.extend(image_payloads(img)?);
+    }
+    let blocks = blocks(all)?;
     let _g = ClipboardGuard::open()?;
     // SAFETY: clipboard is open on this thread.
     unsafe { EmptyClipboard() }?;
-    put(CF_HDROP.0 as u32, &build_hdrop(&abs))?;
-    // DROPEFFECT_COPY, so paste in Explorer copies rather than moves.
-    put(name_format("Preferred DropEffect"), &1u32.to_le_bytes())?;
-    if let Some(p) = &payloads {
-        put_all(p)?;
-    }
-    Ok(())
+    set_all(blocks)
 }
 
 fn read_global(format: u32) -> Option<Vec<u8>> {

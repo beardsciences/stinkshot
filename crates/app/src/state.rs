@@ -193,7 +193,7 @@ pub struct CaptureOutput {
     /// "region" | "window" | "fullscreen" | "scrolling" | "text" (Capture Selected Text)
     pub mode: &'static str,
     /// Set when re-editing an existing history item: overwrite it instead of adding new
-    /// (except `FinishAction::SaveCopy`, see `edit_save::history_target`).
+    /// (except `SaveCopy` and `SaveAs`, see `edit_save::history_target`).
     pub editing: Option<ItemId>,
 }
 

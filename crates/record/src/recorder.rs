@@ -12,7 +12,7 @@ use stinkshot_platform::input::{InputEvent, InputHook, MouseButton};
 use tiny_skia::Pixmap;
 
 use crate::audio::{self, Source};
-use crate::capture::Capturer;
+use crate::capture::{Capturer, DisplayLost};
 use crate::convert::bgra_to_nv12;
 use crate::dsp::{OUT_RATE, SourceQueue, mix, to_pcm16};
 use crate::encoder::{Encoder, VideoParams};
@@ -31,6 +31,9 @@ const MAX_AUDIO_LEAD_FRAMES: usize = (OUT_RATE as usize) / 10;
 type InitResult = Result<(Arc<Mutex<Encoder>>, String, &'static str, u32), String>;
 
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a recording waits for its display to come back after a display change.
+const DISPLAY_RETRY_FOR: Duration = Duration::from_secs(10);
+const DISPLAY_RETRY_EVERY: Duration = Duration::from_millis(500);
 
 struct Shared {
     stop: AtomicBool,
@@ -625,7 +628,7 @@ fn video_loop(
     let mut hook_failed = false;
     let accent = opts.accent;
     let webcam_enabled = opts.webcam.clone();
-    let start_wall = Instant::now();
+    let mut start_wall = Instant::now();
     let mut was_paused = false;
 
     while !shared.stop.load(Ordering::Relaxed) {
@@ -690,7 +693,25 @@ fn video_loop(
         }
         overlay.prune(elapsed);
 
-        let stats = cap.poll()?;
+        let stats = match cap.poll() {
+            Ok(s) => s,
+            // The display changed under the capture (resolution, arrangement, a monitor
+            // going to sleep). Hold the last picture and capture the same region again.
+            Err(e) if e.is::<DisplayLost>() => {
+                log::warn!("recording: the display changed, restarting the screen capture");
+                match reopen_capturer(shared, region, opts.include_cursor, fps) {
+                    Some(new) => {
+                        log::info!("recording: screen capture restarted ({})", new.backend_name);
+                        *cap = new;
+                        start_wall = Instant::now();
+                        continue;
+                    }
+                    None if shared.stop.load(Ordering::Relaxed) => break,
+                    None => return Err(e),
+                }
+            }
+            Err(e) => return Err(e),
+        };
         stage_dirty |= stats.new_frames > 0;
         shared
             .dropped
@@ -779,6 +800,25 @@ fn video_loop(
         }
     }
     Ok(())
+}
+
+/// Build a new capturer for `region` after the display changed, trying for a short while:
+/// right after a mode change the outputs are often not ready yet.
+fn reopen_capturer(
+    shared: &Shared,
+    region: stinkshot_core::PxRect,
+    include_cursor: bool,
+    fps: u32,
+) -> Option<Capturer> {
+    let deadline = Instant::now() + DISPLAY_RETRY_FOR;
+    while Instant::now() < deadline && !shared.stop.load(Ordering::Relaxed) {
+        std::thread::sleep(DISPLAY_RETRY_EVERY);
+        match Capturer::new(region, include_cursor, fps) {
+            Ok(c) => return Some(c),
+            Err(e) => log::debug!("recording: screen capture not back yet: {e:#}"),
+        }
+    }
+    None
 }
 
 fn map_button(b: MouseButton) -> Button {

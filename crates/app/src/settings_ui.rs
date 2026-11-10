@@ -2045,6 +2045,8 @@ impl SettingsWindow {
                         egui::DragValue::new(&mut h.keep_days)
                             .range(0..=3650)
                             .speed(1.0)
+                            // Retention deletes files: never act on a half-typed number.
+                            .update_while_editing(false)
                             .custom_formatter(|n, _| days_label(n as u32))
                             .custom_parser(|s| {
                                 let t = s.trim().to_lowercase();
@@ -2061,6 +2063,7 @@ impl SettingsWindow {
                         egui::DragValue::new(&mut h.max_gb)
                             .range(0.0..=2000.0)
                             .speed(0.1)
+                            .update_while_editing(false)
                             .custom_formatter(|n, _| gb_label(n as f32))
                             .custom_parser(|s| {
                                 let t = s.trim().to_lowercase();

@@ -187,6 +187,7 @@ impl WorkerState {
             (Some(old), false) => dirty_rect(old, &job.doc, &job.fonts),
             _ => None,
         };
+        let dirty = dirty.map(|r| grow_over_blurs(r, &job.doc, &job.fonts));
         let dirty = dirty.and_then(|r| r.intersect(&full_rect).or(Some(PxRect::default())));
         match dirty {
             Some(r) if (r.area() as f64) < full_rect.area() as f64 * FULL_SHARE => {
@@ -222,6 +223,28 @@ impl WorkerState {
                 self.doc = Some(job.doc.clone());
                 Some(RenderOut::Full(tiles))
             }
+        }
+    }
+}
+
+/// A Blur or Pixelate also covers shapes drawn under it, so an edit inside one changes its
+/// whole rectangle (and any other one that overlaps).
+fn grow_over_blurs(mut r: PxRect, doc: &Doc, fonts: &Fonts) -> PxRect {
+    if r.is_empty() {
+        return r;
+    }
+    loop {
+        let before = r;
+        for s in &doc.shapes {
+            if matches!(s.kind, ShapeKind::Blur { .. } | ShapeKind::Pixelate { .. }) {
+                let b = annotate::shape_bounds(s, fonts).to_px();
+                if b.intersect(&r).is_some() {
+                    r = r.union(&b);
+                }
+            }
+        }
+        if r == before {
+            return r;
         }
     }
 }
