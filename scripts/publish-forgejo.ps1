@@ -24,7 +24,7 @@ if ($existing.id) {
     $id = $existing.id
     Write-Host "Release $tag exists (id $id); uploading missing files."
 } else {
-    $body = @{ tag_name = $tag; name = "Stinkshot $Version"; body = (Get-Content -Raw $notes); draft = $false; prerelease = $false } | ConvertTo-Json
+    $body = @{ tag_name = $tag; name = "Stinkshot $Version"; body = [IO.File]::ReadAllText($notes); draft = $false; prerelease = $false } | ConvertTo-Json
     $tmp = New-TemporaryFile
     [IO.File]::WriteAllText($tmp, $body, (New-Object Text.UTF8Encoding $false))
     $created = curl.exe -s -H $auth -H 'Content-Type: application/json' --data-binary "@$tmp" "$api/releases" | ConvertFrom-Json
@@ -37,8 +37,11 @@ if ($existing.id) {
 $have = @((curl.exe -s -H $auth "$api/releases/$id/assets" | ConvertFrom-Json) | ForEach-Object { $_.name })
 Get-ChildItem -File $DistDir | Where-Object { $_.Name -ne 'RELEASE_NOTES.md' } | ForEach-Object {
     if ($have -contains $_.Name) { Write-Host "  skip $($_.Name) (already uploaded)"; return }
-    $r = curl.exe -s -H $auth -F "attachment=@$($_.FullName)" "$api/releases/$id/assets?name=$($_.Name)" | ConvertFrom-Json
-    if ($r.name) { Write-Host "  uploaded $($_.Name)" } else { Write-Warning "upload failed: $($_.Name)" }
+    Write-Host "  uploading $($_.Name) ($([math]::Round($_.Length / 1MB, 1)) MB)..."
+    $raw = curl.exe -s -S -H $auth -F "attachment=@$($_.FullName)" "$api/releases/$id/assets?name=$($_.Name)" 2>&1 | Out-String
+    $r = $null
+    try { $r = $raw | ConvertFrom-Json } catch {}
+    if ($r.name) { Write-Host "  uploaded $($_.Name)" } else { Write-Warning "upload failed: $($_.Name): $($raw.Trim())" }
 }
 $token = $null
 Write-Host "Done: $Server/$Repo/releases/tag/$tag"
