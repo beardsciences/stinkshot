@@ -1,0 +1,199 @@
+# Builds the release exe and installer on a GitHub-hosted runner and, once SignPath is set up,
+# has SignPath Foundation sign them. GitHub is a mirror of
+# https://code.mccullough.dev/christian/stinkshot: never commit there, push to Forgejo.
+#
+# Signing runs only for v* tags and only when the repository variable
+# SIGNPATH_ORGANIZATION_ID is set (Settings > Secrets and variables > Actions):
+#   variable SIGNPATH_ORGANIZATION_ID   organization id from SignPath
+#   variable SIGNPATH_PROJECT_SLUG      optional, default "stinkshot"
+#   variable SIGNPATH_POLICY_SLUG       optional, default "release-signing"
+#   secret   SIGNPATH_API_TOKEN         token of the SignPath CI user (submitter)
+# SignPath artifact configurations "exe" and "installer": packaging/signpath/.
+# Every signing request waits for manual approval in SignPath.
+#
+# Output: the "release" artifact (installer and portable zip). The SBOM, SHA256SUMS, update
+# manifest and their minisign signatures are made on the maintainer's PC (docs/RELEASING.md):
+# the minisign key never leaves it.
+
+name: Release Build
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: release-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # Forgejo Actions also reads .github/workflows; this keeps the job on GitHub only.
+    if: github.server_url == 'https://github.com' && github.repository == 'beardsciences/stinkshot'
+    runs-on: windows-2025
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      TRIPLE: x86_64-pc-windows-msvc
+      INNO_URL: https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe
+      INNO_SHA256: 8a5a6711c3766a6e5fb74f280ba0e3551e719ce94538d901fdbd1f8f9920b3f0
+      SIGN: ${{ startsWith(github.ref, 'refs/tags/v') && vars.SIGNPATH_ORGANIZATION_ID != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          $toml = Get-Content -Raw Cargo.toml
+          $m = [regex]::Match($toml, '(?ms)^\[workspace\.package\].*?^version\s*=\s*"([^"]+)"')
+          if (-not $m.Success) { throw 'workspace.package version not found in Cargo.toml' }
+          $version = $m.Groups[1].Value
+          if ($env:GITHUB_REF -like 'refs/tags/v*' -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "tag $env:GITHUB_REF_NAME does not match Cargo.toml version $version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustup target add $env:TRIPLE
+          rustc --version
+
+      - name: Build
+        shell: pwsh
+        run: cargo build --release --locked -p stinkshot --target $env:TRIPLE
+
+      - name: Stage
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $exe = "target\$env:TRIPLE\release\stinkshot.exe"
+          $pv = (Get-Item $exe).VersionInfo.ProductVersion
+          if ($pv -ne $env:VERSION) { throw "exe ProductVersion is '$pv', expected $env:VERSION" }
+          New-Item -ItemType Directory -Force stage, unsigned-exe, dist | Out-Null
+          Copy-Item $exe unsigned-exe\stinkshot.exe
+          Copy-Item LICENSE stage\LICENSE.txt
+          Copy-Item README.md stage\README.md
+
+      - name: Upload unsigned exe
+        id: unsigned-exe
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unsigned-exe
+          path: unsigned-exe/stinkshot.exe
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Sign exe (SignPath)
+        if: env.SIGN == 'true'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'stinkshot' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: exe
+          github-artifact-id: ${{ steps.unsigned-exe.outputs.artifact-id }}
+          wait-for-completion: true
+          # Approval is manual; give it time.
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed-exe
+          parameters: |
+            version: ${{ toJSON(steps.version.outputs.version) }}
+
+      - name: Portable zip
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $src = if ($env:SIGN -eq 'true') { 'signed-exe\stinkshot.exe' } else { 'unsigned-exe\stinkshot.exe' }
+          Copy-Item $src stage\stinkshot.exe
+          if ($env:SIGN -eq 'true') {
+            $sig = Get-AuthenticodeSignature stage\stinkshot.exe
+            if ($sig.Status -ne 'Valid') { throw "stinkshot.exe is not validly signed ($($sig.Status))" }
+          }
+          Compress-Archive -Path stage\* -DestinationPath "dist\Stinkshot-$env:VERSION-x64-portable.zip" -CompressionLevel Optimal
+
+      - name: Inno Setup 7.1.1
+        shell: pwsh
+        run: |
+          $setup = Join-Path $env:RUNNER_TEMP 'innosetup.exe'
+          Invoke-WebRequest -Uri $env:INNO_URL -OutFile $setup
+          $hash = (Get-FileHash -Algorithm SHA256 $setup).Hash.ToLowerInvariant()
+          if ($hash -ne $env:INNO_SHA256) { throw "Inno Setup download hash mismatch: $hash" }
+          $dir = Join-Path $env:RUNNER_TEMP 'innosetup'
+          $p = Start-Process -Wait -PassThru $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', '/PORTABLE=1', "/DIR=$dir"
+          if ($p.ExitCode -ne 0) { throw "Inno Setup install failed ($($p.ExitCode))" }
+          "ISCC=$dir\ISCC.exe" >> $env:GITHUB_ENV
+
+      - name: Installer
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          New-Item -ItemType Directory -Force unsigned-setup | Out-Null
+          $iscc = @('/Q', "/DAppVersion=$env:VERSION", '/DArch=x64', "/DStageDir=$PWD\stage", "/DOutputDir=$PWD\unsigned-setup")
+          $ico = Get-ChildItem "target\$env:TRIPLE\release\build" -Filter stinkshot.ico -Recurse -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if ($ico) { $iscc += "/DIconFile=$($ico.FullName)" }
+          & $env:ISCC @iscc packaging\inno\stinkshot.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+          if (-not (Test-Path "unsigned-setup\Stinkshot-$env:VERSION-x64-setup.exe")) { throw 'installer not found' }
+
+      - name: Upload unsigned installer
+        id: unsigned-setup
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unsigned-setup
+          path: unsigned-setup/*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Sign installer (SignPath)
+        if: env.SIGN == 'true'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'stinkshot' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: installer
+          github-artifact-id: ${{ steps.unsigned-setup.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed-setup
+          parameters: |
+            version: ${{ toJSON(steps.version.outputs.version) }}
+
+      - name: Collect
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $name = "Stinkshot-$env:VERSION-x64-setup.exe"
+          $src = if ($env:SIGN -eq 'true') { "signed-setup\$name" } else { "unsigned-setup\$name" }
+          Copy-Item $src "dist\$name"
+          if ($env:SIGN -eq 'true') {
+            $sig = Get-AuthenticodeSignature "dist\$name"
+            if ($sig.Status -ne 'Valid') { throw "$name is not validly signed ($($sig.Status))" }
+          }
+          Get-ChildItem dist | ForEach-Object { "$((Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLowerInvariant())  $($_.Name)" } |
+            Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: Upload release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ env.SIGN == 'true' && 'release' || 'release-unsigned' }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
