@@ -7,7 +7,7 @@ All notable changes to Stinkshot are listed here. The format follows
 `scripts/release.ps1` copies the section for the version it builds into the release notes, so
 write entries for people who use Stinkshot, not for people who read the diff.
 
-## [Unreleased]
+## [0.1.3] - 2026-11-10
 
 ### Added
 
@@ -21,6 +21,18 @@ write entries for people who use Stinkshot, not for people who read the diff.
 
 - The installer says Update, not Install, when Stinkshot is already installed, and skips the
   folder and options pages.
+- The shortcut sheet (F1 or ?) in the editor lists only what works there, with the crop and
+  view keys in their own groups. It is solid instead of see-through, centers on the editor
+  window, and scrolls with the wheel when the window is too short for it.
+- Toasts show the Stinkshot logo in the header.
+- Settings > Privacy says when the last update check failed, and links to History instead of
+  repeating its settings.
+- Settings pages scroll to the bottom edge of the window, and several descriptions are shorter.
+
+### Fixed
+
+- Ctrl+V pastes into text fields (Settings search, file name pattern, text boxes), and Ctrl+C
+  and Ctrl+X copy and cut from them.
 
 ## [0.1.2] - 2026-11-09
 
