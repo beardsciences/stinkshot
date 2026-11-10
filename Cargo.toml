@@ -50,6 +50,8 @@ pollster = "1"
 ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
 # Verifies the signed release manifest in the update check (pure Rust, no dependencies).
 minisign-verify = "0.3"
+# SHA-256 of the downloaded update installer (already in the tree via rustls).
+ring = "0.17"
 directories = "6"
 # QR and barcode reading (pure Rust zxing port); decoders only, no image / network features.
 rxing = { version = "0.9", default-features = false, features = [

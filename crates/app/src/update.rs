@@ -1,8 +1,13 @@
 //! The ONLY network code in Stinkshot. Runs only when `config.privacy.check_for_updates`
 //! is on, at most once per 24 h, on a worker thread. Never sends captures or anything about
 //! the user: every request is a plain HTTPS GET (User-Agent "Stinkshot/<version>", no
-//! cookies, no query strings). Never downloads binaries: the toast and tray item link to the
-//! release page.
+//! cookies, no query strings).
+//!
+//! Update Now (`download_installer`, only when the user clicks it): downloads the setup.exe
+//! the signed manifest lists from stinkshot.com, checks its size and SHA-256 against that
+//! manifest, and runs it silently (`run_installer`). Anything that does not match is deleted
+//! and the release page is opened instead. Copies the setup did not install (portable, dev
+//! builds) always get the release page.
 //!
 //! Flow (docs/notes/release.md):
 //! 1. GET `stinkshot-release.json` and its minisign signature `stinkshot-release.json.minisig`
@@ -10,7 +15,8 @@
 //!    stinkshot.com is used so the code host can move without breaking installed copies.
 //! 2. Verify the signature with the public key embedded at build time
 //!    (`assets/release-key.pub`, prehashed Ed25519 only). Only the verified manifest's version,
-//!    tag and page are trusted; a missing or bad signature is an error and nothing is shown.
+//!    tag, page and file hashes are trusted; a missing or bad signature is an error and
+//!    nothing is shown.
 
 use std::time::Duration;
 
@@ -22,6 +28,8 @@ pub const RELEASE_BASE: &str = "https://stinkshot.com/release";
 /// A manifest's `page` must start with this, or `DEFAULT_PAGE` is used instead.
 pub const PROJECT_URL: &str = "https://stinkshot.com/";
 pub const DEFAULT_PAGE: &str = "https://stinkshot.com/download";
+/// `<base>/<setup file name>` is where the installer the manifest lists is downloaded from.
+pub const DOWNLOAD_BASE: &str = "https://stinkshot.com/download";
 pub const MANIFEST_NAME: &str = "stinkshot-release.json";
 pub const SIGNATURE_NAME: &str = "stinkshot-release.json.minisig";
 /// The release signing public key (minisign format). The secret key never enters the repo.
@@ -32,13 +40,179 @@ pub const UNTRUSTED: &str = "release manifest failed verification";
 /// (not uploaded yet): not a verification failure.
 pub const UNSIGNED: &str = "release has no signed release info";
 
+/// Debug builds only (compiled out of release): point the update check and download at a
+/// local test server and trust a test key, for the end-to-end update test.
+/// `STINKSHOT_UPDATE_BASE` replaces both `RELEASE_BASE` and `DOWNLOAD_BASE`;
+/// `STINKSHOT_UPDATE_KEY` is minisign public key text.
+fn dev_override(var: &str) -> Option<String> {
+    if cfg!(debug_assertions) {
+        std::env::var(var).ok().filter(|v| !v.trim().is_empty())
+    } else {
+        None
+    }
+}
+
+fn release_base() -> String {
+    dev_override("STINKSHOT_UPDATE_BASE").unwrap_or_else(|| RELEASE_BASE.to_string())
+}
+
+fn download_base() -> String {
+    dev_override("STINKSHOT_UPDATE_BASE").unwrap_or_else(|| DOWNLOAD_BASE.to_string())
+}
+
+fn release_key() -> String {
+    dev_override("STINKSHOT_UPDATE_KEY").unwrap_or_else(|| RELEASE_PUBLIC_KEY.to_string())
+}
+
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 const MAX_SIGNATURE_BYTES: u64 = 4 * 1024;
+const MAX_INSTALLER_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Release {
     pub tag: String,
     pub url: String,
+    /// This architecture's setup.exe from the signed manifest, if it lists one.
+    pub installer: Option<Installer>,
+}
+
+/// A setup.exe the signed manifest vouches for.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Installer {
+    pub name: String,
+    pub size: u64,
+    /// Lowercase hex.
+    pub sha256: String,
+}
+
+/// The setup file name suffix for the architecture this build runs on.
+fn setup_suffix() -> &'static str {
+    if cfg!(target_arch = "aarch64") {
+        "-arm64-setup.exe"
+    } else {
+        "-x64-setup.exe"
+    }
+}
+
+/// This architecture's installer from `files`, if one is listed with a usable name and hash.
+fn pick_installer(files: &[ManifestFile]) -> Option<Installer> {
+    files
+        .iter()
+        .find(|f| {
+            f.name.starts_with("Stinkshot-")
+                && f.name.ends_with(setup_suffix())
+                && f.name.len() <= 96
+                && f.name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+                && f.size > 0
+                && f.size <= MAX_INSTALLER_BYTES
+                && f.sha256.len() == 64
+                && f.sha256.chars().all(|c| c.is_ascii_hexdigit())
+        })
+        .map(|f| Installer {
+            name: f.name.clone(),
+            size: f.size,
+            sha256: f.sha256.to_ascii_lowercase(),
+        })
+}
+
+/// Whether the setup installed this copy (its uninstaller sits next to the exe), so running
+/// a newer setup upgrades this very copy. Portable and dev builds return false.
+pub fn can_self_update() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("unins000.exe").is_file()))
+        .unwrap_or(false)
+}
+
+/// Download `inst` into `%TEMP%\Stinkshot-update`, checking its size and SHA-256 against the
+/// signed manifest as it streams. `progress(done, total)` is called as bytes arrive. Returns
+/// the verified file; on any mismatch the partial file is deleted and this is an error.
+pub fn download_installer(
+    inst: &Installer,
+    mut progress: impl FnMut(u64, u64),
+) -> anyhow::Result<std::path::PathBuf> {
+    use std::io::{Read, Write};
+
+    let dir = std::env::temp_dir().join("Stinkshot-update");
+    // Never reuse an old download: every update starts from an empty folder.
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).context("update folder could not be created")?;
+    let path = dir.join(&inst.name);
+    let part = dir.join(format!("{}.part", inst.name));
+
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(15)))
+        .timeout_global(Some(Duration::from_secs(15 * 60)))
+        .user_agent(format!("Stinkshot/{}", env!("CARGO_PKG_VERSION")))
+        .build()
+        .into();
+    let url = format!("{}/{}", download_base(), inst.name);
+    let mut resp = agent
+        .get(&url)
+        .header("Accept", "application/octet-stream")
+        .call()
+        .map_err(|e| anyhow::Error::new(e).context("update download request failed"))?;
+    let mut reader = resp.body_mut().with_config().limit(inst.size + 1).reader();
+    let mut file = std::fs::File::create(&part).context("update file could not be created")?;
+    let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
+    let mut buf = vec![0u8; 256 * 1024];
+    let mut done = 0u64;
+    let mut result = || -> anyhow::Result<()> {
+        loop {
+            let n = reader
+                .read(&mut buf)
+                .context("update download was cut off")?;
+            if n == 0 {
+                break;
+            }
+            done += n as u64;
+            if done > inst.size {
+                bail!("{UNTRUSTED}: the download is larger than the release info says");
+            }
+            hash.update(&buf[..n]);
+            file.write_all(&buf[..n])
+                .context("update file could not be written")?;
+            progress(done, inst.size);
+        }
+        file.flush().context("update file could not be written")?;
+        if done != inst.size {
+            bail!(
+                "update download was cut off ({done} of {} bytes)",
+                inst.size
+            );
+        }
+        Ok(())
+    };
+    let outcome = result();
+    drop(file);
+    let outcome = outcome.and_then(|()| {
+        if hex(hash.finish().as_ref()) != inst.sha256 {
+            bail!("{UNTRUSTED}: the downloaded installer does not match the signed hash");
+        }
+        Ok(())
+    });
+    if let Err(e) = outcome {
+        let _ = std::fs::remove_file(&part);
+        return Err(e);
+    }
+    std::fs::rename(&part, &path).context("update file could not be renamed")?;
+    Ok(path)
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Start the verified installer silently. It asks this copy to quit, replaces it, and starts
+/// the new version in the tray (packaging/inno/stinkshot.iss, RelaunchAfterSilentUpgrade).
+pub fn run_installer(path: &std::path::Path) -> anyhow::Result<()> {
+    std::process::Command::new(path)
+        .args(["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
+        .spawn()
+        .context("the installer could not be started")?;
+    Ok(())
 }
 
 /// `stinkshot-release.json`, written and signed by `scripts/release.ps1`.
@@ -91,7 +265,7 @@ pub fn check() -> anyhow::Result<Option<Release>> {
     .ok_or_else(|| anyhow!("{UNSIGNED}: no {SIGNATURE_NAME} published"))?;
     let signature =
         String::from_utf8(signature).map_err(|_| anyhow!("{UNTRUSTED}: signature is not text"))?;
-    let m = verify_manifest(&manifest, &signature, RELEASE_PUBLIC_KEY)?;
+    let m = verify_manifest(&manifest, &signature, &release_key())?;
     Ok(release_if_newer(&m, env!("CARGO_PKG_VERSION")))
 }
 
@@ -117,7 +291,7 @@ fn get(
 }
 
 fn asset_url(name: &str) -> String {
-    format!("{RELEASE_BASE}/{name}")
+    format!("{}/{name}", release_base())
 }
 
 fn is_safe_tag(tag: &str) -> bool {
@@ -176,6 +350,7 @@ pub fn release_if_newer(m: &Manifest, current: &str) -> Option<Release> {
     Some(Release {
         tag: m.tag.clone(),
         url,
+        installer: pick_installer(&m.files),
     })
 }
 
@@ -329,6 +504,148 @@ mod tests {
     fn live_check_answers() {
         let r = check();
         assert!(r.is_ok(), "{r:?}");
+    }
+
+    fn file(name: &str, size: u64, sha: &str) -> ManifestFile {
+        ManifestFile {
+            name: name.into(),
+            size,
+            sha256: sha.into(),
+        }
+    }
+
+    #[test]
+    fn installer_is_picked_for_this_architecture() {
+        let sha = "AB".repeat(32);
+        let (arch, other) = if cfg!(target_arch = "aarch64") {
+            ("arm64", "x64")
+        } else {
+            ("x64", "arm64")
+        };
+        let files = vec![
+            file(&format!("Stinkshot-1.2.3-{arch}-portable.zip"), 5, &sha),
+            file(&format!("Stinkshot-1.2.3-{other}-setup.exe"), 5, &sha),
+            file(&format!("Stinkshot-1.2.3-{arch}-setup.exe"), 7, &sha),
+        ];
+        let i = pick_installer(&files).unwrap();
+        assert_eq!(i.name, format!("Stinkshot-1.2.3-{arch}-setup.exe"));
+        assert_eq!(i.size, 7);
+        assert_eq!(i.sha256, "ab".repeat(32));
+    }
+
+    #[test]
+    fn unusable_installer_entries_are_ignored() {
+        let sha = "ab".repeat(32);
+        let suffix = setup_suffix();
+        for f in [
+            file(&format!("../Stinkshot-1{suffix}"), 5, &sha),
+            file(&format!("Stinkshot-1/x{suffix}"), 5, &sha),
+            file(&format!("Other-1{suffix}"), 5, &sha),
+            file(&format!("Stinkshot-1{suffix}"), 0, &sha),
+            file(&format!("Stinkshot-1{suffix}"), 5, "abc"),
+            file(&format!("Stinkshot-1{suffix}"), 5, &"zz".repeat(32)),
+            file(
+                &format!("Stinkshot-1{suffix}"),
+                MAX_INSTALLER_BYTES + 1,
+                &sha,
+            ),
+        ] {
+            assert!(pick_installer(std::slice::from_ref(&f)).is_none(), "{f:?}");
+        }
+    }
+
+    #[test]
+    fn hex_is_lowercase() {
+        assert_eq!(hex(&[0x00, 0xab, 0xff]), "00abff");
+    }
+
+    /// Against a local test server (`STINKSHOT_UPDATE_BASE`, debug builds) serving
+    /// `STINKSHOT_UPDATE_FILE`: the right hash is accepted, a wrong hash or size is rejected
+    /// and leaves no file behind.
+    #[test]
+    #[ignore = "needs a local update test server"]
+    fn local_download_checks_hash_and_size() {
+        let name = std::env::var("STINKSHOT_UPDATE_FILE").expect("set STINKSHOT_UPDATE_FILE");
+        let size: u64 = std::env::var("STINKSHOT_UPDATE_SIZE")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let sha = std::env::var("STINKSHOT_UPDATE_SHA")
+            .unwrap()
+            .to_ascii_lowercase();
+        let dir = std::env::temp_dir().join("Stinkshot-update");
+        let good = Installer {
+            name: name.clone(),
+            size,
+            sha256: sha.clone(),
+        };
+        let path = download_installer(&good, |_, _| {}).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), size);
+
+        let mut bad_hash = good.clone();
+        bad_hash.sha256 = "0".repeat(64);
+        let e = download_installer(&bad_hash, |_, _| {}).unwrap_err();
+        assert!(format!("{e:#}").starts_with(UNTRUSTED), "{e:#}");
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            0,
+            "nothing left behind"
+        );
+
+        let mut short = good.clone();
+        short.size = size - 1;
+        let e = download_installer(&short, |_, _| {}).unwrap_err();
+        assert!(format!("{e:#}").starts_with(UNTRUSTED), "{e:#}");
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            0,
+            "nothing left behind"
+        );
+
+        let mut long = good;
+        long.size = size + 1;
+        assert!(download_installer(&long, |_, _| {}).is_err());
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            0,
+            "nothing left behind"
+        );
+    }
+
+    /// Real network: downloads the live release's installer and checks it against the signed
+    /// manifest, like Update Now does.
+    #[test]
+    #[ignore = "network"]
+    fn live_installer_downloads_and_verifies() {
+        let agent: ureq::Agent = ureq::Agent::config_builder().build().into();
+        let manifest = get(
+            &agent,
+            &asset_url(MANIFEST_NAME),
+            "application/json",
+            MAX_MANIFEST_BYTES,
+        )
+        .unwrap()
+        .unwrap();
+        let sig = get(
+            &agent,
+            &asset_url(SIGNATURE_NAME),
+            "text/plain",
+            MAX_SIGNATURE_BYTES,
+        )
+        .unwrap()
+        .unwrap();
+        let m = verify_manifest(
+            &manifest,
+            &String::from_utf8(sig).unwrap(),
+            RELEASE_PUBLIC_KEY,
+        )
+        .unwrap();
+        let inst = pick_installer(&m.files).expect("manifest lists a setup");
+        let mut last = 0;
+        let path = download_installer(&inst, |d, _| last = d).unwrap();
+        assert_eq!(last, inst.size);
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), inst.size);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

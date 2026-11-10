@@ -279,12 +279,12 @@ impl Tray {
         }
         self.update_url = None;
         if let Some(r) = release {
-            let item = MenuItem::with_id(
-                ID_UPDATE,
-                tr!("shell.tray.update_available", tag = r.tag),
-                !r.url.is_empty(),
-                None,
-            );
+            let label = if r.installer.is_some() && crate::update::can_self_update() {
+                tr!("shell.tray.update_now", tag = r.tag)
+            } else {
+                tr!("shell.tray.update_available", tag = r.tag)
+            };
+            let item = MenuItem::with_id(ID_UPDATE, label, !r.url.is_empty(), None);
             if let Err(e) = self.menu.insert(&item, 1) {
                 log::warn!("tray update item: {e}");
                 return;
@@ -330,7 +330,7 @@ impl Tray {
             ID_SETTINGS => Command::OpenSettings,
             ID_HELP => Command::OpenSettingsAt(crate::settings_ui::Section::Help),
             ID_QUIT => Command::Quit,
-            ID_UPDATE => return self.update_url.clone().map(Command::OpenUrl),
+            ID_UPDATE => return self.update_url.as_ref().map(|_| Command::InstallUpdate),
             _ => return None,
         })
     }

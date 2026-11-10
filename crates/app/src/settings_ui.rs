@@ -2094,6 +2094,57 @@ impl SettingsWindow {
         self.history_rows(ui, shared);
     }
 
+    /// Update Now, shown under Check Now once the update check found a newer release.
+    fn update_row(&mut self, ui: &mut Ui, shared: &mut Shared) {
+        use crate::state::UpdateState;
+        let (tag, desc) = match &shared.update {
+            UpdateState::None => return,
+            UpdateState::Available {
+                tag,
+                self_update: true,
+            }
+            | UpdateState::Downloading { tag, .. }
+            | UpdateState::Installing { tag } => {
+                (tag.clone(), tr!("settings.privacy.update_ready.desc"))
+            }
+            UpdateState::Available { tag, .. } => {
+                (tag.clone(), tr!("settings.privacy.update_page.desc"))
+            }
+        };
+        let state = shared.update.clone();
+        let mut click = false;
+        widgets::setting_row(
+            ui,
+            &tr!("settings.privacy.update_ready", tag = tag),
+            desc,
+            |ui| match &state {
+                UpdateState::Available { self_update, .. } => {
+                    let label = if *self_update {
+                        tr!("settings.privacy.update_now")
+                    } else {
+                        tr!("settings.privacy.download")
+                    };
+                    if widgets::accent_button(ui, label).clicked() {
+                        click = true;
+                    }
+                }
+                UpdateState::Downloading { percent, .. } => {
+                    ui.add(egui::Spinner::new().size(14.0));
+                    ui.label(tr!("settings.privacy.downloading", pct = percent));
+                    ui.ctx().request_repaint_after(Duration::from_millis(250));
+                }
+                UpdateState::Installing { .. } => {
+                    ui.add(egui::Spinner::new().size(14.0));
+                    ui.label(tr!("settings.privacy.installing"));
+                }
+                UpdateState::None => {}
+            },
+        );
+        if click {
+            shared.outbox.push(Command::InstallUpdate);
+        }
+    }
+
     fn page_privacy(&mut self, ui: &mut Ui, shared: &mut Shared, accent: Color32) {
         let p = uc::pal(shared);
         info_card(
@@ -2147,6 +2198,7 @@ impl SettingsWindow {
         if requested {
             ui.ctx().request_repaint_after(Duration::from_millis(500));
         }
+        self.update_row(ui, shared);
         // The history rows are History's own; search shows them there only.
         if search::searching() {
             return;

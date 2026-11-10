@@ -38,6 +38,7 @@ clap.workspace = true
 pollster.workspace = true
 ureq.workspace = true
 minisign-verify.workspace = true
+ring.workspace = true
 # PNG frames of the About animation's disk cache (already in the tree via eframe and core).
 image.workspace = true
 

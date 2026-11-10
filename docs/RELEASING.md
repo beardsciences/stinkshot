@@ -48,8 +48,9 @@ If the secret key is lost, nothing can be signed with it again, so installed cop
 trust a new release: users have to download the next version by hand. This is why the backup
 matters.
 
-If it leaks, anyone can make installed copies show a fake "update available" pointing at a page
-on code.mccullough.dev (the app only links into the project, and never downloads anything).
+If it leaks, anyone can make installed copies show a fake "update available". Update Now only
+downloads from stinkshot.com/download and checks the file against the signed hash, so a leaked key
+alone cannot push an installer; a leaked key plus write access to the site could.
 Rotate as above at once (the leaked key still signs that one release) and say so in its notes.
 
 ### Code signing (optional, Authenticode)

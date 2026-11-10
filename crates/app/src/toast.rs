@@ -40,6 +40,15 @@ pub enum ToastKind {
         body: String,
         error: bool,
     },
+    /// A newer release: Update Now (or Download when this copy cannot update itself) and
+    /// What's New.
+    Update {
+        title: String,
+        body: String,
+        self_update: bool,
+    },
+    /// First start after an update: What's New.
+    Updated { title: String, body: String },
 }
 
 /// Logical layout constants (design: 380 px card, 12 px padding, 96x60 thumbnail).
@@ -74,6 +83,9 @@ pub enum ToastAction {
     CopyText,
     Folder,
     Play,
+    UpdateNow,
+    Download,
+    WhatsNew,
 }
 
 impl ToastAction {
@@ -85,17 +97,23 @@ impl ToastAction {
             ToastAction::CopyText => tr!("shell.toast.copy_text"),
             ToastAction::Folder => tr!("shell.toast.folder"),
             ToastAction::Play => tr!("shell.toast.play"),
+            ToastAction::UpdateNow => tr!("shell.toast.update_now"),
+            ToastAction::Download => tr!("shell.toast.download"),
+            ToastAction::WhatsNew => tr!("shell.toast.whats_new"),
         }
     }
-    fn command(self, id: ItemId) -> Command {
-        match self {
-            ToastAction::Edit => Command::EditItem(id),
-            ToastAction::Copy => Command::CopyItemImage(id),
-            ToastAction::Pin => Command::PinItem(id),
-            ToastAction::CopyText => Command::CopyItemText(id),
-            ToastAction::Folder => Command::RevealItem(id),
-            ToastAction::Play => Command::OpenItem(id),
-        }
+    /// The command for this button; item buttons need the toast's history item.
+    fn command(self, item: Option<ItemId>) -> Option<Command> {
+        Some(match self {
+            ToastAction::Edit => Command::EditItem(item?),
+            ToastAction::Copy => Command::CopyItemImage(item?),
+            ToastAction::Pin => Command::PinItem(item?),
+            ToastAction::CopyText => Command::CopyItemText(item?),
+            ToastAction::Folder => Command::RevealItem(item?),
+            ToastAction::Play => Command::OpenItem(item?),
+            ToastAction::UpdateNow | ToastAction::Download => Command::InstallUpdate,
+            ToastAction::WhatsNew => Command::OpenReleasePage,
+        })
     }
 
     /// Hover text (Title Case).
@@ -108,6 +126,9 @@ impl ToastAction {
             ToastAction::CopyText => tr!("shell.toast.copy_text.tip"),
             ToastAction::Folder => tr!("shell.toast.folder.tip"),
             ToastAction::Play => tr!("shell.toast.play"),
+            ToastAction::UpdateNow => tr!("shell.toast.update_now.tip"),
+            ToastAction::Download => tr!("shell.toast.download.tip"),
+            ToastAction::WhatsNew => tr!("shell.toast.whats_new.tip"),
         }
     }
 }
@@ -128,6 +149,15 @@ pub fn actions_for(kind: &ToastKind) -> Vec<ToastAction> {
             v
         }
         ToastKind::Recording { item: Some(_), .. } => vec![ToastAction::Play, ToastAction::Copy],
+        ToastKind::Updated { .. } => vec![ToastAction::WhatsNew],
+        ToastKind::Update { self_update, .. } => vec![
+            if *self_update {
+                ToastAction::UpdateNow
+            } else {
+                ToastAction::Download
+            },
+            ToastAction::WhatsNew,
+        ],
         _ => Vec::new(),
     }
 }
@@ -145,7 +175,7 @@ pub fn header_actions_for(kind: &ToastKind) -> Vec<ToastAction> {
 fn kind_item(kind: &ToastKind) -> Option<ItemId> {
     match kind {
         ToastKind::Capture { item, .. } | ToastKind::Recording { item, .. } => *item,
-        ToastKind::Message { .. } => None,
+        ToastKind::Message { .. } | ToastKind::Update { .. } | ToastKind::Updated { .. } => None,
     }
 }
 
@@ -188,6 +218,9 @@ pub fn lifetime(kind: &ToastKind, configured_secs: u32) -> Duration {
     let base = configured_secs.max(1);
     let secs = match kind {
         ToastKind::Message { error: true, .. } => base.max(8),
+        // An update offer waits long enough to be read and clicked.
+        ToastKind::Update { .. } => base.max(15),
+        ToastKind::Updated { .. } => base.max(8),
         _ => base,
     };
     Duration::from_secs(secs as u64)
@@ -260,7 +293,9 @@ impl Toast {
             let img = match &self.kind {
                 ToastKind::Capture { thumb, .. } => Some(thumb),
                 ToastKind::Recording { thumb, .. } => thumb.as_ref(),
-                ToastKind::Message { .. } => None,
+                ToastKind::Message { .. }
+                | ToastKind::Update { .. }
+                | ToastKind::Updated { .. } => None,
             }?;
             // 2x the displayed size is plenty and keeps the upload small.
             let small = if img.width > 384 || img.height > 240 {
@@ -358,6 +393,9 @@ impl Surface for Toast {
                 (title.clone(), body.clone(), false)
             }
             ToastKind::Message { title, body, error } => (title.clone(), body.clone(), *error),
+            ToastKind::Update { title, body, .. } | ToastKind::Updated { title, body } => {
+                (title.clone(), body.clone(), false)
+            }
         };
         let is_message = matches!(self.kind, ToastKind::Message { .. });
 
@@ -475,9 +513,9 @@ impl Surface for Toast {
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .on_hover_text(a.tooltip(is_recording));
                 if resp.clicked()
-                    && let Some(id) = item
+                    && let Some(c) = a.command(item)
                 {
-                    command = Some(a.command(id));
+                    command = Some(c);
                     close = true;
                 }
             }
@@ -544,25 +582,22 @@ impl Surface for Toast {
                         ToastAction::CopyText => ocr_available,
                         _ => true,
                     };
-                    let resp = uc::rect_button(
-                        ui,
-                        a.label(),
-                        r,
-                        a.label(),
-                        uc::BtnKind::Neutral,
-                        enabled,
-                        p,
-                        accent,
-                    );
+                    let kind = if matches!(a, ToastAction::UpdateNow | ToastAction::Download) {
+                        uc::BtnKind::Accent
+                    } else {
+                        uc::BtnKind::Neutral
+                    };
+                    let resp =
+                        uc::rect_button(ui, a.label(), r, a.label(), kind, enabled, p, accent);
                     let resp = if !enabled {
                         resp.on_disabled_hover_text(tr!("shell.toast.ocr_missing"))
                     } else {
                         resp.on_hover_text(a.tooltip(is_recording))
                     };
                     if resp.clicked()
-                        && let Some(id) = item
+                        && let Some(c) = a.command(item)
                     {
-                        command = Some(a.command(id));
+                        command = Some(c);
                         close = true;
                     }
                 }
@@ -650,21 +685,30 @@ mod tests {
 
     #[test]
     fn actions_push_expected_commands() {
-        assert!(matches!(ToastAction::Edit.command(7), Command::EditItem(7)));
         assert!(matches!(
-            ToastAction::Copy.command(7),
+            ToastAction::Edit.command(Some(7)).unwrap(),
+            Command::EditItem(7)
+        ));
+        assert!(matches!(
+            ToastAction::Copy.command(Some(7)).unwrap(),
             Command::CopyItemImage(7)
         ));
-        assert!(matches!(ToastAction::Pin.command(7), Command::PinItem(7)));
         assert!(matches!(
-            ToastAction::CopyText.command(7),
+            ToastAction::Pin.command(Some(7)).unwrap(),
+            Command::PinItem(7)
+        ));
+        assert!(matches!(
+            ToastAction::CopyText.command(Some(7)).unwrap(),
             Command::CopyItemText(7)
         ));
         assert!(matches!(
-            ToastAction::Folder.command(7),
+            ToastAction::Folder.command(Some(7)).unwrap(),
             Command::RevealItem(7)
         ));
-        assert!(matches!(ToastAction::Play.command(7), Command::OpenItem(7)));
+        assert!(matches!(
+            ToastAction::Play.command(Some(7)).unwrap(),
+            Command::OpenItem(7)
+        ));
     }
 
     #[test]

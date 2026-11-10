@@ -38,6 +38,9 @@ pub struct General {
     pub play_sound: bool,
     /// The first-run tour was shown (or skipped). Settings > About > Show Tour reopens it.
     pub tour_seen: bool,
+    /// The version that last ran with this config, for the "Updated to" toast. Empty before
+    /// 0.1.3 wrote it.
+    pub last_version: String,
 }
 
 /// Hotkey strings use the `global-hotkey` crate's format, e.g. "PrintScreen",
@@ -229,6 +232,7 @@ impl Default for General {
             toast_seconds: 6,
             play_sound: false,
             tour_seen: false,
+            last_version: String::new(),
         }
     }
 }

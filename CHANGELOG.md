@@ -9,6 +9,19 @@ write entries for people who use Stinkshot, not for people who read the diff.
 
 ## [Unreleased]
 
+### Added
+
+- Update Now: when an update is out, the toast, the tray menu and Settings > Privacy can
+  download it, check it against the signed release info and install it, then restart on the new
+  version. `stinkshot update` does the same from the command line. Copies that were not
+  installed by the setup still get the download page.
+- An "Updated to" message with What's New on the first start after an update.
+
+### Changed
+
+- The installer says Update, not Install, when Stinkshot is already installed, and skips the
+  folder and options pages.
+
 ## [0.1.2] - 2026-11-09
 
 ### Added

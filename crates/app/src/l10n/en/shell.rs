@@ -175,7 +175,7 @@ pub fn get(key: &str) -> Option<&'static str> {
         "shell.update.off.body" => {
             "Turn them on in Settings > Privacy. They are the only network feature."
         }
-        "shell.update.available.body" => "Open the tray menu to see the release page.",
+        "shell.update.available.body" => "Download it from stinkshot.com.",
         "shell.update.current" => "Stinkshot Is Up to Date",
         "shell.update.untrusted" => {
             "The release info failed its signature check, so it was ignored."
@@ -185,6 +185,24 @@ pub fn get(key: &str) -> Option<&'static str> {
         }
         "shell.update.no_answer" => "The update server did not answer. Try again later.",
         "shell.update.failed" => "Could Not Check for Updates",
+        "shell.update.available.install" => "Update Now installs it and restarts Stinkshot.",
+        "shell.update.downloading" => "Downloading Stinkshot {tag}",
+        "shell.update.downloading.body" => "Stinkshot restarts on the new version when it's done.",
+        "shell.update.install_failed" => "Could Not Update",
+        "shell.update.install_failed.body" => "The download did not finish.",
+        "shell.update.install_untrusted" => {
+            "The download did not match the signed release info, so it was deleted."
+        }
+        "shell.update.opening_page" => "Opening the download page instead.",
+        "shell.update.updated" => "Updated to {v}",
+        "shell.update.updated.body" => "Your settings, hotkeys and History are kept.",
+        "shell.tray.update_now" => "Update to {tag}",
+        "shell.toast.update_now" => "Update Now",
+        "shell.toast.update_now.tip" => "Download, Install and Restart",
+        "shell.toast.download" => "Download",
+        "shell.toast.download.tip" => "Open the Download Page",
+        "shell.toast.whats_new" => "What's New",
+        "shell.toast.whats_new.tip" => "Open the Release Notes",
         "shell.config.save_failed.body" => "The settings file could not be written.",
         "shell.config.save_failed.tail" => "Your changes apply until Stinkshot restarts.",
         "shell.config.save_failed" => "Could Not Save Settings",
@@ -532,6 +550,22 @@ pub const KEYS: &[&str] = &[
     "shell.update.available",
     "shell.update.current.body",
     "shell.tray.update_available",
+    "shell.update.available.install",
+    "shell.update.downloading",
+    "shell.update.downloading.body",
+    "shell.update.install_failed",
+    "shell.update.install_failed.body",
+    "shell.update.install_untrusted",
+    "shell.update.opening_page",
+    "shell.update.updated",
+    "shell.update.updated.body",
+    "shell.tray.update_now",
+    "shell.toast.update_now",
+    "shell.toast.update_now.tip",
+    "shell.toast.download",
+    "shell.toast.download.tip",
+    "shell.toast.whats_new",
+    "shell.toast.whats_new.tip",
     "shell.pin.ready",
     "shell.pin.opacity",
     "shell.error.log_hint",

@@ -756,6 +756,10 @@ struct Shell {
     a11y_prefs: crate::a11y::Prefs,
     last_theme_check: Instant,
     update_release: Option<Release>,
+    /// Update Now is downloading or the installer was started: ignore further clicks.
+    update_installing: bool,
+    /// `stinkshot update` is waiting for its check to install what it finds.
+    install_after_check: bool,
     update_inflight: bool,
     /// The check in flight was asked for by the user (Check Now): always report the outcome.
     update_forced: bool,
@@ -894,6 +898,7 @@ impl Shell {
                 outbox: Vec::new(),
                 dark: resolved_theme.0,
                 accent: resolved_theme.1,
+                update: Default::default(),
             },
             applied: config,
             tray,
@@ -933,6 +938,8 @@ impl Shell {
             a11y_prefs: crate::a11y::prefs(),
             last_theme_check: Instant::now(),
             update_release: None,
+            update_installing: false,
+            install_after_check: false,
             update_inflight: false,
             update_forced: false,
             update_retry_at: Instant::now(),
@@ -1000,6 +1007,8 @@ impl Shell {
         if welcome && !shell.shared.config.general.tour_seen {
             shell.pending.push_back(Command::OpenTour);
         }
+        // Also after `--tray`: a silent upgrade from Update Now relaunches that way.
+        shell.note_version();
         shell.maybe_check_updates(false);
         shell.ctx.request_repaint();
         timing::point(format_args!("Shell::new done"));
@@ -1225,6 +1234,25 @@ impl Shell {
                 self.push_toast(ToastKind::Message { title, body, error })
             }
             Command::CheckForUpdates => self.maybe_check_updates(true),
+            Command::InstallUpdate => self.install_update(),
+            Command::UpdateNow => {
+                if self.update_release.is_some() {
+                    self.install_update();
+                } else if self.shared.config.privacy.check_for_updates {
+                    self.install_after_check = true;
+                    self.maybe_check_updates(true);
+                } else {
+                    self.maybe_check_updates(true);
+                }
+            }
+            Command::OpenReleasePage => {
+                let url = self
+                    .update_release
+                    .as_ref()
+                    .map(|r| r.url.clone())
+                    .unwrap_or_else(|| crate::update::DEFAULT_PAGE.to_string());
+                self.pending.push_back(Command::OpenUrl(url));
+            }
             Command::Quit => self.quit(),
             Command::TrayClick
                 if self
@@ -2247,6 +2275,14 @@ impl Shell {
             }
             WorkerMsg::Exported(x) => self.exported(*x),
             WorkerMsg::UpdateChecked(result) => self.update_checked(result),
+            WorkerMsg::UpdateProgress(percent) => {
+                if let crate::state::UpdateState::Downloading { percent: p, .. } =
+                    &mut self.shared.update
+                {
+                    *p = percent;
+                }
+            }
+            WorkerMsg::UpdateDownloaded(result) => self.update_downloaded(result),
         }
     }
 
@@ -2466,6 +2502,7 @@ impl Shell {
     fn update_checked(&mut self, result: Result<Option<Release>, String>) {
         self.update_inflight = false;
         let forced = std::mem::take(&mut self.update_forced);
+        let install = std::mem::take(&mut self.install_after_check);
         match result {
             Ok(release) => {
                 self.shared.config.privacy.last_update_check = Some(chrono::Utc::now());
@@ -2476,17 +2513,31 @@ impl Shell {
                         .as_ref()
                         .map(|u| u.tag != r.tag)
                         .unwrap_or(true);
-                    if first || forced {
-                        self.notify(
-                            &tr!("shell.update.available", tag = r.tag),
-                            tr!("shell.update.available.body"),
-                            false,
-                        );
+                    let self_update = r.installer.is_some() && crate::update::can_self_update();
+                    if (first || forced) && !self.update_installing && !install {
+                        self.push_toast(ToastKind::Update {
+                            title: tr!("shell.update.available", tag = r.tag).to_string(),
+                            body: if self_update {
+                                tr!("shell.update.available.install").to_string()
+                            } else {
+                                tr!("shell.update.available.body").to_string()
+                            },
+                            self_update,
+                        });
                     }
                     if let Some(t) = &mut self.tray {
                         t.set_update(Some(&r));
                     }
+                    if !self.update_installing {
+                        self.shared.update = crate::state::UpdateState::Available {
+                            tag: r.tag.clone(),
+                            self_update,
+                        };
+                    }
                     self.update_release = Some(r);
+                    if install {
+                        self.install_update();
+                    }
                 } else if forced {
                     self.notify(
                         tr!("shell.update.current"),
@@ -2509,6 +2560,103 @@ impl Shell {
                     self.notify(tr!("shell.update.failed"), body, true);
                 }
                 self.update_retry_at = Instant::now() + Duration::from_secs(3600);
+            }
+        }
+    }
+
+    /// First start of a newer version: say so once, and remember this version. A config
+    /// from before 0.1.3 has no `last_version`; one that finished the tour was used by an
+    /// older version, so that counts as an update too.
+    fn note_version(&mut self) {
+        let current = env!("CARGO_PKG_VERSION");
+        let g = &self.shared.config.general;
+        if g.last_version == current {
+            return;
+        }
+        let updated = if g.last_version.is_empty() {
+            g.tour_seen
+        } else {
+            crate::update::is_newer(current, &g.last_version)
+        };
+        self.shared.config.general.last_version = current.to_string();
+        self.shared.config_dirty = true;
+        if updated && self.shared.config.general.show_toast {
+            self.push_toast(ToastKind::Updated {
+                title: tr!("shell.update.updated", v = current).to_string(),
+                body: tr!("shell.update.updated.body").to_string(),
+            });
+        }
+    }
+
+    /// Update Now: download, verify and run the installer, or open the release page when
+    /// this copy cannot update itself (portable, dev build, no installer listed).
+    fn install_update(&mut self) {
+        let Some(r) = self.update_release.clone() else {
+            return;
+        };
+        if self.update_installing {
+            return;
+        }
+        let inst = match &r.installer {
+            Some(i) if crate::update::can_self_update() => i.clone(),
+            _ => {
+                self.pending.push_back(Command::OpenUrl(r.url.clone()));
+                return;
+            }
+        };
+        log::info!("update: downloading {} ({} bytes)", inst.name, inst.size);
+        self.update_installing = true;
+        self.shared.update = crate::state::UpdateState::Downloading {
+            tag: r.tag.clone(),
+            percent: 0,
+        };
+        self.notify(
+            &tr!("shell.update.downloading", tag = r.tag),
+            tr!("shell.update.downloading.body"),
+            false,
+        );
+        workers::download_update(self.worker_tx.clone(), inst);
+    }
+
+    fn update_downloaded(&mut self, result: Result<PathBuf, String>) {
+        let Some(r) = self.update_release.clone() else {
+            return;
+        };
+        let started = result.and_then(|path| {
+            crate::update::run_installer(&path)
+                .map(|()| path)
+                .map_err(|e| format!("{e:#}"))
+        });
+        match started {
+            Ok(path) => {
+                log::info!("update: started installer {}", path.display());
+                self.shared.update = crate::state::UpdateState::Installing { tag: r.tag };
+                // The installer asks this copy to quit (`stinkshot quit`) and starts the new
+                // version afterwards; nothing else to do here.
+            }
+            Err(e) => {
+                self.update_installing = false;
+                let self_update = r.installer.is_some();
+                self.shared.update = crate::state::UpdateState::Available {
+                    tag: r.tag.clone(),
+                    self_update,
+                };
+                let why = if e.starts_with(crate::update::UNTRUSTED) {
+                    log::warn!("update: {e}");
+                    tr!("shell.update.install_untrusted").to_string()
+                } else {
+                    errors::report_network_str(
+                        "update download",
+                        &e,
+                        tr!("shell.update.install_failed.body"),
+                    )
+                };
+                self.notify(
+                    tr!("shell.update.install_failed"),
+                    format!("{why} {}", tr!("shell.update.opening_page")),
+                    true,
+                );
+                self.pending.push_back(Command::OpenUrl(r.url));
             }
         }
     }

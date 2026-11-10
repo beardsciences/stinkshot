@@ -40,8 +40,9 @@ The only network call Stinkshot can make is an update check that fetches signed
 release info from stinkshot.com. It is off until you turn it on in Settings, Privacy, and you can
 run it manually with Check Now. It sends only what any web request carries (your IP address and a
 `Stinkshot/<version>` user agent), nothing about your captures. Release info is trusted only after its
-minisign signature checks out against the key built into the app, and Stinkshot never downloads
-or runs installers itself. See SECURITY.md.
+minisign signature checks out against the key built into the app. When an update is out, Update
+Now (only when you click it) downloads the installer from stinkshot.com, runs it only if it matches
+the SHA-256 in the signed release info, and restarts Stinkshot on the new version. See SECURITY.md.
 
 ## Install
 

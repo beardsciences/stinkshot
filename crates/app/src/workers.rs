@@ -80,6 +80,10 @@ pub enum WorkerMsg {
     ExportProgress(f32),
     Exported(Box<Exported>),
     UpdateChecked(Result<Option<Release>, String>),
+    /// Update Now download progress, 0..=100.
+    UpdateProgress(u8),
+    /// Update Now download finished: the verified installer, or why it failed.
+    UpdateDownloaded(Result<std::path::PathBuf, String>),
 }
 
 pub struct CaptureSaved {
@@ -1204,6 +1208,22 @@ pub fn check_updates(tx: Sender<WorkerMsg>) {
     spawn("update-check", move || {
         let r = update::check().map_err(|e| format!("{e:#}"));
         post(&tx, WorkerMsg::UpdateChecked(r));
+    });
+}
+
+/// Update Now: download and verify `inst` (see `update::download_installer`).
+pub fn download_update(tx: Sender<WorkerMsg>, inst: update::Installer) {
+    spawn("update-download", move || {
+        let mut last = 0u8;
+        let r = update::download_installer(&inst, |done, total| {
+            let pct = (done.saturating_mul(100) / total.max(1)).min(100) as u8;
+            if pct != last {
+                last = pct;
+                post(&tx, WorkerMsg::UpdateProgress(pct));
+            }
+        })
+        .map_err(|e| format!("{e:#}"));
+        post(&tx, WorkerMsg::UpdateDownloaded(r));
     });
 }
 

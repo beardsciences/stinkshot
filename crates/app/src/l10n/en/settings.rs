@@ -254,10 +254,21 @@ pub fn get(key: &str) -> Option<&'static str> {
         }
         "settings.privacy.updates" => "Check for Updates",
         "settings.privacy.updates.desc" => {
-            "Once a day, fetches signed release info from stinkshot.com. Sends nothing else."
+            "Once a day, fetches signed release info from stinkshot.com. Sends nothing else. Update Now downloads the signed installer only when you click it."
         }
         "settings.privacy.check_now" => "Check Now",
         "settings.privacy.updates_off" => "Turn on update checks first",
+        "settings.privacy.update_ready" => "Stinkshot {tag} Is Available",
+        "settings.privacy.update_ready.desc" => {
+            "Downloads the signed installer from stinkshot.com, then restarts on the new version."
+        }
+        "settings.privacy.update_page.desc" => {
+            "This copy was not installed by the setup, so get it from the download page."
+        }
+        "settings.privacy.update_now" => "Update Now",
+        "settings.privacy.download" => "Download",
+        "settings.privacy.downloading" => "Downloading\u{2026} {pct}%",
+        "settings.privacy.installing" => "Installing\u{2026}",
         "settings.privacy.history" => "History",
         "settings.privacy.open_file" => "Open File",
         "settings.privacy.open_file_failed" => "Could Not Open File",
@@ -544,6 +555,13 @@ pub const KEYS: &[&str] = &[
     "settings.privacy.updates.desc",
     "settings.privacy.check_now",
     "settings.privacy.updates_off",
+    "settings.privacy.update_ready",
+    "settings.privacy.update_ready.desc",
+    "settings.privacy.update_page.desc",
+    "settings.privacy.update_now",
+    "settings.privacy.download",
+    "settings.privacy.downloading",
+    "settings.privacy.installing",
     "settings.privacy.history",
     "settings.privacy.open_file",
     "settings.privacy.open_file_failed",

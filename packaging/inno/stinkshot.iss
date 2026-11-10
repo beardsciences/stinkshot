@@ -66,7 +66,9 @@ PrivilegesRequired=lowest
 DefaultDirName={autopf}\{#AppTitle}
 DisableDirPage=auto
 DisableProgramGroupPage=yes
-DisableReadyPage=yes
+; The Ready page shows only for an update ("Update" button); a fresh install skips it
+; (ShouldSkipPage).
+DisableReadyPage=no
 DisableWelcomePage=yes
 UninstallDisplayName={#AppTitle}
 UninstallDisplayIcon={app}\stinkshot.exe
@@ -103,6 +105,13 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 [CustomMessages]
 en.AutostartTask=Start Stinkshot when I sign in
 en.LaunchNow=Launch Stinkshot
+en.UpdateCaption=Update {#AppTitle}
+en.UpdateReadyHeading=Ready to Update
+en.UpdateReadyText=Stinkshot %1 will be updated to {#AppVersion}. Your settings, hotkeys and History are kept.
+en.UpdateButton=&Update
+en.UpdateInstalling=Updating Stinkshot to {#AppVersion}...
+en.UpdateDoneHeading=Stinkshot Is Updated
+en.UpdateDoneText=Stinkshot was updated from %1 to {#AppVersion}. Your settings, hotkeys and History are kept.
 
 [Tasks]
 Name: "autostart"; Description: "{cm:AutostartTask}"; Flags: unchecked
@@ -138,6 +147,73 @@ const
 
 var
   WasRunning: Boolean;
+  PrevVersion: String;
+
+{ The version already installed under this AppId, or '' for a fresh install. }
+function InstalledVersion(): String;
+var
+  Key: String;
+begin
+  Result := '';
+  Key := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\' +
+    ExpandConstant('{#emit SetupSetting("AppId")}') + '_is1';
+  if not RegQueryStringValue(HKCU, Key, 'DisplayVersion', Result) then
+    Result := '';
+end;
+
+function IsUpdate(): Boolean;
+begin
+  Result := PrevVersion <> '';
+end;
+
+function InitializeSetup(): Boolean;
+begin
+  PrevVersion := InstalledVersion();
+  Log(Format('installed version before setup: "%s"', [PrevVersion]));
+  Result := True;
+end;
+
+procedure InitializeWizard();
+begin
+  if IsUpdate() then
+    WizardForm.Caption := CustomMessage('UpdateCaption');
+end;
+
+{ An update keeps the previous folder and tasks, so it skips straight to Ready; a fresh install
+  never shows Ready. }
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := False;
+  if IsUpdate() then
+    Result := (PageID = wpSelectDir) or (PageID = wpSelectTasks)
+  else
+    Result := PageID = wpReady;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if IsUpdate() then
+  begin
+    if CurPageID = wpReady then
+    begin
+      WizardForm.PageNameLabel.Caption := CustomMessage('UpdateReadyHeading');
+      WizardForm.PageDescriptionLabel.Caption := '';
+      WizardForm.ReadyLabel.Caption := FmtMessage(CustomMessage('UpdateReadyText'), [PrevVersion]);
+      WizardForm.ReadyMemo.Visible := False;
+      WizardForm.NextButton.Caption := CustomMessage('UpdateButton');
+    end
+    else if CurPageID = wpInstalling then
+      WizardForm.PageNameLabel.Caption := CustomMessage('UpdateInstalling')
+    else if CurPageID = wpFinished then
+    begin
+      WizardForm.FinishedHeadingLabel.Caption := CustomMessage('UpdateDoneHeading');
+      WizardForm.FinishedLabel.Caption := FmtMessage(CustomMessage('UpdateDoneText'), [PrevVersion]);
+    end;
+  end
+  else if CurPageID = wpSelectTasks then
+    { Ready is skipped, so Tasks is the last page before installing. }
+    WizardForm.NextButton.Caption := SetupMessage(msgButtonInstall);
+end;
 
 { Mirrors stinkshot_core::config::profile_suffix: "" normally, "-<name>" for a dev profile. }
 function ProfileSuffix(): String;

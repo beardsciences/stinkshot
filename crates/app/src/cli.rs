@@ -118,6 +118,9 @@ enum Sub {
         #[arg(long)]
         page: Option<String>,
     },
+    /// Check for a newer release and install it (needs Settings > Privacy > Check for
+    /// Updates on).
+    Update,
     /// Ask the running instance to exit and wait for it (used by the installer).
     Quit,
     /// Soak test driver commands (`soak` feature builds only).
@@ -151,6 +154,7 @@ fn command_of(sub: &Sub) -> Command {
             Some(s) => Command::OpenSettingsAt(s),
             None => Command::OpenSettings,
         },
+        Sub::Update => Command::UpdateNow,
         Sub::Quit => Command::Quit,
         #[cfg(feature = "soak")]
         Sub::Soak { args } => Command::Soak(args.clone()),

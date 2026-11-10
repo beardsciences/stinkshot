@@ -3883,6 +3883,7 @@ dependencies = [
  "log",
  "minisign-verify",
  "pollster",
+ "ring",
  "serde",
  "serde_json",
  "stinkshot-core",

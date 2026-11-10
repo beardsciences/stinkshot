@@ -27,6 +27,21 @@ pub struct Shared {
     pub dark: bool,
     /// Resolved accent RGBA.
     pub accent: [u8; 4],
+    /// The newer release the update check found, for Settings > Privacy.
+    pub update: UpdateState,
+}
+
+/// What Settings shows about a newer release.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum UpdateState {
+    #[default]
+    None,
+    /// `tag` is available; `self_update` = Update Now can install it in place.
+    Available { tag: String, self_update: bool },
+    /// Update Now is downloading (`percent` 0..=100).
+    Downloading { tag: String, percent: u8 },
+    /// The installer is running; Stinkshot is about to restart.
+    Installing { tag: String },
 }
 
 /// Requests to the shell. Hotkeys, tray, CLI and IPC all produce these too.
@@ -99,6 +114,13 @@ pub enum Command {
         error: bool,
     },
     CheckForUpdates,
+    /// Download and run the newer release's installer (Update Now). Falls back to the
+    /// release page when this copy cannot update itself.
+    InstallUpdate,
+    /// `stinkshot update`: check now, then install a newer release if there is one.
+    UpdateNow,
+    /// Open the newer release's page (What's New).
+    OpenReleasePage,
     Quit,
     /// Open a web page (the update release page) in the default browser.
     OpenUrl(String),

@@ -19,7 +19,8 @@ Decided Nov 6 2026 through a Q&A session. Everything below is in scope for the f
 ## Privacy stance
 
 - Local only. No upload targets, no telemetry.
-- The single network call is an opt-in update check against the Forgejo releases API.
+- The single network feature is an opt-in update check against stinkshot.com; Update Now
+  downloads the signed, hash-checked installer only when the user clicks it.
 - Label this clearly as a feature (README, settings, about box).
 
 ## Triggers

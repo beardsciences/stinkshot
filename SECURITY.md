@@ -9,7 +9,11 @@
   once a day, and sends nothing beyond what
   any GET carries (a `Stinkshot/<version>` User-Agent).
 - The update check trusts version info only after verifying its minisign (Ed25519) signature
-  against the public key built into the app. It never downloads or runs installers.
+  against the public key built into the app.
+- Update Now runs only when you click it (or run `stinkshot update`). It downloads the setup.exe
+  the signed release info lists, from stinkshot.com/download only, and runs it only if its size
+  and SHA-256 match that signed info; otherwise the file is deleted and the download page opens.
+  Copies the setup did not install (portable, dev builds) only ever get the download page.
 
 A finding that breaks any of these is a security bug, as is anything that lets another
 program or web page read captures through Stinkshot, or a redaction that leaves the original
