@@ -2,7 +2,7 @@
 
 # Stinkshot
 
-A local-first screenshot and screen-recording tool for Windows 11. It freezes the screen, lets you
+A local-first screenshot and screen-recording tool for Windows. It freezes the screen, lets you
 select and annotate in place, and saves every capture to a plain folder you can use without the app.
 
 ## Features
@@ -46,6 +46,7 @@ the SHA-256 in the signed release info, and restarts Stinkshot on the new versio
 
 ## Install
 
+- Winget: `winget install Stinkshot.Stinkshot`.
 - Installer: `Stinkshot-<version>-x64-setup.exe` from the releases page. Installs for your user
   only (no admin) to `%LOCALAPPDATA%\Programs\Stinkshot`. Silent:
   `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`, plus `/TASKS=autostart` to start with Windows.
@@ -112,10 +113,7 @@ file extension (png, jpg, webp). The others are handy for scripts, AutoHotkey an
 - Captures: the history folder set in Settings. Annotation data lives beside each image in a
   `.stinkshot` subfolder, together with the search index and thumbnails.
 
-## Privacy
-
-Everything stays on your PC; the only network call is the optional update check, which is off by
-default.
+## Redaction and Editable Originals
 
 Redaction (Blur, Pixelate and Redact boxes) destroys the pixels in the exported image. However,
 with Keep Editable Originals on (the default), Stinkshot also keeps the full, unannotated original

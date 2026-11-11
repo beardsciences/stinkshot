@@ -1,5 +1,5 @@
 # Draft. InstallerSha256 is filled from the release's SHA256SUMS (docs/RELEASING.md).
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.28.0.schema.json
 PackageIdentifier: Stinkshot.Stinkshot
 PackageVersion: 0.1.0
 MinimumOSVersion: 10.0.18362.0
@@ -18,8 +18,8 @@ AppsAndFeaturesEntries:
     ProductCode: '{7F697D6C-4CDA-4A4F-8EEB-DA1D24AD69C4}_is1'
 Installers:
   - Architecture: x64
-    InstallerUrl: https://code.mccullough.dev/christian/stinkshot/releases/download/v0.1.0/Stinkshot-0.1.0-x64-setup.exe
+    InstallerUrl: https://stinkshot.com/download/Stinkshot-0.1.0-x64-setup.exe
     InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
     ProductCode: '{7F697D6C-4CDA-4A4F-8EEB-DA1D24AD69C4}_is1'
 ManifestType: installer
-ManifestVersion: 1.10.0
+ManifestVersion: 1.28.0
