@@ -655,6 +655,16 @@ impl Capturer {
         }
     }
 
+    /// Let go of the display duplications so a replacement capturer can take them: a
+    /// process can hold only one duplication of an output at a time.
+    pub fn release_displays(&mut self) {
+        for m in &mut self.mons {
+            if let Backend::Dup { dup, .. } = &mut m.backend {
+                *dup = None;
+            }
+        }
+    }
+
     /// True once every captured monitor has delivered at least one frame.
     pub fn has_all_frames(&self) -> bool {
         self.mons.iter().all(|m| m.got_frame)

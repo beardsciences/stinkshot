@@ -699,6 +699,7 @@ fn video_loop(
             // going to sleep). Hold the last picture and capture the same region again.
             Err(e) if e.is::<DisplayLost>() => {
                 log::warn!("recording: the display changed, restarting the screen capture");
+                cap.release_displays();
                 match reopen_capturer(shared, region, opts.include_cursor, fps) {
                     Some(new) => {
                         log::info!("recording: screen capture restarted ({})", new.backend_name);
