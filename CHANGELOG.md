@@ -7,6 +7,34 @@ All notable changes to Stinkshot are listed here. The format follows
 `scripts/release.ps1` copies the section for the version it builds into the release notes, so
 write entries for people who use Stinkshot, not for people who read the diff.
 
+## [Unreleased]
+
+### Added
+
+- Ctrl+V in the editor pastes a picture copied from any app as an image you can move and
+  resize.
+- Add to Canvas in History puts screenshots on a blank canvas to arrange side by side; each
+  one added goes onto the open canvas.
+- Cover What's Under It on text: the box takes the color of the page under it and the text
+  the color of the words it covers, so you can type over text in one step.
+- Delete on the capture toast moves a capture you don't want to the Recycle Bin.
+- After Selecting a Region can be Open Editor Window Right Away: the screen unfreezes as soon
+  as the region is chosen.
+- Hide Stinkshot From Captures in Settings > General: turn it off to show the overlay, toasts
+  and recording bar in screenshots and screen shares.
+
+### Changed
+
+- The region overlay no longer outlines the previous region.
+
+### Fixed
+
+- A region made by clicking a window or element can be dragged anywhere, not only inside
+  that window.
+- Dragging inside a region moves it again when the captured pointer is in it (with Cursor as
+  Object on, it started a selection box instead).
+- Text keeps its size and look while it is dragged.
+
 ## [0.1.3] - 2026-11-10
 
 ### Added

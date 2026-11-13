@@ -74,6 +74,8 @@ pub enum Command {
     RetryHotkeys,
     /// Re-open a history item in the overlay editor (annotations editable).
     EditItem(ItemId),
+    /// Put the item's picture on the open canvas, or start a canvas with it.
+    AddToCanvas(ItemId),
     PinItem(ItemId),
     /// Overlay finished an image capture.
     CaptureDone(Box<CaptureOutput>),
@@ -240,7 +242,6 @@ pub struct OverlayRequest {
     /// for occlusion-aware snapping. Empty for Annotate mode; the overlay then falls back
     /// to `windows`.
     pub layers: Vec<stinkshot_platform::occlusion::Layer>,
-    pub last_region: Option<PxRect>,
     /// Short inline hint for the hint bar until a selection exists (e.g. "No Region
     /// Remembered Yet"), instead of a toast over the frozen screen.
     pub notice: Option<&'static str>,

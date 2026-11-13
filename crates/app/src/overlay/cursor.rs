@@ -107,7 +107,7 @@ impl Overlay {
     }
 
     /// The document holds only the pointer, as captured (not moved or resized).
-    fn only_untouched_cursor(&self) -> bool {
+    pub(super) fn only_untouched_cursor(&self) -> bool {
         matches!(self.doc.shapes.as_slice(), [s] if is_cursor(s)) && !self.undo.can_undo()
     }
 

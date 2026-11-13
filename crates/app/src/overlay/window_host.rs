@@ -206,7 +206,6 @@ impl EditorWindow {
             frozen,
             windows: Vec::new(),
             layers: Vec::new(),
-            last_region: None,
             notice: None,
             from_tray_click: false,
         };
@@ -236,6 +235,16 @@ impl EditorWindow {
     /// The history item this window edits, if any.
     pub fn item(&self) -> Option<stinkshot_history::ItemId> {
         self.item
+    }
+
+    /// A canvas made by Add to Canvas (pictures get added to it).
+    pub fn is_canvas(&self) -> bool {
+        self.ov.is_canvas()
+    }
+
+    /// Add a picture to this canvas as an image shape.
+    pub fn add_picture(&mut self, img: Rgba) {
+        self.ov.add_picture(img);
     }
 
     /// Re-fit the picture to the client area when its size or DPI changed, and keep the

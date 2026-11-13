@@ -64,6 +64,8 @@ pub enum WorkerMsg {
         title: String,
         item: ItemId,
     },
+    /// A history picture loaded for Add to Canvas.
+    CanvasPicture(Rgba),
     ScrollProgress {
         frames: usize,
         width: u32,
@@ -988,6 +990,30 @@ pub fn pin_item(env: &Env, id: ItemId) {
             Err(e) => env.notify(
                 tr!("shell.item.pin_failed"),
                 report("pin item", &e, tr!("shell.item.pin_failed.body")),
+                true,
+            ),
+        }
+    });
+}
+
+/// Load an image item's picture (with its annotations) for Add to Canvas.
+pub fn add_to_canvas(env: &Env, id: ItemId) {
+    job(env, "add-to-canvas", move |env| {
+        let run = || -> anyhow::Result<Rgba> {
+            let meta = env
+                .history
+                .get(id)?
+                .ok_or_else(|| anyhow!("item no longer exists"))?;
+            if meta.kind != ItemKind::Image {
+                return Err(anyhow!("only images can go on a canvas"));
+            }
+            Rgba::load(&meta.path)
+        };
+        match run() {
+            Ok(img) => env.send(WorkerMsg::CanvasPicture(img)),
+            Err(e) => env.notify(
+                tr!("shell.item.canvas_failed"),
+                report("add to canvas", &e, tr!("shell.item.in_use")),
                 true,
             ),
         }

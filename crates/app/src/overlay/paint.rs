@@ -130,6 +130,7 @@ pub fn paint_shape(painter: &Painter, m: ImgToPt, shape: &Shape, skip_text: bool
             background,
             bold,
             width,
+            cover,
         } => {
             let p = m.p(*pos);
             let font = if *bold {
@@ -147,7 +148,12 @@ pub fn paint_shape(painter: &Painter, m: ImgToPt, shape: &Shape, skip_text: bool
                 let sz = galley.size().max(Vec2::new(m.len(min_w), m.len(*size)));
                 let r = Rect::from_min_size(p, sz)
                     .expand2(Vec2::new(m.len(size * 0.4), m.len(size * 0.2)));
-                painter.rect_filled(r, (r.height() / 2.0).min(m.len(size * 0.7)), color32(*bg));
+                let radius = if *cover {
+                    m.len(size * 0.12).min(r.height() / 2.0)
+                } else {
+                    (r.height() / 2.0).min(m.len(size * 0.7))
+                };
+                painter.rect_filled(r, radius, color32(*bg));
             }
             if !skip_text && !text.is_empty() {
                 painter.galley(p, galley, col);
@@ -272,7 +278,7 @@ pub fn paint_shape(painter: &Painter, m: ImgToPt, shape: &Shape, skip_text: bool
             let _ = dim;
             dashed_rect(painter, m.r(*rect), Color32::from_white_alpha(200));
         }
-        ShapeKind::Cursor { rect, image } => {
+        ShapeKind::Cursor { rect, image } | ShapeKind::Image { rect, image } => {
             let tex = cursor_texture(painter.ctx(), image.rgba());
             let uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
             painter.image(tex.id(), m.r(*rect), uv, Color32::WHITE);

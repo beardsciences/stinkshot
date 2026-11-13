@@ -128,6 +128,15 @@ struct TextPatch {
     tex: Option<egui::TextureHandle>,
 }
 
+/// Exact pixels of a text shape being moved, so the drag shows the same glyphs the render
+/// will (the painter's approximation has different metrics). `shape` is the doc shape the
+/// patch currently stands for and `rect` where it sits (image px).
+struct MovePatch {
+    shape: Shape,
+    rect: RectF,
+    tex: egui::TextureHandle,
+}
+
 struct EditState {
     id: ShapeId,
     is_new: bool,
@@ -296,7 +305,6 @@ pub struct Overlay {
     windows: Vec<WinInfo>,
     /// Z-ordered occlusion stack (topmost first), see `OverlayRequest::layers`.
     layers: Vec<Layer>,
-    last_region: Option<PxRect>,
     fonts: Arc<Fonts>,
     /// Monitor rects in overlay-local (screen) px with their DPI scale.
     monitors: Vec<(PxRect, f32)>,
@@ -377,12 +385,17 @@ pub struct Overlay {
     /// Shapes copied with Ctrl+C (editor only) and how often they were pasted.
     clipboard: Vec<Shape>,
     pastes: u32,
+    /// The system clipboard's sequence number when shapes were copied: once something else
+    /// lands on the clipboard, Ctrl+V pastes that picture instead.
+    clipboard_seq: u32,
     magnifier_source: Option<RectF>,
     magnifier_cursor: Option<PtF>,
     edit: Option<EditState>,
     /// The last typed text's rendered pixels, shown until the cached render includes it (no
     /// flash of the painter's approximation after Esc).
     settled_text: Option<TextPatch>,
+    /// Moved text shapes' exact pixels, shown until the cached render includes them.
+    move_patches: Vec<MovePatch>,
     drag: Drag,
     /// Smart guides of the gesture in progress (image px).
     guides: Vec<snap::Guide>,
@@ -466,8 +479,8 @@ pub struct Overlay {
     /// Editor Window: the document as last saved back to its history item (the window stays
     /// open after Save); no prompt on close while it is unchanged.
     clean_doc: Option<Doc>,
-    /// Settings > Capture > After Selecting a Region is Open Editor Window.
-    after_region_window: bool,
+    /// Settings > Capture > After Selecting a Region.
+    after_region: stinkshot_core::config::AfterRegion,
 }
 
 /// A short message in the hint bar's leading slot.
@@ -570,7 +583,6 @@ impl Overlay {
             frozen,
             windows,
             layers,
-            last_region,
             notice,
             from_tray_click,
         } = req;
@@ -614,7 +626,6 @@ impl Overlay {
                 layers
             },
             windows,
-            last_region,
             fonts: shared.fonts.clone(),
             monitors: monitors_local,
             create_scale: mon_list
@@ -669,10 +680,12 @@ impl Overlay {
             cursor: cursor_obj,
             clipboard: Vec::new(),
             pastes: 0,
+            clipboard_seq: 0,
             magnifier_source: None,
             magnifier_cursor: None,
             edit: None,
             settled_text: None,
+            move_patches: Vec::new(),
             drag: Drag::None,
             guides: Vec::new(),
             hover_handle: None,
@@ -723,8 +736,7 @@ impl Overlay {
             fixed_rect: None,
             carried_edits: false,
             clean_doc: None,
-            after_region_window: shared.config.capture.after_region
-                == stinkshot_core::config::AfterRegion::Window,
+            after_region: shared.config.capture.after_region,
         };
 
         // Element snapping picks regions on the screen; the editor never does.
@@ -935,10 +947,18 @@ impl Overlay {
     /// Enter opens the capture in an Editor Window instead of copying it (screen overlay
     /// with a region, After Selecting a Region = Open Editor Window).
     fn enter_opens_window(&self) -> bool {
-        self.after_region_window
+        self.after_region != stinkshot_core::config::AfterRegion::Annotate
             && !self.windowed
             && matches!(self.kind, Kind::Capture)
             && self.sel.is_some()
+    }
+
+    pub(crate) fn is_canvas(&self) -> bool {
+        matches!(self.annotate_meta, Some(("canvas", ..)))
+    }
+
+    pub(crate) fn add_picture(&mut self, img: Rgba) {
+        self.paste_image(img);
     }
 
     fn annotating(&self) -> bool {

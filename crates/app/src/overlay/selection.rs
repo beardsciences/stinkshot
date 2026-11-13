@@ -213,10 +213,11 @@ pub fn rect_inside(inner: PxRect, outer: PxRect) -> bool {
         && inner.bottom() <= outer.bottom()
 }
 
-/// A region made by clicking a snapped window or UI element. Moving and resizing it stay
-/// inside the chain's root (its outermost rect: the top-level window, e.g. the whole taskbar
-/// for a taskbar button), and resize handles snap to the edges of every element in the chain
-/// (children, the element, its parents). Alt drags ignore the tie. `region` is the rect the
+/// A region made by clicking a snapped window or UI element. Resizing it stays inside the
+/// chain's root (its outermost rect: the top-level window, e.g. the whole taskbar for a
+/// taskbar button), and resize handles snap to the edges of every element in the chain
+/// (children, the element, its parents). Alt drags ignore the tie. Moving is free: a region
+/// moved out of its root loses the tie. `region` is the rect the
 /// tie belongs to: any other change of the region (arrow keys, Exact size, a free drag) no
 /// longer matches it, which ends the tie.
 #[derive(Clone, Debug, PartialEq)]
@@ -262,11 +263,6 @@ impl SnapTie {
             return r;
         }
         clamp_rect(snap_to_chain(r, handle, &self.chain, tol), b)
-    }
-
-    /// Move the tied region by (dx, dy) without leaving its root.
-    pub fn move_by(&self, start: PxRect, dx: i32, dy: i32, outer: PxRect) -> PxRect {
-        move_rect(start, dx, dy, self.bounds(outer))
     }
 }
 
@@ -514,9 +510,6 @@ mod tests {
         assert_eq!(r, PxRect::new(0, 760, 340, 36));
         let r = t.resize(BUTTON, Handle8::Top, (320, 0), B, None, 6);
         assert_eq!(r, PxRect::new(300, 760, 40, 36));
-        // Moving keeps it inside the taskbar too.
-        assert_eq!(t.move_by(BUTTON, 0, -500, B), PxRect::new(300, 760, 40, 32));
-        assert_eq!(t.move_by(BUTTON, 900, 0, B), PxRect::new(960, 764, 40, 32));
         // A root partly off the overlay is cut to it.
         let off = SnapTie::new(BUTTON, &[BUTTON, PxRect::new(0, 700, 1000, 300)]).unwrap();
         assert_eq!(off.bounds(B), PxRect::new(0, 700, 1000, 100));

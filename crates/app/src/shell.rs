@@ -1080,6 +1080,7 @@ impl Shell {
             }
         }
         shell.apply_autostart();
+        window_util::set_hide_from_capture(shell.shared.config.general.hide_from_captures);
         workers::recover_recordings(&shell.env(), leftover_recordings);
         if !shell.hotkey_errors.is_empty() {
             let body = shell.hotkey_errors.join("\n");
@@ -1212,6 +1213,47 @@ impl Shell {
         self.touch();
     }
 
+    /// Add to Canvas: onto the newest open canvas, else a new white canvas with room
+    /// around the picture (an Editor Window; finishing saves it as a new capture).
+    fn add_to_canvas(&mut self, img: Rgba) {
+        if let Some(e) = self.editors.iter_mut().rev().find(|e| e.s.is_canvas()) {
+            e.s.add_picture(img);
+            let t = e.s.title();
+            Self::focus_window(&t);
+            self.touch();
+            return;
+        }
+        const MARGIN: u32 = 64;
+        let w = (img.width + 2 * MARGIN).max(1920);
+        let h = (img.height + 2 * MARGIN).max(1080);
+        let base = Rgba::filled(w, h, [255, 255, 255, 255]);
+        let mut doc = Doc::new(w, h);
+        let rect = stinkshot_core::RectF::new(
+            ((w - img.width) / 2) as f32,
+            ((h - img.height) / 2) as f32,
+            img.width as f32,
+            img.height as f32,
+        );
+        let image = stinkshot_core::annotate::CursorImage::new(img);
+        doc.add(
+            stinkshot_core::annotate::ShapeKind::Image { rect, image },
+            stinkshot_core::annotate::Style {
+                width: 0.0,
+                shadow: false,
+                ..Default::default()
+            },
+        );
+        self.open_editor(crate::state::EditorRequest {
+            base,
+            doc,
+            mode: "canvas",
+            editing: None,
+            source: SourceInfo::default(),
+            name: Some(tr!("shell.canvas.name").to_string()),
+            rect: None,
+        });
+    }
+
     fn apply_autostart(&self) {
         let enabled = self.shared.config.general.start_with_windows;
         let exe = match std::env::current_exe() {
@@ -1289,6 +1331,7 @@ impl Shell {
                 }
             }
             Command::OpenEditor(req) => self.open_editor(*req),
+            Command::AddToCanvas(id) => workers::add_to_canvas(&self.env(), id),
             Command::PinItem(id) => workers::pin_item(&self.env(), id),
             Command::CaptureDone(out) => self.capture_done(*out),
             Command::RegionChosen {
@@ -1496,7 +1539,6 @@ impl Shell {
             frozen,
             windows,
             layers,
-            last_region: self.shared.config.capture.last_region,
             notice: self.next_overlay_notice.take(),
             from_tray_click: std::mem::take(&mut self.next_overlay_tray),
         };
@@ -2307,6 +2349,7 @@ impl Shell {
                     rect: None,
                 });
             }
+            WorkerMsg::CanvasPicture(img) => self.add_to_canvas(img),
             WorkerMsg::PinReady { image, title, item } => {
                 self.add_pin(image, title, Some(item), None)
             }
@@ -2847,6 +2890,7 @@ impl Shell {
         if old.general.start_with_windows != new.general.start_with_windows {
             self.apply_autostart();
         }
+        window_util::set_hide_from_capture(new.general.hide_from_captures);
         if old.hotkeys != new.hotkeys {
             self.hotkey_errors = self.hotkeys.reload(&new.hotkeys);
             if let Some(s) = &mut self.settings {

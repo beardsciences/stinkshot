@@ -77,7 +77,8 @@ The public items in each crate's stub files are the contract. They compile today
   M magnifier, O callout, S spotlight, U measure, V select; 1-8 palette colors; [ ] stroke width;
   Q codes and text (QR / barcodes, Copy as Table), F beautify, C copy color (picker format);
   I eyedropper; Ctrl+D duplicate; Ctrl+C / Ctrl+V copy and paste shapes when shapes are
-  selected (otherwise Ctrl+C copies the image; Enter always does); Ctrl+] / Ctrl+[ forward /
+  selected (otherwise Ctrl+C copies the image; Enter always does), and Ctrl+V pastes a
+  picture copied from anywhere since as a movable image shape; Ctrl+] / Ctrl+[ forward /
   backward, with Shift to front / back; Ctrl+B bold text; Ctrl+wheel, Ctrl+= / Ctrl+- zoom,
   Ctrl+0 fit, Ctrl+1 100 %, Space or middle drag pans; Shift constrains, Alt disables
   snapping. Shift+drag outside the selection (or the Add Regions toggle) adds a region; the

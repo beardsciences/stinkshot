@@ -610,6 +610,7 @@ pub enum ContextBar {
     Text {
         bold: bool,
         pill: bool,
+        cover: bool,
         size: f32,
     },
     Arrow {
@@ -798,7 +799,7 @@ pub fn context_bar(
     use super::ops::ShapeOpt;
     use stinkshot_core::annotate::ArrowHead;
     let (w, h) = match bar {
-        ContextBar::Text { .. } => (4.0 * 32.0 + 40.0, 40.0),
+        ContextBar::Text { .. } => (5.0 * 32.0 + 40.0, 40.0),
         ContextBar::Arrow { curved, .. } => {
             ((5.0 + f32::from(u8::from(curved))) * 32.0 + 22.0, 40.0)
         }
@@ -832,7 +833,12 @@ pub fn context_bar(
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(2.0, 0.0);
                     ui.horizontal(|ui| match bar {
-                        ContextBar::Text { bold, pill, size } => {
+                        ContextBar::Text {
+                            bold,
+                            pill,
+                            cover,
+                            size,
+                        } => {
                             let tip = tr!(
                                 "overlay.ctx.text_smaller",
                                 px = super::shapes::step_text_size(size, false).round()
@@ -907,6 +913,36 @@ pub fn context_bar(
                             .clicked()
                             {
                                 out.push(UiAction::Shape(ShapeOpt::Pill(!pill)));
+                            }
+                            if opt_button(ui, tr!("overlay.ctx.cover"), cover, |p, r, c| {
+                                // Lines of text with a box over them.
+                                let s = r.width() / 30.0;
+                                for dy in [-6.0, 0.0, 6.0] {
+                                    let y = r.center().y + dy * s;
+                                    p.line_segment(
+                                        [
+                                            Pos2::new(r.left() + 5.0 * s, y),
+                                            Pos2::new(r.right() - 5.0 * s, y),
+                                        ],
+                                        egui::Stroke::new(1.5 * s, c.gamma_multiply(0.5)),
+                                    );
+                                }
+                                let b = Rect::from_center_size(
+                                    r.center(),
+                                    Vec2::new(r.width() * 0.5, r.height() * 0.42),
+                                );
+                                p.rect_filled(b, 2.0 * s, c);
+                                p.text(
+                                    b.center(),
+                                    Align2::CENTER_CENTER,
+                                    "T",
+                                    theme::semibold(10.0),
+                                    pal.flyout,
+                                );
+                            })
+                            .clicked()
+                            {
+                                out.push(UiAction::Shape(ShapeOpt::Cover(!cover)));
                             }
                         }
                         ContextBar::Arrow {

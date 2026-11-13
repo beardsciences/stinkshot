@@ -135,14 +135,25 @@ pub fn set_topmost(hwnd: Hwnd, topmost: bool) {
     }
 }
 
-/// Hide from screen capture (WDA_EXCLUDEFROMCAPTURE): recording HUD, toasts, overlays.
-///
-/// Debug builds skip the exclusion when `STINKSHOT_SHOW_IN_CAPTURE=1`, so UI reviews can
-/// screenshot these windows. Release builds ignore the variable.
-pub fn exclude_from_capture(hwnd: Hwnd, exclude: bool) {
-    let exclude = exclude
+static HIDE_FROM_CAPTURE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Settings > General > Hide Stinkshot From Captures. Windows created afterwards follow it.
+pub fn set_hide_from_capture(on: bool) {
+    HIDE_FROM_CAPTURE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether windows that ask to be hidden from capture are hidden: the setting, and in debug
+/// builds not `STINKSHOT_SHOW_IN_CAPTURE=1` (UI reviews screenshot these windows).
+pub fn capture_exclusion_on() -> bool {
+    HIDE_FROM_CAPTURE.load(std::sync::atomic::Ordering::Relaxed)
         && !(cfg!(debug_assertions)
-            && std::env::var("STINKSHOT_SHOW_IN_CAPTURE").is_ok_and(|v| v == "1"));
+            && std::env::var("STINKSHOT_SHOW_IN_CAPTURE").is_ok_and(|v| v == "1"))
+}
+
+/// Hide from screen capture (WDA_EXCLUDEFROMCAPTURE): recording HUD, toasts, overlays,
+/// unless `capture_exclusion_on` says otherwise.
+pub fn exclude_from_capture(hwnd: Hwnd, exclude: bool) {
+    let exclude = exclude && capture_exclusion_on();
     let aff = if exclude {
         WDA_EXCLUDEFROMCAPTURE
     } else {
@@ -150,6 +161,15 @@ pub fn exclude_from_capture(hwnd: Hwnd, exclude: bool) {
     };
     // SAFETY: plain call on a window of this process.
     if let Err(e) = unsafe { SetWindowDisplayAffinity(h(hwnd), aff) } {
+        log::warn!("SetWindowDisplayAffinity: {e}");
+    }
+}
+
+/// Hide from screen capture whatever the setting says: windows that would spoil Stinkshot's
+/// own captures (the recording frame at the region's edge, the scrolling capture's bar).
+pub fn exclude_from_capture_always(hwnd: Hwnd) {
+    // SAFETY: plain call on a window of this process.
+    if let Err(e) = unsafe { SetWindowDisplayAffinity(h(hwnd), WDA_EXCLUDEFROMCAPTURE) } {
         log::warn!("SetWindowDisplayAffinity: {e}");
     }
 }

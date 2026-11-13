@@ -56,6 +56,7 @@ fn scenes() -> Vec<(&'static str, Vec2, Scene)> {
                 let text = ContextBar::Text {
                     bold: false,
                     pill: false,
+                    cover: false,
                     size: 20.0,
                 };
                 let anchor = Rect::from_min_size(Pos2::new(16.0, 130.0), Vec2::new(10.0, 10.0));

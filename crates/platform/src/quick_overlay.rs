@@ -286,7 +286,9 @@ fn run(
         );
         match created {
             Ok(hwnd) => {
-                let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
+                if crate::window_util::capture_exclusion_on() {
+                    let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
+                }
                 let _ = ShowWindow(hwnd, SW_SHOW);
                 // Paint now, before reporting the window as shown.
                 let _ = windows::Win32::Graphics::Gdi::UpdateWindow(hwnd);

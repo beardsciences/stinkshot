@@ -302,6 +302,7 @@ pub fn results_line(count: usize, more: bool, search: &str) -> String {
 pub enum Act {
     Edit,
     Pin,
+    AddToCanvas,
     CopyImage,
     CopyText,
     Open,
@@ -311,9 +312,10 @@ pub enum Act {
 }
 
 impl Act {
-    pub const MENU: [Act; 8] = [
+    pub const MENU: [Act; 9] = [
         Act::Edit,
         Act::Pin,
+        Act::AddToCanvas,
         Act::CopyImage,
         Act::CopyText,
         Act::Open,
@@ -326,6 +328,7 @@ impl Act {
         match self {
             Act::Edit => tr!("history.act.edit"),
             Act::Pin => tr!("history.act.pin"),
+            Act::AddToCanvas => tr!("history.act.add_to_canvas"),
             Act::CopyImage => tr!("history.act.copy_image"),
             Act::CopyText => tr!("history.act.copy_text"),
             Act::Open => tr!("history.act.open"),
@@ -345,7 +348,7 @@ impl Act {
     pub fn enabled(self, m: &ItemMeta, ocr_available: bool) -> bool {
         let image = m.kind == ItemKind::Image;
         match self {
-            Act::Edit | Act::Pin | Act::CopyImage => image,
+            Act::Edit | Act::Pin | Act::AddToCanvas | Act::CopyImage => image,
             Act::CopyText => {
                 image
                     && ocr_available
@@ -374,6 +377,7 @@ impl Act {
         Some(match self {
             Act::Edit => Command::EditItem(m.id),
             Act::Pin => Command::PinItem(m.id),
+            Act::AddToCanvas => Command::AddToCanvas(m.id),
             Act::CopyImage => Command::CopyItemImage(m.id),
             Act::CopyText => Command::CopyItemText(m.id),
             Act::Open => Command::OpenItem(m.id),

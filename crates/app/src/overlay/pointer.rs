@@ -69,6 +69,30 @@ impl Overlay {
         }
     }
 
+    /// Render the exact pixels of the text shapes among `ids` for the move that starts now.
+    fn start_move_patches(&mut self, ctx: &Context, ids: &[ShapeId]) {
+        self.move_patches.clear();
+        for id in ids {
+            let Some(shape) = self.doc.get(*id).filter(|s| shapes::is_textual(&s.kind)) else {
+                continue;
+            };
+            let Some((r, img)) = stinkshot_core::annotate::render_shape_patch(shape, &self.fonts)
+            else {
+                continue;
+            };
+            let ci = egui::ColorImage::from_rgba_unmultiplied(
+                [img.width as usize, img.height as usize],
+                &img.data,
+            );
+            let tex = ctx.load_texture("ov-text-move", ci, egui::TextureOptions::LINEAR);
+            self.move_patches.push(MovePatch {
+                shape: shape.clone(),
+                rect: RectF::new(r.x as f32, r.y as f32, r.w as f32, r.h as f32),
+                tex,
+            });
+        }
+    }
+
     /// The tie of the region a drag started from (`selection::SnapTie`); None with Alt.
     fn tie_for(&self, start_sel: PxRect, alt: bool) -> Option<selection::SnapTie> {
         if alt || !matches!(self.kind, Kind::Capture) {
@@ -467,8 +491,11 @@ impl Overlay {
     /// With the Select tool, a drag on empty space inside the region moves the region only
     /// while there is nothing to select (a fresh capture); once shapes exist it draws a
     /// selection marquee.
+    /// A Select drag inside the region moves it: nothing drawn yet (the captured pointer,
+    /// untouched, does not count).
     fn select_drag_moves_region(&self) -> bool {
-        matches!(self.kind, Kind::Capture) && self.doc.shapes.is_empty()
+        matches!(self.kind, Kind::Capture)
+            && (self.doc.shapes.is_empty() || self.only_untouched_cursor())
     }
 
     // ---------------------------------------------------------------- text caret
@@ -660,6 +687,9 @@ impl Overlay {
                         toggled,
                     };
                 } else if inside && self.select_drag_moves_region() && !inp.shift {
+                    // The pointer stays where it was on the screen: out of the document for
+                    // the drag, placed again on the moved region.
+                    self.take_back_cursor();
                     self.selected.clear();
                     self.drag = Drag::MoveSel {
                         start_sel: sel,
@@ -866,12 +896,9 @@ impl Overlay {
             }
             Drag::MoveSel { start_sel, start } => {
                 let (dx, dy) = round_pt((p.0 - start.0, p.1 - start.1));
-                // A region snapped to an element stays on its window (Alt: anywhere).
-                let tie = self.tie_for(start_sel, inp.alt);
-                let new = match &tie {
-                    Some(t) => t.move_by(start_sel, dx, dy, self.sel_bounds()),
-                    None => selection::move_rect(start_sel, dx, dy, self.sel_bounds()),
-                };
+                // Free, even for a region snapped to an element: the box goes where it is
+                // dragged (leaving the element's window ends the tie on release).
+                let new = selection::move_rect(start_sel, dx, dy, self.sel_bounds());
                 self.set_sel(new);
                 ctx.set_cursor_icon(CursorIcon::Grabbing);
                 if !inp.released {
@@ -963,6 +990,7 @@ impl Overlay {
                     // From now on the shapes are painted live instead of baked into the render.
                     self.live = ids.clone();
                     self.live_release_pending = false;
+                    self.start_move_patches(ctx, &ids);
                 }
                 if moved {
                     let ip = self.to_image(p);
@@ -998,6 +1026,17 @@ impl Overlay {
                     for id in &ids {
                         if let Some(s) = self.doc.get_mut(*id) {
                             shapes::translate(&mut s.kind, step.0, step.1);
+                            if let Some(p) =
+                                self.move_patches.iter_mut().find(|p| p.shape.id == *id)
+                            {
+                                p.shape = s.clone();
+                                p.rect = RectF::new(
+                                    p.rect.x + step.0,
+                                    p.rect.y + step.1,
+                                    p.rect.w,
+                                    p.rect.h,
+                                );
+                            }
                         }
                     }
                     applied = d;

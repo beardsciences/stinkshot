@@ -36,6 +36,9 @@ pub struct General {
     pub show_toast: bool,
     pub toast_seconds: u32,
     pub play_sound: bool,
+    /// Keep Stinkshot's overlay, toasts and recording bar out of screen captures (its own
+    /// and other apps'). Off: they show up in screenshots and recordings.
+    pub hide_from_captures: bool,
     /// The first-run tour was shown (or skipped). Settings > About > Show Tour reopens it.
     pub tour_seen: bool,
     /// The version that last ran with this config, for the "Updated to" toast. Empty before
@@ -101,7 +104,7 @@ pub struct Capture {
     pub after_region: AfterRegion,
 }
 
-/// Region overlay: what Enter does once a region is selected.
+/// Region overlay: what happens once a region is selected.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AfterRegion {
@@ -110,6 +113,8 @@ pub enum AfterRegion {
     Annotate,
     /// Enter unfreezes the screen and opens the capture in an Editor Window.
     Window,
+    /// Selecting a region unfreezes the screen and opens it in an Editor Window at once.
+    Instant,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -231,6 +236,7 @@ impl Default for General {
             show_toast: true,
             toast_seconds: 6,
             play_sound: false,
+            hide_from_captures: true,
             tour_seen: false,
             last_version: String::new(),
         }

@@ -9,9 +9,12 @@ use crate::image::Rgba;
 
 /// Largest pointer bitmap accepted, per side (Windows tops out at 256 at 400 % scale).
 pub const MAX_CURSOR_SIDE: u32 = 512;
+/// Largest stored bitmap read back from a sidecar, per side (pasted pictures use the same
+/// type as the pointer).
+pub const MAX_PICTURE_SIDE: u32 = 16384;
 
-/// A pointer bitmap (straight-alpha RGBA). Shared, so undo snapshots of a doc stay cheap.
-/// Stored in sidecars as a base64 PNG string.
+/// A pointer bitmap or a pasted picture (straight-alpha RGBA). Shared, so undo snapshots
+/// of a doc stay cheap. Stored in sidecars as a base64 PNG string.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CursorImage(pub Arc<Rgba>);
 
@@ -44,10 +47,10 @@ impl<'de> Deserialize<'de> for CursorImage {
         let img = Rgba::decode(&bytes).map_err(serde::de::Error::custom)?;
         if img.width == 0
             || img.height == 0
-            || img.width > MAX_CURSOR_SIDE
-            || img.height > MAX_CURSOR_SIDE
+            || img.width > MAX_PICTURE_SIDE
+            || img.height > MAX_PICTURE_SIDE
         {
-            return Err(serde::de::Error::custom("bad cursor image size"));
+            return Err(serde::de::Error::custom("bad stored image size"));
         }
         Ok(Self::new(img))
     }

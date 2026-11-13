@@ -298,6 +298,7 @@ pub fn bounds(shape: &Shape, measure: Measure) -> RectF {
             background,
             bold,
             width,
+            ..
         } => {
             let r = text_rect(*pos, text, *size, *bold, *width, measure);
             if background.is_some() {
@@ -323,7 +324,9 @@ pub fn bounds(shape: &Shape, measure: Measure) -> RectF {
         | ShapeKind::HighlightBox { rect } => *rect,
         ShapeKind::Magnifier { source, dest, .. } => union(*source, *dest),
         ShapeKind::Callout { rect, tail, .. } => union(*rect, RectF::new(tail.x, tail.y, 0.0, 0.0)),
-        ShapeKind::Spotlight { rect, .. } | ShapeKind::Cursor { rect, .. } => *rect,
+        ShapeKind::Spotlight { rect, .. }
+        | ShapeKind::Cursor { rect, .. }
+        | ShapeKind::Image { rect, .. } => *rect,
     }
 }
 
@@ -414,7 +417,9 @@ pub fn hit(shape: &Shape, p: PtF, tol: f32, measure: Measure) -> bool {
             rect.expand(tol).contains(p) || dist_to_segment(p, root, *tail) <= 8.0 + tol
         }
         ShapeKind::Spotlight { rect, .. } => near_rect_border(*rect, p, 4.0 + tol),
-        ShapeKind::Cursor { rect, .. } => rect.expand(tol).contains(p),
+        ShapeKind::Cursor { rect, .. } | ShapeKind::Image { rect, .. } => {
+            rect.expand(tol).contains(p)
+        }
     }
 }
 
@@ -496,8 +501,8 @@ pub fn handles(shape: &Shape, measure: Measure) -> Vec<(ShapeHandle, PtF)> {
                 pt(center.x + radius, center.y),
             ));
         }
-        // Corners only: the pointer keeps its aspect ratio.
-        ShapeKind::Cursor { rect, .. } => {
+        // Corners only: the pointer and pasted pictures keep their aspect ratio.
+        ShapeKind::Cursor { rect, .. } | ShapeKind::Image { rect, .. } => {
             for h in [
                 Handle8::TopLeft,
                 Handle8::TopRight,
@@ -666,7 +671,10 @@ pub fn drag_handle(
             };
         }
         (ShapeKind::Callout { tail, .. }, ShapeHandle::Tail) => *tail = p,
-        (ShapeKind::Cursor { rect, image }, ShapeHandle::Rect(h)) => {
+        (
+            ShapeKind::Cursor { rect, image } | ShapeKind::Image { rect, image },
+            ShapeHandle::Rect(h),
+        ) => {
             *rect = resize_cursor(*rect, h, p, image.width() as f32, image.height() as f32);
         }
         (ShapeKind::Step { center, radius, .. }, ShapeHandle::Rect(_)) => {
@@ -680,6 +688,7 @@ pub fn drag_handle(
                 bold,
                 width,
                 background,
+                ..
             },
             ShapeHandle::Rect(h @ (Handle8::Left | Handle8::Right)),
         ) => {
@@ -812,6 +821,8 @@ pub struct ShapeOptions {
     pub arrow_head: ArrowHead,
     pub text_bold: bool,
     pub text_pill: bool,
+    /// New text covers what is under it (see `cover_colors`).
+    pub text_cover: bool,
     /// Highlighter draws boxes (Shift while dragging draws the other mode). Saved in the
     /// config as `editor.highlighter_box`.
     pub highlight_box: bool,
@@ -824,6 +835,7 @@ impl Default for ShapeOptions {
             arrow_head: ArrowHead::Notched,
             text_bold: false,
             text_pill: false,
+            text_cover: false,
             highlight_box: false,
         }
     }
@@ -887,6 +899,7 @@ pub fn new_text(pos: PtF, params: &ToolParams) -> (ShapeKind, Style) {
             background,
             bold: params.options.text_bold,
             width: None,
+            cover: false,
         },
         style,
     )
@@ -1031,7 +1044,10 @@ pub fn is_highlight(kind: &ShapeKind) -> bool {
 /// Recolor a shape. Highlighters keep their translucency; callouts recolor their fill too;
 /// text on a pill recolors the pill and picks readable ink.
 pub fn recolor(shape: &mut Shape, color: [u8; 4]) {
-    if matches!(shape.kind, ShapeKind::Cursor { .. }) {
+    if matches!(
+        shape.kind,
+        ShapeKind::Cursor { .. } | ShapeKind::Image { .. }
+    ) {
         return;
     }
     let mut c = color;
@@ -1095,7 +1111,7 @@ pub fn adjust_size(shape: &mut Shape, delta: f32) {
             *block = ((*block as f32 + delta * 2.0).round().max(2.0) as u32).min(200);
         }
         ShapeKind::Spotlight { dim, .. } => *dim = (*dim + delta * 0.05).clamp(0.1, 0.95),
-        ShapeKind::Cursor { .. } => {}
+        ShapeKind::Cursor { .. } | ShapeKind::Image { .. } => {}
         _ => shape.style.width = (shape.style.width + delta).clamp(1.0, 64.0),
     }
 }
@@ -1137,9 +1153,136 @@ pub fn set_bold(kind: &mut ShapeKind, on: bool) {
     }
 }
 
+/// Colors for text typed over what is already there: the background is the most common
+/// color around the edge of `r` (the page under the words), the ink the color inside that
+/// differs most from it (the words' own color), or black or white when nothing inside
+/// stands out. `r` is in image px; parts outside `base` are ignored.
+pub fn cover_colors(base: &stinkshot_core::Rgba, r: RectF) -> ([u8; 4], [u8; 4]) {
+    let (w, h) = (base.width as i32, base.height as i32);
+    let px = |x: i32, y: i32| -> [u8; 3] {
+        let i = ((y * w + x) * 4) as usize;
+        [base.data[i], base.data[i + 1], base.data[i + 2]]
+    };
+    let x0 = (r.x.floor() as i32 - 2).clamp(0, w);
+    let y0 = (r.y.floor() as i32 - 2).clamp(0, h);
+    let x1 = ((r.x + r.w).ceil() as i32 + 2).clamp(0, w);
+    let y1 = ((r.y + r.h).ceil() as i32 + 2).clamp(0, h);
+    if x1 - x0 < 1 || y1 - y0 < 1 {
+        return ([255, 255, 255, 255], [20, 20, 22, 255]);
+    }
+    // Edge pixels, binned by their top 4 bits per channel; the fullest bin's mean wins.
+    let mut edge = Vec::new();
+    for x in x0..x1 {
+        edge.push(px(x, y0));
+        edge.push(px(x, y1 - 1));
+    }
+    for y in y0..y1 {
+        edge.push(px(x0, y));
+        edge.push(px(x1 - 1, y));
+    }
+    let key = |c: &[u8; 3]| {
+        (u16::from(c[0] >> 4) << 8) | (u16::from(c[1] >> 4) << 4) | u16::from(c[2] >> 4)
+    };
+    let mut counts = std::collections::HashMap::<u16, u32>::new();
+    for c in &edge {
+        *counts.entry(key(c)).or_default() += 1;
+    }
+    let best = counts
+        .iter()
+        .max_by_key(|(k, n)| (**n, **k))
+        .map(|(k, _)| *k)
+        .unwrap_or(0);
+    let mean = |cs: &[[u8; 3]]| -> [u8; 4] {
+        let n = cs.len().max(1) as u32;
+        let s = cs.iter().fold([0u32; 3], |a, c| {
+            [
+                a[0] + u32::from(c[0]),
+                a[1] + u32::from(c[1]),
+                a[2] + u32::from(c[2]),
+            ]
+        });
+        [(s[0] / n) as u8, (s[1] / n) as u8, (s[2] / n) as u8, 255]
+    };
+    let picked: Vec<[u8; 3]> = edge.iter().copied().filter(|c| key(c) == best).collect();
+    let bg = mean(&picked);
+    // Ink: the quarter of the inside pixels farthest from the background, if they are far.
+    let dist = |c: &[u8; 3]| {
+        (i32::from(c[0]) - i32::from(bg[0])).abs()
+            + (i32::from(c[1]) - i32::from(bg[1])).abs()
+            + (i32::from(c[2]) - i32::from(bg[2])).abs()
+    };
+    let mut far: Vec<(i32, [u8; 3])> = Vec::new();
+    let mut inside = 0usize;
+    for y in (y0 + 2)..(y1 - 2) {
+        for x in (x0 + 2)..(x1 - 2) {
+            inside += 1;
+            let c = px(x, y);
+            let d = dist(&c);
+            if d > 90 {
+                far.push((d, c));
+            }
+        }
+    }
+    let ink = if far.len() >= 4 && far.len() * 100 >= inside {
+        far.sort_by_key(|(d, _)| std::cmp::Reverse(*d));
+        let top: Vec<[u8; 3]> = far
+            .iter()
+            .take((far.len() / 4).max(1))
+            .map(|(_, c)| *c)
+            .collect();
+        mean(&top)
+    } else {
+        contrast_ink(bg)
+    };
+    (bg, ink)
+}
+
+/// Where to look for `cover_colors` for a text shape: its box, at least a few letters wide
+/// and one line tall (a new text is still empty).
+pub fn cover_probe(shape: &Shape, measure: Measure) -> Option<RectF> {
+    let ShapeKind::Text {
+        pos, size, width, ..
+    } = &shape.kind
+    else {
+        return None;
+    };
+    let b = bounds(shape, measure);
+    let line = size * stinkshot_core::fonts::LINE_HEIGHT;
+    Some(RectF::new(
+        pos.x,
+        pos.y,
+        b.w.max(width.unwrap_or(0.0)).max(size * 3.0),
+        b.h.max(line),
+    ))
+}
+
+/// Cover on: the background and ink from `cover_colors`. Off: no background, the ink stays.
+pub fn set_cover(shape: &mut Shape, colors: Option<([u8; 4], [u8; 4])>) {
+    if let ShapeKind::Text {
+        background, cover, ..
+    } = &mut shape.kind
+    {
+        match colors {
+            Some((bg, ink)) => {
+                *background = Some(bg);
+                *cover = true;
+                shape.style.color = ink;
+            }
+            None if *cover => {
+                *background = None;
+                *cover = false;
+            }
+            None => {}
+        }
+    }
+}
+
 /// Pill on: the pill takes the text's color and the text gets black or white ink. Off: the
-/// text takes the pill's color back.
+/// text takes the pill's color back. A covering background is dropped first.
 pub fn set_pill(shape: &mut Shape, on: bool) {
+    if on {
+        set_cover(shape, None);
+    }
     if let ShapeKind::Text { background, .. } = &mut shape.kind {
         match (*background, on) {
             (None, true) => {
@@ -1397,6 +1540,7 @@ mod tests {
                 background: None,
                 bold: false,
                 width: None,
+                cover: false,
             },
             ShapeKind::Step {
                 center: pt(200.0, 200.0),
@@ -1501,6 +1645,7 @@ mod tests {
                 background: None,
                 bold: false,
                 width: None,
+                cover: false,
             }),
             3
         );
@@ -1599,6 +1744,7 @@ mod tests {
                 background: None,
                 bold: false,
                 width: None,
+                cover: false,
             },
             style: style(),
         };
@@ -1797,6 +1943,7 @@ mod tests {
             background: None,
             bold: false,
             width: None,
+            cover: false,
         };
         assert!(is_textual(&k));
         set_text(&mut k, "multi\nline");
@@ -1815,6 +1962,7 @@ mod tests {
                 background: pill.then_some([0, 0, 0, 255]),
                 bold: false,
                 width,
+                cover: false,
             },
             style: style(),
         }
@@ -2165,6 +2313,7 @@ mod tests {
             background: None,
             bold: false,
             width: None,
+            cover: false,
         };
         assert!(bump_text_size(&mut k, true));
         assert!(matches!(k, ShapeKind::Text { size, .. } if size == 24.0));
@@ -2372,5 +2521,79 @@ mod tests {
             resize_cursor(r, Handle8::Right, pt(50.0, 50.0), 10.0, 20.0),
             r
         );
+    }
+
+    fn page_with_word() -> stinkshot_core::Rgba {
+        // A light page with a dark blue word in the middle.
+        let mut img = stinkshot_core::Rgba::filled(100, 40, [245, 245, 240, 255]);
+        for x in 30..70 {
+            for y in 15..25 {
+                img.set_pixel(x, y, [20, 30, 120, 255]);
+            }
+        }
+        img
+    }
+
+    #[test]
+    fn cover_takes_the_page_and_the_word_colors() {
+        let (bg, ink) = cover_colors(&page_with_word(), RectF::new(25.0, 10.0, 50.0, 20.0));
+        assert_eq!(bg, [245, 245, 240, 255]);
+        assert_eq!(ink, [20, 30, 120, 255]);
+        // Nothing to match inside: readable default ink.
+        let blank = stinkshot_core::Rgba::filled(50, 50, [250, 250, 250, 255]);
+        let (bg, ink) = cover_colors(&blank, RectF::new(10.0, 10.0, 20.0, 10.0));
+        assert_eq!(bg, [250, 250, 250, 255]);
+        assert_eq!(ink, contrast_ink(bg));
+        // A probe outside the picture does not panic.
+        let _ = cover_colors(&blank, RectF::new(-80.0, 200.0, 20.0, 10.0));
+    }
+
+    #[test]
+    fn cover_and_pill_replace_each_other() {
+        let mut s = Shape {
+            id: 1,
+            kind: ShapeKind::Text {
+                pos: pt(0.0, 0.0),
+                text: "x".into(),
+                size: 20.0,
+                background: None,
+                bold: false,
+                width: None,
+                cover: false,
+            },
+            style: Style {
+                color: [255, 0, 0, 255],
+                ..Style::default()
+            },
+        };
+        set_cover(&mut s, Some(([1, 2, 3, 255], [9, 9, 9, 255])));
+        assert!(matches!(
+            s.kind,
+            ShapeKind::Text {
+                background: Some([1, 2, 3, 255]),
+                cover: true,
+                ..
+            }
+        ));
+        assert_eq!(s.style.color, [9, 9, 9, 255]);
+        // The pill drops the cover and takes the ink's color.
+        set_pill(&mut s, true);
+        assert!(matches!(
+            s.kind,
+            ShapeKind::Text {
+                background: Some([9, 9, 9, 255]),
+                cover: false,
+                ..
+            }
+        ));
+        // Cover off on a pill leaves the pill alone.
+        set_cover(&mut s, None);
+        assert!(matches!(
+            s.kind,
+            ShapeKind::Text {
+                background: Some(_),
+                ..
+            }
+        ));
     }
 }

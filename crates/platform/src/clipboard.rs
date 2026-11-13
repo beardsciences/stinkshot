@@ -5,8 +5,8 @@
 use stinkshot_core::Rgba;
 use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
 use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
-    RegisterClipboardFormatW, SetClipboardData,
+    CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardSequenceNumber,
+    IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
 };
 use windows::Win32::System::Memory::{
     GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
@@ -313,14 +313,81 @@ pub fn get_text() -> Option<String> {
     Some(crate::util::from_wide(&w))
 }
 
-/// Current clipboard image decoded from the "PNG" format, if present.
+/// Changes whenever any app puts something on the clipboard.
+pub fn sequence() -> u32 {
+    // SAFETY: trivial query.
+    unsafe { GetClipboardSequenceNumber() }
+}
+
+/// Current clipboard image: the "PNG" format if present, else a 24 or 32 bit DIB.
 pub fn get_image() -> Option<Rgba> {
     let _g = ClipboardGuard::open().ok()?;
-    let png = read_global(png_format())?;
-    let img = image::load_from_memory_with_format(&png, image::ImageFormat::Png)
-        .ok()?
-        .to_rgba8();
-    Some(Rgba::from_raw(img.width(), img.height(), img.into_raw()))
+    if let Some(png) = read_global(png_format())
+        && let Ok(img) = image::load_from_memory_with_format(&png, image::ImageFormat::Png)
+    {
+        let img = img.to_rgba8();
+        return Some(Rgba::from_raw(img.width(), img.height(), img.into_raw()));
+    }
+    [CF_DIBV5.0, CF_DIB.0]
+        .into_iter()
+        .find_map(|f| read_global(u32::from(f)).and_then(|d| dib_to_rgba(&d)))
+}
+
+/// Decode a packed DIB (BITMAPINFOHEADER or later, then pixels) of 24 or 32 bits per pixel,
+/// uncompressed or with the usual BGR(A) bit fields. A 32 bit DIB whose alpha is zero
+/// everywhere is opaque (most apps leave that byte empty).
+fn dib_to_rgba(dib: &[u8]) -> Option<Rgba> {
+    let u16_at = |o: usize| Some(u16::from_le_bytes(dib.get(o..o + 2)?.try_into().ok()?));
+    let u32_at = |o: usize| Some(u32::from_le_bytes(dib.get(o..o + 4)?.try_into().ok()?));
+    let hsize = u32_at(0)? as usize;
+    if hsize < 40 {
+        return None;
+    }
+    let w = i32::from_le_bytes(dib.get(4..8)?.try_into().ok()?);
+    let h = i32::from_le_bytes(dib.get(8..12)?.try_into().ok()?);
+    let bits = u16_at(14)?;
+    let compression = u32_at(16)?;
+    let colors = u32_at(32)? as usize;
+    const BI_RGB: u32 = 0;
+    const BI_BITFIELDS: u32 = 3;
+    if w <= 0 || h == 0 || !(bits == 24 || bits == 32) {
+        return None;
+    }
+    if compression != BI_RGB && !(compression == BI_BITFIELDS && bits == 32) {
+        return None;
+    }
+    // A 40 byte header with bit fields is followed by the three masks.
+    let masks = if hsize == 40 && compression == BI_BITFIELDS {
+        12
+    } else {
+        0
+    };
+    let start = hsize + masks + colors * 4;
+    let (w, top_down, h) = (w as usize, h < 0, h.unsigned_abs() as usize);
+    if w > 32768 || h > 32768 {
+        return None;
+    }
+    let bpp = usize::from(bits / 8);
+    let stride = (w * bpp).div_ceil(4) * 4;
+    let px = dib.get(start..start + stride * h)?;
+    let mut out = vec![0u8; w * h * 4];
+    let mut any_alpha = false;
+    for y in 0..h {
+        let src_row = if top_down { y } else { h - 1 - y };
+        let row = &px[src_row * stride..src_row * stride + w * bpp];
+        for x in 0..w {
+            let s = &row[x * bpp..x * bpp + bpp];
+            let a = if bpp == 4 { s[3] } else { 255 };
+            any_alpha |= a != 0;
+            out[(y * w + x) * 4..(y * w + x) * 4 + 4].copy_from_slice(&[s[2], s[1], s[0], a]);
+        }
+    }
+    if !any_alpha {
+        for p in out.chunks_exact_mut(4) {
+            p[3] = 255;
+        }
+    }
+    Some(Rgba::from_raw(w as u32, h as u32, out))
 }
 
 /// True when the clipboard currently offers `CF_DIBV5`.
@@ -335,6 +402,36 @@ pub fn has_dibv5() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dibv5_round_trips_through_the_reader() {
+        let mut img = Rgba::new(3, 2);
+        img.set_pixel(0, 0, [1, 2, 3, 255]);
+        img.set_pixel(2, 1, [200, 100, 50, 128]);
+        let back = dib_to_rgba(&build_dibv5(&img)).unwrap();
+        assert_eq!((back.width, back.height), (3, 2));
+        assert_eq!(back.data, img.data);
+    }
+
+    #[test]
+    fn dib_24_bit_bottom_up_and_empty_alpha() {
+        // 2x2, 24 bit: rows padded to 8 bytes, bottom row first.
+        let mut d = vec![0u8; 40];
+        d[0..4].copy_from_slice(&40u32.to_le_bytes());
+        d[4..8].copy_from_slice(&2i32.to_le_bytes());
+        d[8..12].copy_from_slice(&2i32.to_le_bytes());
+        d[14..16].copy_from_slice(&24u16.to_le_bytes());
+        d.extend([10, 20, 30, 40, 50, 60, 0, 0]); // bottom row (BGR)
+        d.extend([1, 2, 3, 4, 5, 6, 0, 0]); // top row
+        let img = dib_to_rgba(&d).unwrap();
+        assert_eq!(&img.data[0..8], &[3, 2, 1, 255, 6, 5, 4, 255]);
+        assert_eq!(&img.data[8..12], &[30, 20, 10, 255]);
+        // 32 bit with every alpha byte zero reads as opaque.
+        d[14..16].copy_from_slice(&32u16.to_le_bytes());
+        d.truncate(40);
+        d.extend([0u8; 16]);
+        assert!(dib_to_rgba(&d).unwrap().data.chunks(4).all(|p| p[3] == 255));
+    }
 
     #[test]
     fn dibv5_layout() {

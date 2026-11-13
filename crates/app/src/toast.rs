@@ -3,8 +3,8 @@
 //! capture, auto-dismiss after config.general.toast_seconds (paused while hovered); click
 //! on the thumbnail = Edit. Action row: Edit, Copy, Pin, Copy Text for captures and Play,
 //! Copy for recordings (Copy puts the image, or the recording file, on the clipboard again,
-//! e.g. after a failed copy). Show in Folder is an icon button next to Dismiss so the row
-//! keeps four comfortable buttons.
+//! e.g. after a failed copy). Delete (to the Recycle Bin) and Show in Folder are icon
+//! buttons next to Dismiss so the row keeps four comfortable buttons.
 
 #[path = "ui_common.rs"]
 pub mod ui_common;
@@ -82,6 +82,7 @@ pub enum ToastAction {
     Pin,
     CopyText,
     Folder,
+    Delete,
     Play,
     UpdateNow,
     Download,
@@ -96,6 +97,7 @@ impl ToastAction {
             ToastAction::Pin => tr!("shell.toast.pin"),
             ToastAction::CopyText => tr!("shell.toast.copy_text"),
             ToastAction::Folder => tr!("shell.toast.folder"),
+            ToastAction::Delete => tr!("shell.toast.delete"),
             ToastAction::Play => tr!("shell.toast.play"),
             ToastAction::UpdateNow => tr!("shell.toast.update_now"),
             ToastAction::Download => tr!("shell.toast.download"),
@@ -110,6 +112,7 @@ impl ToastAction {
             ToastAction::Pin => Command::PinItem(item?),
             ToastAction::CopyText => Command::CopyItemText(item?),
             ToastAction::Folder => Command::RevealItem(item?),
+            ToastAction::Delete => Command::DeleteItem(item?),
             ToastAction::Play => Command::OpenItem(item?),
             ToastAction::UpdateNow | ToastAction::Download => Command::InstallUpdate,
             ToastAction::WhatsNew => Command::OpenReleasePage,
@@ -125,6 +128,7 @@ impl ToastAction {
             ToastAction::Pin => tr!("shell.toast.pin.tip"),
             ToastAction::CopyText => tr!("shell.toast.copy_text.tip"),
             ToastAction::Folder => tr!("shell.toast.folder.tip"),
+            ToastAction::Delete => tr!("shell.toast.delete.tip"),
             ToastAction::Play => tr!("shell.toast.play"),
             ToastAction::UpdateNow => tr!("shell.toast.update_now.tip"),
             ToastAction::Download => tr!("shell.toast.download.tip"),
@@ -166,7 +170,7 @@ pub fn actions_for(kind: &ToastKind) -> Vec<ToastAction> {
 pub fn header_actions_for(kind: &ToastKind) -> Vec<ToastAction> {
     match kind {
         ToastKind::Capture { item: Some(_), .. } | ToastKind::Recording { item: Some(_), .. } => {
-            vec![ToastAction::Folder]
+            vec![ToastAction::Delete, ToastAction::Folder]
         }
         _ => Vec::new(),
     }
@@ -479,7 +483,7 @@ impl Surface for Toast {
                 close = true;
             }
 
-            // Header icon actions (Show in Folder), right to left from Dismiss.
+            // Header icon actions (Delete, Show in Folder), right to left from Dismiss.
             let mut header_left = dismiss_rect.left();
             for a in header_actions.iter().rev() {
                 let r = Rect::from_min_size(
@@ -506,7 +510,11 @@ impl Surface for Toast {
                 theme::widgets::paint_icon(
                     ui.painter(),
                     Rect::from_center_size(r.center(), vec2(15.0, 15.0)),
-                    Icon::Folder,
+                    if *a == ToastAction::Delete {
+                        Icon::Trash
+                    } else {
+                        Icon::Folder
+                    },
                     p.text_secondary,
                 );
                 let resp = resp
@@ -680,7 +688,7 @@ mod tests {
         );
         assert_eq!(
             header_actions_for(&cap(Some(1), true)),
-            vec![ToastAction::Folder]
+            vec![ToastAction::Delete, ToastAction::Folder]
         );
         assert!(header_actions_for(&cap(None, true)).is_empty());
         assert!(actions_for(&cap(None, true)).is_empty());
@@ -694,7 +702,10 @@ mod tests {
             actions_for(&rec),
             vec![ToastAction::Play, ToastAction::Copy]
         );
-        assert_eq!(header_actions_for(&rec), vec![ToastAction::Folder]);
+        assert_eq!(
+            header_actions_for(&rec),
+            vec![ToastAction::Delete, ToastAction::Folder]
+        );
         let msg = ToastKind::Message {
             title: String::new(),
             body: String::new(),

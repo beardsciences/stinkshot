@@ -14,6 +14,7 @@ pub enum ShapeOpt {
     TextLarger,
     Bold(bool),
     Pill(bool),
+    Cover(bool),
     Double(bool),
     Head(ArrowHead),
     Straighten,
@@ -185,6 +186,7 @@ impl Overlay {
     pub(super) fn copy_shapes(&mut self) {
         self.clipboard = shapes::collect(&self.doc, &self.selected);
         self.pastes = 0;
+        self.clipboard_seq = stinkshot_platform::clipboard::sequence();
         let n = self.clipboard.len();
         self.flash_notice(&if n == 1 {
             tr!("overlay.notice.copied_shape", key = keys::PASTE.label)
@@ -221,12 +223,51 @@ impl Overlay {
     }
 
     /// Ctrl+V: paste shapes copied with Ctrl+C; each paste lands one step further.
+    /// Ctrl+V: the shapes copied here, or a picture copied since (from any app) as an image
+    /// shape.
     pub(super) fn paste_shapes(&mut self, ppp: f32) {
+        let fresh = self.clipboard.is_empty()
+            || stinkshot_platform::clipboard::sequence() != self.clipboard_seq;
+        if fresh && let Some(img) = stinkshot_platform::clipboard::get_image() {
+            self.paste_image(img);
+            return;
+        }
         if self.clipboard.is_empty() {
             return;
         }
         self.pastes += 1;
         self.add_offset_copies(self.clipboard.clone(), self.pastes, ppp);
+    }
+
+    /// Add `img` as a picture shape centred on the image (each further one a step down and
+    /// to the right), scaled down to fit 80% of it.
+    pub(super) fn paste_image(&mut self, img: stinkshot_core::Rgba) {
+        let max = stinkshot_core::annotate::MAX_PICTURE_SIDE;
+        if img.width == 0 || img.height == 0 || img.width > max || img.height > max {
+            return;
+        }
+        let (w, h) = self.image_size();
+        let (iw, ih) = (img.width as f32, img.height as f32);
+        let k = (w * 0.8 / iw).min(h * 0.8 / ih).min(1.0);
+        let (pw, ph) = ((iw * k).max(1.0), (ih * k).max(1.0));
+        let n = self
+            .doc
+            .shapes
+            .iter()
+            .filter(|s| matches!(s.kind, ShapeKind::Image { .. }))
+            .count();
+        let step = (n % 8) as f32 * 32.0;
+        let x = ((w - pw) / 2.0 + step).min(w - pw).max(0.0).round();
+        let y = ((h - ph) / 2.0 + step).min(h - ph).max(0.0).round();
+        let rect = RectF::new(x, y, pw, ph);
+        let style = Style {
+            width: 0.0,
+            shadow: false,
+            ..Style::default()
+        };
+        let image = stinkshot_core::annotate::CursorImage::new(img);
+        self.create_shape(ShapeKind::Image { rect, image }, style);
+        self.set_tool(Tool::Select);
     }
 
     /// Ctrl+D: duplicate the selected shapes next to the originals.
@@ -268,6 +309,21 @@ impl Overlay {
     pub(super) fn apply_shape_opt(&mut self, opt: ShapeOpt) {
         let targets = self.option_targets();
         let pre = self.doc.clone();
+        if let ShapeOpt::Cover(on) = opt {
+            for id in &targets {
+                self.set_cover_on(*id, on);
+            }
+            self.options.text_cover = on;
+            if on {
+                self.options.text_pill = false;
+            }
+            if let Some(e) = self.edit.as_mut() {
+                e.blink_from = Instant::now();
+            } else if self.doc != pre {
+                self.undo.push(&pre);
+            }
+            return;
+        }
         for id in &targets {
             let Some(s) = self.doc.get_mut(*id) else {
                 continue;
@@ -287,7 +343,11 @@ impl Overlay {
                 ShapeOpt::Pill(on) => {
                     shapes::set_pill(s, on);
                     self.options.text_pill = on;
+                    if on {
+                        self.options.text_cover = false;
+                    }
                 }
+                ShapeOpt::Cover(_) => {}
                 ShapeOpt::Double(on) => {
                     shapes::set_arrow_double(&mut s.kind, on);
                     self.options.arrow_double = on;
@@ -354,9 +414,35 @@ impl Overlay {
     /// commits (so an abandoned empty shape leaves no history entry).
     pub(super) fn create_textual(&mut self, kind: ShapeKind, style: Style) {
         let pre = self.doc.clone();
+        let cover = self.options.text_cover && matches!(kind, ShapeKind::Text { .. });
         let id = self.doc.add(kind, style);
+        if cover {
+            self.set_cover_on(id, true);
+        }
         self.select_only(id);
         self.begin_edit(id, true, pre);
+    }
+
+    /// Cover on: sample the picture under text `id` for its background and ink. Off: plain
+    /// text again.
+    pub(super) fn set_cover_on(&mut self, id: ShapeId, on: bool) {
+        let colors = if on {
+            let measure = self.measurer();
+            let Some(r) = self
+                .doc
+                .get(id)
+                .and_then(|s| shapes::cover_probe(s, &measure))
+            else {
+                return;
+            };
+            let base = self.ensure_base();
+            Some(shapes::cover_colors(&base, r))
+        } else {
+            None
+        };
+        if let Some(s) = self.doc.get_mut(id) {
+            shapes::set_cover(s, colors);
+        }
     }
 
     pub(super) fn begin_edit(&mut self, id: ShapeId, is_new: bool, pre: Doc) {
@@ -465,10 +551,21 @@ impl Overlay {
             self.finish_region(shared, purpose, r);
             return;
         }
+        let adding = self.adding_region;
         self.set_sel(r);
         self.adding_region = false;
         self.set_tool(Tool::Select);
         self.drag = Drag::None;
+        // Open Editor Window Right Away: unfreeze as soon as the region exists (a region
+        // added with Shift waits for Enter, so several can be combined first).
+        if self.after_region == stinkshot_core::config::AfterRegion::Instant
+            && matches!(self.kind, Kind::Capture)
+            && !self.windowed
+            && !adding
+            && self.extra_regions.is_empty()
+        {
+            self.open_in_window(shared);
+        }
     }
 
     fn persist_prefs(&mut self, shared: &mut Shared) {

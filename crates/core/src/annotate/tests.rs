@@ -141,6 +141,7 @@ fn doc_json_round_trip_all_kinds() {
             background: Some([1, 2, 3, 255]),
             bold: false,
             width: None,
+            cover: false,
         },
         ShapeKind::Step {
             center: pt(5.0, 5.0),
@@ -326,6 +327,7 @@ fn hit_step_text_magnifier_callout_spotlight() {
             background: None,
             bold: false,
             width: None,
+            cover: false,
         },
         Style::default(),
     );
@@ -446,6 +448,7 @@ fn bounds_include_stroke_and_head() {
             background: None,
             bold: false,
             width: None,
+            cover: false,
         },
         Style::default(),
     );
@@ -460,6 +463,7 @@ fn bounds_include_stroke_and_head() {
         background: Some(WHITE),
         bold: false,
         width: None,
+        cover: false,
     };
     let b2 = shape_bounds(d.get(text).unwrap(), &f);
     assert!(b2.w > b.w && b2.x < b.x);
@@ -610,6 +614,7 @@ fn new_arrow_and_text_fields_round_trip() {
             background: Some([0, 0, 0, 255]),
             bold: true,
             width: None,
+            cover: false,
         },
         style(RED, 4.0),
     );
@@ -731,6 +736,7 @@ fn bold_text_is_wider_and_dark_text_gets_a_light_halo() {
             background: None,
             bold,
             width: None,
+            cover: false,
         },
         style: Style {
             shadow: true,
@@ -760,6 +766,7 @@ fn text_layout_matches_lines_and_wraps_callouts() {
             background: None,
             bold: true,
             width: None,
+            cover: false,
         },
     )
     .unwrap();
@@ -797,6 +804,7 @@ fn boxed_text(text: &str, width: Option<f32>, bold: bool) -> ShapeKind {
         background: None,
         bold,
         width,
+        cover: false,
     }
 }
 
@@ -927,6 +935,7 @@ fn region_render_matches_full_render() {
             background: None,
             bold: true,
             width: None,
+            cover: false,
         },
         style([30, 200, 255, 255], 4.0),
     );
@@ -987,6 +996,7 @@ fn shape_patch_matches_the_full_render() {
             background: Some([20, 20, 20, 255]),
             bold: false,
             width: None,
+            cover: false,
         },
         style: style([255, 255, 255, 255], 4.0),
     };
@@ -1203,6 +1213,7 @@ fn render_degenerate_shapes_do_not_panic() {
             background: Some(RED),
             bold: false,
             width: None,
+            cover: false,
         },
         s.clone(),
     );
@@ -1541,6 +1552,7 @@ fn render_text_draws_inside_its_bounds_only() {
             background: None,
             bold: false,
             width: None,
+            cover: false,
         },
         style([0, 0, 0, 255], 4.0),
     );
@@ -1570,6 +1582,7 @@ fn render_text_multiline_and_shadow() {
                 background: None,
                 bold: false,
                 width: None,
+                cover: false,
             },
             Style {
                 shadow,
@@ -1600,6 +1613,7 @@ fn render_text_background_pill() {
             background: Some([20, 20, 120, 255]),
             bold: false,
             width: None,
+            cover: false,
         },
         style([255, 255, 255, 255], 4.0),
     );
@@ -2192,6 +2206,7 @@ fn sidecar_round_trip_and_layout() {
             background: None,
             bold: false,
             width: None,
+            cover: false,
         },
         Style::default(),
     );
@@ -2445,6 +2460,7 @@ fn showcase() {
             background: None,
             bold: false,
             width: None,
+            cover: false,
         },
         Style {
             color: [20, 20, 20, 255],
@@ -2459,6 +2475,7 @@ fn showcase() {
             background: Some([17, 17, 17, 230]),
             bold: false,
             width: None,
+            cover: false,
         },
         Style {
             color: [255, 255, 255, 255],
@@ -2604,6 +2621,7 @@ fn cjk_and_emoji_text_renders_with_fallback_fonts() {
             background: None,
             bold: false,
             width: None,
+            cover: false,
         },
         style([0, 0, 0, 255], 2.0),
     );
@@ -2655,6 +2673,7 @@ fn editor_showcase() {
                 background: bg,
                 bold: i == 0,
                 width: None,
+                cover: false,
             },
             style([20, 20, 20, 255], 2.0),
         );
@@ -2787,6 +2806,61 @@ fn resized_cursor_scales_into_its_rect() {
     assert!(out.pixel(2, 3)[0] < 40);
     assert_eq!(out.pixel(5, 12), WHITE);
     assert_eq!(out.pixel(12, 3), WHITE);
+}
+
+#[test]
+fn pasted_picture_round_trips_and_renders_into_its_rect() {
+    // Larger than any pointer: pictures share the type but not the pointer's size cap.
+    let mut pic = Rgba::new(600, 4);
+    for x in 0..600 {
+        for y in 0..4 {
+            pic.set_pixel(x, y, [200, 10, 10, 255]);
+        }
+    }
+    let mut d = Doc::new(40, 20);
+    d.add(
+        ShapeKind::Image {
+            rect: RectF::new(10.0, 5.0, 20.0, 4.0),
+            image: CursorImage::new(pic),
+        },
+        Style::default(),
+    );
+    let back = Doc::from_json(&d.to_json().unwrap()).unwrap();
+    assert_eq!(back, d);
+    let out = render(&white(40, 20), &d, &test_fonts());
+    assert_eq!(out.pixel(15, 6), [200, 10, 10, 255]);
+    assert_eq!(out.pixel(5, 6), WHITE);
+    // Moving it moves the picture.
+    let mut k = d.shapes[0].kind.clone();
+    translate_shape(&mut k, 3.0, 2.0);
+    assert!(matches!(k, ShapeKind::Image { rect, .. } if rect == RectF::new(13.0, 7.0, 20.0, 4.0)));
+}
+
+#[test]
+fn covering_text_draws_a_plain_box_in_its_background() {
+    let f = test_fonts();
+    let base = Rgba::filled(120, 40, [10, 10, 10, 255]);
+    let mut d = Doc::new(120, 40);
+    d.add(
+        ShapeKind::Text {
+            pos: pt(10.0, 10.0),
+            text: "Hi".into(),
+            size: 16.0,
+            background: Some([240, 240, 240, 255]),
+            bold: false,
+            width: Some(80.0),
+            cover: true,
+        },
+        Style {
+            color: [20, 20, 22, 255],
+            ..Style::default()
+        },
+    );
+    let out = render(&base, &d, &f);
+    // The far right of the box is background, not the dark page; a pill would have
+    // rounded that corner off.
+    assert_eq!(out.pixel(88, 12), [240, 240, 240, 255]);
+    assert_eq!(out.pixel(115, 12), [10, 10, 10, 255]);
 }
 
 #[test]

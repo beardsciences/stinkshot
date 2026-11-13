@@ -143,6 +143,13 @@ impl Overlay {
         }) {
             self.settled_text = None;
         }
+        let (rendered, doc) = (&self.rendered_doc, &self.doc);
+        self.move_patches.retain(|p| {
+            doc.get(p.shape.id) == Some(&p.shape)
+                && !rendered
+                    .as_ref()
+                    .is_some_and(|d| d.get(p.shape.id) == Some(&p.shape))
+        });
     }
 
     /// Submit a new render when the committed (non-live) document changed.
@@ -675,22 +682,6 @@ impl Overlay {
             paint_region_badge(&painter, self.canvas_rect_pt(sel, ppp), n, accent);
         }
 
-        // Faint reminder of the previous region while nothing is selected yet.
-        if self.sel.is_none()
-            && self.hover.is_none()
-            && matches!(self.kind, Kind::Capture | Kind::Select(_))
-            && !self.picker_mode()
-            && let Some(lr) = self
-                .last_region
-                .and_then(|r| hover::virtual_to_local(r, self.bounds))
-        {
-            dashed_rect(
-                &painter,
-                self.canvas_rect_pt(lr, ppp),
-                Color32::from_white_alpha(70),
-            );
-        }
-
         // Selection contents.
         if let (Some(sel), true, Some(m)) = (self.sel, self.annotating(), self.img_to_pt(ppp)) {
             let sel_pt = self.canvas_rect_pt(sel, ppp);
@@ -711,6 +702,15 @@ impl Overlay {
                         && let Some(tex) = &p.tex
                     {
                         paint_patch(&clip, m, p.rect, tex);
+                        continue;
+                    }
+                    if let Some(p) = self.move_patches.iter().find(|p| p.shape == *s) {
+                        clip.image(
+                            p.tex.id(),
+                            m.r(p.rect),
+                            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                            Color32::WHITE,
+                        );
                         continue;
                     }
                     if let ShapeKind::Spotlight { rect, dim } = &s.kind {
@@ -1032,7 +1032,7 @@ impl Overlay {
                 help,
             ],
         };
-        // A region snapped to an element stays on its window; Alt frees it.
+        // A region snapped to an element resizes within its window; Alt frees it.
         if self.tool == Tool::Select && self.active_tie().is_some() {
             items.insert(items.len() - 2, ("Alt", tr!("overlay.hint.free_resize")));
         }
@@ -1048,10 +1048,12 @@ impl Overlay {
                 bold,
                 background,
                 size,
+                cover,
                 ..
             } => ui::ContextBar::Text {
                 bold: *bold,
-                pill: background.is_some(),
+                pill: background.is_some() && !*cover,
+                cover: *cover,
                 size: *size,
             },
             ShapeKind::Arrow {

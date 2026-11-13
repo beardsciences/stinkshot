@@ -304,6 +304,7 @@ impl Surface for RecordFrame {
 
     fn on_created(&mut self, hwnd: Hwnd, _shared: &Shared) {
         uc::apply_hud_style(hwnd, self.rect, true, true);
+        stinkshot_platform::window_util::exclude_from_capture_always(hwnd);
     }
 
     fn show(&mut self, ctx: &egui::Context, shared: &mut Shared) -> SurfaceStatus {
@@ -1616,6 +1617,7 @@ impl Surface for ScrollHud {
     fn on_created(&mut self, hwnd: Hwnd, shared: &Shared) {
         stinkshot_platform::window_util::apply_mica(hwnd, shared.dark);
         uc::apply_hud_style(hwnd, self.rect, true, true);
+        stinkshot_platform::window_util::exclude_from_capture_always(hwnd);
     }
 
     fn show(&mut self, ctx: &egui::Context, shared: &mut Shared) -> SurfaceStatus {

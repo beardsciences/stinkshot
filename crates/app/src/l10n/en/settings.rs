@@ -98,6 +98,10 @@ pub fn get(key: &str) -> Option<&'static str> {
             "How long the toast stays. Hovering pauses the timer."
         }
         "settings.general.sound" => "Play Sound",
+        "settings.general.hide_capture" => "Hide Stinkshot From Captures",
+        "settings.general.hide_capture.desc" => {
+            "Keep the overlay, toasts and recording bar out of screenshots and recordings."
+        }
         "settings.general.sound.desc" => "A short shutter sound after capturing.",
         "settings.general.pins" => "Pins",
         "settings.general.pin_task_view" => "Show Pins in Task View",
@@ -138,9 +142,10 @@ pub fn get(key: &str) -> Option<&'static str> {
             "Off: they save right away. Use Edit on the toast to annotate."
         }
         "settings.capture.after_region" => "After Selecting a Region",
-        "settings.capture.after_region.desc" => "What Enter does. Ctrl+C always copies.",
+        "settings.capture.after_region.desc" => "Ctrl+C always copies.",
         "settings.capture.after_region.annotate" => "Annotate in Place",
-        "settings.capture.after_region.window" => "Open Editor Window",
+        "settings.capture.after_region.window" => "Open Editor Window on Enter",
+        "settings.capture.after_region.instant" => "Open Editor Window Right Away",
         "settings.capture.window" => "Window Capture",
         "settings.capture.corners" => "Rounded Corners",
         "settings.capture.corners.desc" => {
@@ -433,6 +438,8 @@ pub const KEYS: &[&str] = &[
     "settings.general.toast_duration",
     "settings.general.toast_duration.desc",
     "settings.general.sound",
+    "settings.general.hide_capture",
+    "settings.general.hide_capture.desc",
     "settings.general.sound.desc",
     "settings.general.pins",
     "settings.general.pin_task_view",
@@ -464,6 +471,7 @@ pub const KEYS: &[&str] = &[
     "settings.capture.after_region.desc",
     "settings.capture.after_region.annotate",
     "settings.capture.after_region.window",
+    "settings.capture.after_region.instant",
     "settings.capture.window",
     "settings.capture.corners",
     "settings.capture.corners.desc",

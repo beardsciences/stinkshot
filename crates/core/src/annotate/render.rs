@@ -687,11 +687,19 @@ fn draw_shape(pm: &mut Pixmap, shape: &Shape, fonts: &Fonts, magnifier_src: Opti
             background,
             bold,
             width,
+            cover,
         } => {
             let size = size.max(1.0);
             // Same line breaks as `text_layout` (the editor's caret) and `text_rect`.
             let shown = super::shown_text(text, *width, |s| fonts.line_width(s, size, *bold));
             match background {
+                Some(bg) if *cover => {
+                    let r = text_rect(fonts, *pos, text, size, true, *bold, *width);
+                    if let Some(path) = rounded_rect_path(r, (size * 0.12).min(r.h / 2.0)) {
+                        fill_path(pm, &path, *bg, Transform::identity());
+                    }
+                    draw_text_block(pm, fonts, &shown, *pos, size, *bold, st.color, false);
+                }
                 Some(bg) => {
                     let pill = text_rect(fonts, *pos, text, size, true, *bold, *width);
                     if let Some(path) = rounded_rect_path(pill, (pill.h / 2.0).min(size * 0.7)) {
@@ -724,7 +732,9 @@ fn draw_shape(pm: &mut Pixmap, shape: &Shape, fonts: &Fonts, magnifier_src: Opti
         } => {
             draw_callout(pm, fonts, st, norm(*rect), *tail, text, *size);
         }
-        ShapeKind::Cursor { rect, image } => draw_cursor(pm, norm(*rect), image.rgba()),
+        ShapeKind::Cursor { rect, image } | ShapeKind::Image { rect, image } => {
+            draw_cursor(pm, norm(*rect), image.rgba())
+        }
         // Handled in earlier passes.
         ShapeKind::Blur { .. }
         | ShapeKind::Pixelate { .. }

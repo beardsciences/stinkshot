@@ -603,6 +603,7 @@ mod tests {
                 background: None,
                 bold: false,
                 width: None,
+                cover: false,
             },
             Style::default(),
         );

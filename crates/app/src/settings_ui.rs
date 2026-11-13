@@ -1251,6 +1251,12 @@ impl SettingsWindow {
             tr!("settings.general.sound.desc"),
             &mut g.play_sound,
         );
+        toggle_row(
+            ui,
+            tr!("settings.general.hide_capture"),
+            tr!("settings.general.hide_capture.desc"),
+            &mut g.hide_from_captures,
+        );
         group_title(ui, p, tr!("settings.general.pins"));
         let pins = &mut shared.config.pins;
         toggle_row(
@@ -1547,6 +1553,10 @@ impl SettingsWindow {
                     (
                         AfterRegion::Window,
                         tr!("settings.capture.after_region.window"),
+                    ),
+                    (
+                        AfterRegion::Instant,
+                        tr!("settings.capture.after_region.instant"),
                     ),
                 ],
             );

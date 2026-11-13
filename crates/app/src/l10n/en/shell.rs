@@ -58,6 +58,7 @@ pub fn get(key: &str) -> Option<&'static str> {
         "shell.toast.pin" => "Pin",
         "shell.toast.copy_text" => "Copy Text",
         "shell.toast.folder" => "Folder",
+        "shell.toast.delete" => "Delete",
         "shell.toast.play" => "Play",
         "shell.toast.edit.tip" => "Open in the Editor",
         "shell.toast.copy_file.tip" => "Copy the File to the Clipboard",
@@ -65,6 +66,7 @@ pub fn get(key: &str) -> Option<&'static str> {
         "shell.toast.pin.tip" => "Pin to Screen",
         "shell.toast.copy_text.tip" => "Copy Recognized Text",
         "shell.toast.folder.tip" => "Show in Folder",
+        "shell.toast.delete.tip" => "Move to Recycle Bin",
         "shell.toast.dismiss" => "Dismiss",
         "shell.toast.ocr_missing" => "Copy Text Needs an OCR Language in Windows Settings",
         "shell.tray.update_check_on" => "Update Check On",
@@ -303,6 +305,8 @@ pub fn get(key: &str) -> Option<&'static str> {
             "Only images can be pinned, and this one could not be loaded. It may have been moved or deleted."
         }
         "shell.item.edit_failed" => "Could Not Open for Editing",
+        "shell.item.canvas_failed" => "Could Not Add to Canvas",
+        "shell.canvas.name" => "Canvas",
         "shell.item.edit_failed.body" => {
             "Only images can be edited, and this one could not be loaded. It may have been moved or deleted."
         }
@@ -447,6 +451,7 @@ pub const KEYS: &[&str] = &[
     "shell.toast.pin",
     "shell.toast.copy_text",
     "shell.toast.folder",
+    "shell.toast.delete",
     "shell.toast.play",
     "shell.toast.edit.tip",
     "shell.toast.copy_file.tip",
@@ -454,6 +459,7 @@ pub const KEYS: &[&str] = &[
     "shell.toast.pin.tip",
     "shell.toast.copy_text.tip",
     "shell.toast.folder.tip",
+    "shell.toast.delete.tip",
     "shell.toast.dismiss",
     "shell.toast.ocr_missing",
     "shell.tray.update_check_on",
@@ -636,6 +642,8 @@ pub const KEYS: &[&str] = &[
     "shell.item.pin_failed",
     "shell.item.pin_failed.body",
     "shell.item.edit_failed",
+    "shell.item.canvas_failed",
+    "shell.canvas.name",
     "shell.item.edit_failed.body",
     "shell.item.in_use",
     "shell.item.delete_failed",
