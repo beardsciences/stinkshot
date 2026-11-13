@@ -95,11 +95,9 @@ fn destroy_on_canvas(pm: &mut Pixmap, s: &Shape) {
             let di = (y * r.w as usize + x) * 4;
             let a = data[si + 3] as u32;
             for c in 0..3 {
-                img.data[di + c] = if a == 0 {
-                    0
-                } else {
-                    ((data[si + c] as u32 * 255 + a / 2) / a).min(255) as u8
-                };
+                img.data[di + c] = (data[si + c] as u32 * 255 + a / 2)
+                    .checked_div(a)
+                    .map_or(0, |v| v.min(255) as u8);
             }
             img.data[di + 3] = a as u8;
         }
