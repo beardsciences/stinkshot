@@ -9,6 +9,8 @@ write entries for people who use Stinkshot, not for people who read the diff.
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-13
+
 ### Added
 
 - Ctrl+V in the editor pastes a picture copied from any app as an image you can move and
@@ -152,7 +154,9 @@ Tagged in the repository; no downloads were published.
 - No upload targets, accounts or telemetry. The update check is the only network request and
   is off by default.
 
-[Unreleased]: https://code.mccullough.dev/christian/stinkshot/compare/v0.1.2...main
+[Unreleased]: https://code.mccullough.dev/christian/stinkshot/compare/v0.1.4...main
+[0.1.4]: https://code.mccullough.dev/christian/stinkshot/compare/v0.1.3...v0.1.4
+[0.1.3]: https://code.mccullough.dev/christian/stinkshot/compare/v0.1.2...v0.1.3
 [0.1.2]: https://code.mccullough.dev/christian/stinkshot/compare/v0.1.1...v0.1.2
 [0.1.1]: https://code.mccullough.dev/christian/stinkshot/releases/tag/v0.1.1
 [0.1.0]: https://code.mccullough.dev/christian/stinkshot/releases/tag/v0.1.0
